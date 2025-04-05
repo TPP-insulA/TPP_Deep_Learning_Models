@@ -11,7 +11,7 @@ from typing import Tuple, List, Dict, Any, Optional, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TCN_CONFIG
+from config.models_config import TCN_CONFIG
 
 @register_keras_serializable()
 class WeightNormalization(tf.keras.layers.Wrapper):

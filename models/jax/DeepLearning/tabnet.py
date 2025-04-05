@@ -10,7 +10,7 @@ import optax
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TABNET_CONFIG
+from config.models_config import TABNET_CONFIG
 
 class GLU(nn.Module):
     """

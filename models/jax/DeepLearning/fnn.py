@@ -9,7 +9,7 @@ from typing import Tuple, Dict, List, Any, Optional, Callable, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import FNN_CONFIG
+from config.models_config import FNN_CONFIG
 
 def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2, 
                          activation: str = 'relu', use_layer_norm: bool = True, 

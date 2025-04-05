@@ -14,7 +14,7 @@ import optax
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import REINFORCE_CONFIG
+from config.models_config import REINFORCE_CONFIG
 
 
 class PolicyNetworkState(NamedTuple):

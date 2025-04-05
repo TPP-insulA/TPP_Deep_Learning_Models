@@ -7,7 +7,7 @@ from typing import Tuple, Dict, Any, Optional, List
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import LSTM_CONFIG
+from config.models_config import LSTM_CONFIG
 
 def create_lstm_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
                               dropout_rate: float = 0.2, deterministic: bool = False) -> jnp.ndarray:

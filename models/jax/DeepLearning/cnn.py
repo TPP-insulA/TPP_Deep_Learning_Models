@@ -7,7 +7,7 @@ from typing import Tuple, Dict, Any, Optional, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import CNN_CONFIG
+from config.models_config import CNN_CONFIG
 
 class SqueezeExcitationBlock(nn.Module):
     """

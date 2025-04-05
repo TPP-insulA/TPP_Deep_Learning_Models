@@ -12,7 +12,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import SARSA_CONFIG
+from config.models_config import SARSA_CONFIG
 
 
 class SARSAState(NamedTuple):

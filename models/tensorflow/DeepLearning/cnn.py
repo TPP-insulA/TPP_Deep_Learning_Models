@@ -12,7 +12,7 @@ from typing import Dict, Any, Tuple, Optional
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import CNN_CONFIG
+from config.models_config import CNN_CONFIG
 
 @register_keras_serializable()
 class SqueezeExcitationBlock(tf.keras.layers.Layer):

@@ -15,7 +15,7 @@ import random
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import SAC_CONFIG
+from config.models_config import SAC_CONFIG
 
 
 class ReplayBuffer:

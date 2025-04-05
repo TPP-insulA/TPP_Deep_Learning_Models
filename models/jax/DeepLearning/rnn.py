@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict, Any, Optional, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import RNN_CONFIG
+from config.models_config import RNN_CONFIG
 
 class TimeDistributed(nn.Module):
     """

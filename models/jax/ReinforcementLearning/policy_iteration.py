@@ -11,7 +11,7 @@ from functools import partial
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import POLICY_ITERATION_CONFIG
+from config.models_config import POLICY_ITERATION_CONFIG
 
 
 class PolicyIteration:

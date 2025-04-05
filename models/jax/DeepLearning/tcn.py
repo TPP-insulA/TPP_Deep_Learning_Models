@@ -7,7 +7,7 @@ from typing import Tuple, List, Dict, Any, Optional, Callable, Sequence
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TCN_CONFIG
+from config.models_config import TCN_CONFIG
 
 class WeightNormalization(nn.Module):
     """

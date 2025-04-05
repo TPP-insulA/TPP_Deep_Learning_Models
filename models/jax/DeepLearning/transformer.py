@@ -7,7 +7,7 @@ from typing import Dict, Tuple, List, Any, Optional, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TRANSFORMER_CONFIG
+from config.models_config import TRANSFORMER_CONFIG
 
 class PositionEncoding(nn.Module):
     """

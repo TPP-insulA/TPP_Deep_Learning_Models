@@ -11,7 +11,7 @@ from typing import Tuple, Dict, Any, Optional, List, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import LSTM_CONFIG
+from config.models_config import LSTM_CONFIG
 
 def get_activation_fn(activation_name: str) -> Any:
     """

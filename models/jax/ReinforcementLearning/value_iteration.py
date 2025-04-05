@@ -10,7 +10,7 @@ import pickle
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import VALUE_ITERATION_CONFIG
+from config.models_config import VALUE_ITERATION_CONFIG
 
 
 class ValueIterationState(NamedTuple):

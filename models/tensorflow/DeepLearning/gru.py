@@ -10,7 +10,7 @@ from typing import Tuple, Any, Dict
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import GRU_CONFIG
+from config.models_config import GRU_CONFIG
 
 def create_gru_attention_block(x: tf.Tensor, units: int, num_heads: int = 4) -> tf.Tensor:
     """

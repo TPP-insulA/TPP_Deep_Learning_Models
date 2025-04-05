@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict, Any, Optional
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import GRU_CONFIG
+from config.models_config import GRU_CONFIG
 
 def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
                               deterministic: bool = False) -> jnp.ndarray:

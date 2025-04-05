@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Optional, Union, Any
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import MONTE_CARLO_CONFIG
+from config.models_config import MONTE_CARLO_CONFIG
 
 class MonteCarlo:
     """

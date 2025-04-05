@@ -9,7 +9,7 @@ from keras.saving import register_keras_serializable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import QLEARNING_CONFIG
+from config.models_config import QLEARNING_CONFIG
 
 
 class QLearning:
