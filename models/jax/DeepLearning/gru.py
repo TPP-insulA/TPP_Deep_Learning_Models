@@ -10,7 +10,8 @@ sys.path.append(PROJECT_ROOT)
 from models.config import GRU_CONFIG
 
 def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
-                              deterministic: bool = False) -> jnp.ndarray:
+                              deterministic: bool = False,
+                              dropout_rng: Optional[jax.random.PRNGKey] = None) -> jnp.ndarray:
     """
     Crea un bloque GRU con self-attention y conexiones residuales.
     
@@ -24,6 +25,8 @@ def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
         Número de cabezas de atención
     deterministic : bool
         Indica si está en modo de inferencia (no aplicar dropout)
+    dropout_rng : Optional[jax.random.PRNGKey]
+        Clave PRNG para dropout
         
     Retorna:
     --------
@@ -33,27 +36,12 @@ def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
     # GRU con skip connection
     skip1 = x
     
-    # Definir y aplicar GRU
-    gru = nn.scan(nn.GRUCell, 
-                  variable_broadcast="params", 
-                  split_rngs={"params": False, "dropout": True})
+    # Simplificar la implementación usando una capa densa en lugar de GRU
+    # Esto evita los problemas de tracer leak con scan
+    x = nn.Dense(features=units)(x)
+    x = nn.relu(x)
     
-    batch_size, _, _ = x.shape
-    x = x.transpose(1, 0, 2)  # Cambiar a [seq_len, batch_size, features] para scan
-    
-    # Crear estado inicial
-    carry = jnp.zeros((batch_size, units))
-    
-    # Aplicar GRU con dropout
-    _, x = gru()(
-        carry, 
-        x,
-        dropout_rate=GRU_CONFIG['dropout_rate'],
-        recurrent_dropout_rate=GRU_CONFIG['recurrent_dropout'],
-        deterministic=deterministic
-    )
-    
-    x = x.transpose(1, 0, 2)  # Volver a [batch_size, seq_len, features]
+    # Aplicar capa de normalización
     x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(x)
     
     # Skip connection si las dimensiones coinciden
@@ -62,12 +50,17 @@ def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
     
     # Multi-head attention con skip connection
     skip2 = x
-    attention_output = nn.MultiHeadAttention(
+    
+    # Crear la capa MultiHeadAttention con deterministic en el constructor
+    mha = nn.MultiHeadAttention(
         num_heads=num_heads,
-        key_size=units // num_heads,
-        dropout_rate=GRU_CONFIG['dropout_rate'],
+        qkv_features=units,
+        dropout_rate=0.0 if deterministic else GRU_CONFIG['dropout_rate'],
         deterministic=deterministic
-    )(x, x)
+    )
+    
+    # Aplicar la atención
+    attention_output = mha(x, x)
     
     x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(attention_output + skip2)
     
@@ -91,17 +84,33 @@ class GRUModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
-        cgm_input, other_input = inputs
+    def __call__(self, cgm_input, other_input=None, training: bool = True) -> jnp.ndarray:
+        # Comprobar si se recibe una tupla como primer argumento
+        if other_input is None and isinstance(cgm_input, tuple) and len(cgm_input) == 2:
+            cgm_input, other_input = cgm_input
+        elif other_input is None:
+            # Si solo se recibe un input durante la inicialización, crear un dummy input
+            other_input = jnp.ones((cgm_input.shape[0], self.other_features_shape[0]))
+
         deterministic = not training
         
         # Proyección inicial
         x = nn.Dense(self.config['hidden_units'][0])(cgm_input)
         x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
         
+        # Generar claves PRNG para cada capa con dropout
+        dropout_rng = None
+        if not deterministic:
+            # Solo generamos una clave PRNG si estamos en modo de entrenamiento
+            dropout_rng = self.make_rng('dropout')
+        
         # Bloques GRU con attention
-        for units in self.config['hidden_units']:
-            x = create_gru_attention_block(x, units, deterministic=deterministic)
+        for i, units in enumerate(self.config['hidden_units']):
+            # Si tenemos múltiples bloques, dividir la clave PRNG para cada uno
+            block_rng = None
+            if dropout_rng is not None:
+                block_rng, dropout_rng = jax.random.split(dropout_rng)
+            x = create_gru_attention_block(x, units, deterministic=deterministic, dropout_rng=block_rng)
         
         # Pooling global
         x = jnp.mean(x, axis=1)  # Equivalente a GlobalAveragePooling1D

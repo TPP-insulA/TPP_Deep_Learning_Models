@@ -169,13 +169,13 @@ cprint("\n==== ENTRENAMIENTO DE MODELOS ====", 'cyan', 'bold')
 histories, predictions, metrics = train_multiple_models(
     model_creators=use_models,
     input_shapes=input_shapes,
-    x_cgm_train=x_cgm_train_enhanced,
+    x_cgm_train=(x_cgm_train_enhanced, x_other_train_enhanced),  # Pass as tuple
     x_other_train=x_other_train_enhanced,
     y_train=y_train,
-    x_cgm_val=x_cgm_val_enhanced,
+    x_cgm_val=(x_cgm_val_enhanced, x_other_val_enhanced),  # Pass as tuple
     x_other_val=x_other_val_enhanced,
     y_val=y_val,
-    x_cgm_test=x_cgm_test_enhanced,
+    x_cgm_test=(x_cgm_test_enhanced, x_other_test_enhanced),  # Pass as tuple
     x_other_test=x_other_test_enhanced,
     y_test=y_test,
     models_dir=MODELS_SAVE_DIR

@@ -108,8 +108,7 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
     }
 
 
-@jit
-def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+def mse_loss(params, model, x_cgm, x_other, y):
     """
     Función de pérdida de error cuadrático medio para entrenamiento.
     
@@ -117,8 +116,8 @@ def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.
     -----------
     params : Dict
         Parámetros del modelo
-    apply_fn : Callable
-        Función para aplicar el modelo
+    model : nn.Module o callable
+        Modelo a utilizar o función apply del modelo
     x_cgm : jnp.ndarray
         Datos CGM
     x_other : jnp.ndarray
@@ -131,11 +130,21 @@ def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.
     jnp.ndarray
         Valor de pérdida MSE
     """
-    # Realizar predicción
-    y_pred = apply_fn(params, x_cgm, x_other).flatten()
+    # Crear PRNG para inferencia
+    dropout_rng = jax.random.PRNGKey(0)  # No afecta en modo deterministic/eval
+    
+    # Realizar predicción - comprobar si model es una función o un objeto con método apply
+    if hasattr(model, 'apply'):
+        y_pred = model.apply(params, x_cgm, x_other, rngs={'dropout': dropout_rng}, training=False).flatten()
+    else:
+        # Si es una función (como state.apply_fn), llamarla directamente
+        y_pred = model(params, x_cgm, x_other, rngs={'dropout': dropout_rng}, training=False).flatten()
     
     # Calcular error cuadrático medio
     return jnp.mean(jnp.square(y_pred - y))
+
+# Versión JIT-compilada de mse_loss
+mse_loss_jit = jit(mse_loss, static_argnames=['model'])
 
 
 @jit
@@ -162,9 +171,13 @@ def train_step(state: train_state.TrainState,
     Tuple[train_state.TrainState, Dict[str, jnp.ndarray]]
         Nuevo estado de entrenamiento y métricas
     """
+    # Definir una función de pérdida para este paso que no necesite el modelo como argumento
+    def loss_fn(params):
+        return mse_loss_jit(params, state.apply_fn, x_cgm, x_other, y)
+    
     # Calcular gradiente y pérdida
-    grad_fn = value_and_grad(mse_loss, argnums=0, has_aux=False)
-    loss, grads = grad_fn(state.params, state.apply_fn, x_cgm, x_other, y)
+    grad_fn = value_and_grad(loss_fn, has_aux=False)
+    loss, grads = grad_fn(state.params)
     
     # Aplicar gradientes y actualizar estado
     new_state = state.apply_gradients(grads=grads)
@@ -201,11 +214,20 @@ def eval_step(state: train_state.TrainState,
     Dict[str, jnp.ndarray]
         Métricas de evaluación
     """
-    # Calcular pérdida
-    loss = mse_loss(state.params, state.apply_fn, x_cgm, x_other, y)
+    # Usar una función local para calcular la pérdida sin pasar el modelo directamente
+    def loss_fn(params):
+        return mse_loss_jit(params, state.apply_fn, x_cgm, x_other, y)
     
-    # Calcular predicciones
-    y_pred = state.apply_fn(state.params, x_cgm, x_other).flatten()
+    # Calcular pérdida
+    loss = loss_fn(state.params)
+    
+    # Crear un PRNG para la evaluación (modo deterministic)
+    eval_rng = jax.random.PRNGKey(0)
+    
+    # Calcular predicciones con rngs explícito
+    y_pred = state.apply_fn(state.params, x_cgm, x_other, 
+                           rngs={'dropout': eval_rng},
+                           training=False).flatten()
     
     # Calcular error absoluto medio
     mae = jnp.mean(jnp.abs(y_pred - y))
@@ -219,6 +241,106 @@ def eval_step(state: train_state.TrainState,
         CONST_METRIC_RMSE: rmse
     }
 
+
+def normalize_array(arr_data, is_cgm=False):
+    """
+    Normaliza arrays con formas potencialmente heterogéneas.
+    
+    Parámetros:
+    -----------
+    arr_data : array-like
+        Datos a normalizar
+    is_cgm : bool
+        Indica si los datos son CGM (tienen forma especial)
+    """
+    if isinstance(arr_data, (np.ndarray, jnp.ndarray)):
+        return np.array(arr_data, dtype=np.float32)
+        
+    if isinstance(arr_data, list):
+        # Si es una lista vacía
+        if not arr_data:
+            return np.array([], dtype=np.float32)
+            
+        # Para datos CGM, necesitamos un manejo especial
+        if is_cgm:
+            # Verificar la estructura de los datos
+            print(f"Forma de los datos CGM (primeros elementos):")
+            for i in range(min(3, len(arr_data))):
+                print(f"Elemento {i}: {np.shape(arr_data[i])}")
+            
+            try:
+                # Intentar convertir cada secuencia a un array numpy primero
+                normalized_sequences = []
+                max_time_steps = 0
+                max_features = 0
+                
+                for seq in arr_data:
+                    if seq is None:
+                        continue
+                    
+                    seq_array = np.array(seq, dtype=np.float32)
+                    if len(seq_array.shape) == 1:
+                        seq_array = seq_array.reshape(-1, 1)
+                    elif len(seq_array.shape) > 2:
+                        # Si tiene más de 2 dimensiones, aplanar las dimensiones extra
+                        seq_array = seq_array.reshape(seq_array.shape[0], -1)
+                    
+                    max_time_steps = max(max_time_steps, seq_array.shape[0])
+                    max_features = max(max_features, seq_array.shape[1])
+                    normalized_sequences.append(seq_array)
+                
+                # Ahora que tenemos las dimensiones máximas, podemos padear todas las secuencias
+                padded_sequences = []
+                for seq in normalized_sequences:
+                    # Padear tiempo y características si es necesario
+                    pad_time = max_time_steps - seq.shape[0]
+                    pad_features = max_features - seq.shape[1]
+                    
+                    if pad_time > 0 or pad_features > 0:
+                        padded_seq = np.pad(
+                            seq,
+                            ((0, pad_time), (0, pad_features)),
+                            mode='constant',
+                            constant_values=0
+                        )
+                    else:
+                        padded_seq = seq
+                    
+                    padded_sequences.append(padded_seq)
+                
+                result = np.array(padded_sequences, dtype=np.float32)
+                print(f"Forma final del array CGM: {result.shape}")
+                return result
+                
+            except Exception as e:
+                print(f"Error al procesar datos CGM: {str(e)}")
+                # Si falla el método anterior, intentar un enfoque más simple
+                try:
+                    # Convertir cada secuencia a un vector 1D
+                    flattened = [np.array(x).flatten() if x is not None else np.array([]) for x in arr_data]
+                    # Encontrar la longitud máxima
+                    max_len = max(len(x) for x in flattened)
+                    # Padear todas las secuencias a la misma longitud
+                    padded = [np.pad(x, (0, max_len - len(x)), mode='constant') if len(x) < max_len else x[:max_len] 
+                             for x in flattened]
+                    return np.array(padded, dtype=np.float32)
+                except Exception as e2:
+                    print(f"Error al procesar datos CGM (método alternativo): {str(e2)}")
+                    raise
+        else:
+            # Para otros datos, intentar convertir directamente
+            try:
+                return np.array(arr_data, dtype=np.float32)
+            except ValueError:
+                # Si falla, intentar aplanar los datos
+                flattened = [np.array(x).flatten() if x is not None else np.array([]) for x in arr_data]
+                max_len = max(len(x) for x in flattened)
+                padded = [np.pad(x, (0, max_len - len(x)), mode='constant') if len(x) < max_len else x[:max_len] 
+                         for x in flattened]
+                return np.array(padded, dtype=np.float32)
+    else:
+        # Si no es lista ni array, intentar convertir directamente
+        return np.array(arr_data, dtype=np.float32)
 
 def train_and_evaluate_model(model: nn.Module, 
                             model_name: str, 
@@ -269,18 +391,27 @@ def train_and_evaluate_model(model: nn.Module,
             'seed': 42
         }
     
-    # Extraer datos
-    x_cgm_train = data['train']['x_cgm']
-    x_other_train = data['train']['x_other']
-    y_train = data['train']['y']
+    # Extraer y normalizar datos
+    try:
+        x_cgm_train = normalize_array(data['train']['x_cgm'], is_cgm=True)
+        x_other_train = normalize_array(data['train']['x_other'])
+        y_train = normalize_array(data['train']['y'])
+        
+        x_cgm_val = normalize_array(data['val']['x_cgm'], is_cgm=True)
+        x_other_val = normalize_array(data['val']['x_other'])
+        y_val = normalize_array(data['val']['y'])
+        
+        x_cgm_test = normalize_array(data['test']['x_cgm'], is_cgm=True)
+        x_other_test = normalize_array(data['test']['x_other'])
+        y_test = normalize_array(data['test']['y'])
     
-    x_cgm_val = data['val']['x_cgm']
-    x_other_val = data['val']['x_other'] 
-    y_val = data['val']['y']
-    
-    x_cgm_test = data['test']['x_cgm']
-    x_other_test = data['test']['x_other']
-    y_test = data['test']['y']
+        # Verificar si hubo algún problema en la conversión
+        print(f"Forma de x_cgm_train: {x_cgm_train.shape}")
+        print(f"Forma de x_other_train: {x_other_train.shape}")
+        print(f"Forma de y_train: {y_train.shape}")
+    except Exception as e:
+        print(f"Error al convertir datos en {model_name}: {str(e)}")
+        raise
     
     # Extraer parámetros de configuración
     epochs = training_config.get('epochs', 100)
@@ -300,7 +431,13 @@ def train_and_evaluate_model(model: nn.Module,
     x_cgm_shape = (1,) + x_cgm_train.shape[1:]
     x_other_shape = (1,) + x_other_train.shape[1:]
     
-    params = model.init(init_rng, jnp.ones(x_cgm_shape), jnp.ones(x_other_shape))
+    # Separar un PRNG específico para dropout
+    init_rng, dropout_rng = random.split(init_rng)
+    
+    # Inicializar modelo con PRNG para dropout
+    params = model.init({'params': init_rng, 'dropout': dropout_rng}, 
+                        jnp.ones(x_cgm_shape), jnp.ones(x_other_shape),
+                        training=True)
     
     # Configurar tasa de aprendizaje con decaimiento
     schedule_fn = optax.exponential_decay(
@@ -674,7 +811,11 @@ def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray
     """
     # Añadir características derivadas para CGM
     cgm_diff = np.diff(x_cgm.squeeze(), axis=1)
-    cgm_diff = np.pad(cgm_diff, ((0,0), (1,0), (0,0)), mode='edge')
+    
+    # Ajustar padding según la forma real del array
+    padding = [(0,0) for _ in range(cgm_diff.ndim)]
+    padding[1] = (1,0)  # Añadir padding solo en la segunda dimensión
+    cgm_diff = np.pad(cgm_diff, padding, mode='edge')
     
     # Añadir estadísticas móviles
     window = 5
@@ -755,13 +896,13 @@ def predict_model(model_path: str,
 
 def train_multiple_models(model_creators: Dict[str, Callable], 
                          input_shapes: Tuple[Tuple[int, ...], Tuple[int, ...]],
-                         x_cgm_train: np.ndarray, 
+                         x_cgm_train: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_train: np.ndarray, 
                          y_train: np.ndarray,
-                         x_cgm_val: np.ndarray, 
+                         x_cgm_val: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_val: np.ndarray, 
                          y_val: np.ndarray,
-                         x_cgm_test: np.ndarray, 
+                         x_cgm_test: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_test: np.ndarray, 
                          y_test: np.ndarray,
                          models_dir: str = CONST_MODELS) -> Tuple[Dict[str, Dict], Dict[str, np.ndarray], Dict[str, Dict]]:
@@ -774,20 +915,20 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         Diccionario de funciones creadoras de modelos indexadas por nombre
     input_shapes : Tuple[Tuple[int, ...], Tuple[int, ...]]
         Formas de las entradas (CGM, otras)
-    x_cgm_train : np.ndarray
-        Datos CGM de entrenamiento
+    x_cgm_train : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de entrenamiento (o tupla con CGM y otras características)
     x_other_train : np.ndarray
         Otras características de entrenamiento
     y_train : np.ndarray
         Valores objetivo de entrenamiento
-    x_cgm_val : np.ndarray
-        Datos CGM de validación
+    x_cgm_val : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de validación (o tupla con CGM y otras características)
     x_other_val : np.ndarray
         Otras características de validación
     y_val : np.ndarray
         Valores objetivo de validación
-    x_cgm_test : np.ndarray
-        Datos CGM de prueba
+    x_cgm_test : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de prueba (o tupla con CGM y otras características)
     x_other_test : np.ndarray
         Otras características de prueba
     y_test : np.ndarray
@@ -802,13 +943,36 @@ def train_multiple_models(model_creators: Dict[str, Callable],
     """
     models_names = list(model_creators.keys())
     
+    # Detectar si los datos CGM vienen como tupla y extraerlos
+    if isinstance(x_cgm_train, tuple) and len(x_cgm_train) == 2:
+        print("Detectada tupla de datos (CGM, otros) - Extrayendo correctamente...")
+        x_cgm_train_actual = x_cgm_train[0]  # Tomar solo el primer elemento
+    else:
+        x_cgm_train_actual = x_cgm_train
+        
+    if isinstance(x_cgm_val, tuple) and len(x_cgm_val) == 2:
+        x_cgm_val_actual = x_cgm_val[0]
+    else:
+        x_cgm_val_actual = x_cgm_val
+        
+    if isinstance(x_cgm_test, tuple) and len(x_cgm_test) == 2:
+        x_cgm_test_actual = x_cgm_test[0]
+    else:
+        x_cgm_test_actual = x_cgm_test
+    
     model_results = []
     for name in models_names:
+        print(f"\nEntrenando modelo {name}...")
+        
+        # Imprimir información de formas
+        print(f"Forma de datos CGM de entrenamiento: {x_cgm_train_actual.shape}")
+        print(f"Forma de otras características de entrenamiento: {x_other_train.shape}")
+        
         result = train_model_sequential(
             model_creators[name], name, input_shapes,
-            x_cgm_train, x_other_train, y_train,
-            x_cgm_val, x_other_val, y_val,
-            x_cgm_test, x_other_test, y_test,
+            x_cgm_train_actual, x_other_train, y_train,
+            x_cgm_val_actual, x_other_val, y_val,
+            x_cgm_test_actual, x_other_test, y_test,
             models_dir
         )
         model_results.append(result)
