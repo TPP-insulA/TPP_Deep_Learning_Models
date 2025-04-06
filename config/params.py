@@ -137,7 +137,7 @@ USE_TF_MODELS = {
     "tf_rnn": False,
     "tf_tabnet": False,
     "tf_tcn": False,
-    "tf_transformer": True,
+    "tf_transformer": False,
     "tf_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "tf_monte_carlo": False,

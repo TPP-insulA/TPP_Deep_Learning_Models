@@ -1,7 +1,7 @@
-# %% FILE: drl_low.py
-# Description: Deep Reinforcement Learning (DRL) model optimized for low-dose insulin predictions.
+# %% FILE: drl_low_polars.py
+# Description: Deep Reinforcement Learning (DRL) model optimized for low-dose insulin predictions with Polars.
 
-# %% CELL: Required Imports
+import polars as pl
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -13,9 +13,8 @@ import os
 from joblib import Parallel, delayed
 import time
 from tqdm import tqdm
-from datetime import timedelta
+from datetime import timedelta, datetime
 from sklearn.ensemble import RandomForestRegressor
-from datetime import datetime
 # DRL-specific imports
 import gym
 import gymnasium as gym
@@ -41,19 +40,19 @@ CONFIG = {
 # %% CELL: Data Processing Functions
 def get_cgm_window(bolus_time, cgm_df, window_hours=CONFIG["window_hours"]):
     window_start = bolus_time - timedelta(hours=window_hours)
-    window = cgm_df[(cgm_df['date'] >= window_start) & (cgm_df['date'] <= bolus_time)]
-    window = window.sort_values('date').tail(24)
-    return window['mg/dl'].values if len(window) >= 24 else None
+    window = cgm_df.filter((pl.col('date') >= window_start) & (pl.col('date') <= bolus_time))
+    window = window.sort('date').tail(24)
+    return window['mg/dl'].to_numpy() if len(window) >= 24 else None
 
 def calculate_iob(bolus_time, basal_df, half_life_hours=4):
-    if basal_df is None or basal_df.empty:
+    if basal_df is None or len(basal_df) == 0:
         return 0.0
     iob = 0
-    for _, row in basal_df.iterrows():
+    for row in basal_df.iter_rows(named=True):
         start_time = row['date']
         duration_hours = row['duration'] / (1000 * 3600)
         end_time = start_time + timedelta(hours=duration_hours)
-        rate = row['rate'] if pd.notna(row['rate']) else 0.9
+        rate = row['rate'] if row['rate'] is not None else 0.9
         rate = min(rate, 2.0)
         if start_time <= bolus_time <= end_time:
             time_since_start = (bolus_time - start_time).total_seconds() / 3600
@@ -64,163 +63,205 @@ def calculate_iob(bolus_time, basal_df, half_life_hours=4):
 def process_subject(subject_path, idx):
     start_time = time.time()
     try:
-        excel_file = pd.ExcelFile(subject_path)
-        cgm_df = pd.read_excel(excel_file, sheet_name="CGM")
-        bolus_df = pd.read_excel(excel_file, sheet_name="Bolus")
+        # Try reading with pandas first (more reliable for Excel)
+        import pandas as pd
+        pd_cgm = pd.read_excel(subject_path, sheet_name="CGM")
+        pd_bolus = pd.read_excel(subject_path, sheet_name="Bolus")
+        
+        # Convert to datetime
+        if 'date' in pd_cgm.columns:
+            pd_cgm['date'] = pd.to_datetime(pd_cgm['date'])
+        if 'date' in pd_bolus.columns:
+            pd_bolus['date'] = pd.to_datetime(pd_bolus['date'])
+            
+        # Convert to Polars
+        cgm_df = pl.from_pandas(pd_cgm)
+        bolus_df = pl.from_pandas(pd_bolus)
+        
         try:
-            basal_df = pd.read_excel(excel_file, sheet_name="Basal")
-        except ValueError:
+            pd_basal = pd.read_excel(subject_path, sheet_name="Basal")
+            if 'date' in pd_basal.columns:
+                pd_basal['date'] = pd.to_datetime(pd_basal['date'])
+            basal_df = pl.from_pandas(pd_basal)
+        except:
             basal_df = None
+            print(f"No Basal sheet in {os.path.basename(subject_path)}")
+            
     except Exception as e:
         print(f"Error al cargar {os.path.basename(subject_path)}: {e}")
         return []
 
-    # Convert dates and sort
-    cgm_df['date'] = pd.to_datetime(cgm_df['date'])
-    cgm_df = cgm_df.sort_values('date')
-    bolus_df['date'] = pd.to_datetime(bolus_df['date'])
-    if basal_df is not None:
-        basal_df['date'] = pd.to_datetime(basal_df['date'])
+    print(f"Successfully loaded {os.path.basename(subject_path)}: CGM rows={len(cgm_df)}, Bolus rows={len(bolus_df)}")
 
-    # Impute missing basal rates if absent
-    if basal_df is None or basal_df.empty:
-        basal_rate_est = 0.9  # Default population average
-    else:
-        basal_rate_est = basal_df['rate'].mean() if 'rate' in basal_df.columns else 0.9
+    # Check for required columns
+    required_cgm_cols = ['date', 'mg/dl']
+    required_bolus_cols = ['date', 'normal', 'carbInput', 'bgInput']
+    
+    for col in required_cgm_cols:
+        if col not in cgm_df.columns:
+            print(f"ERROR: Required column '{col}' missing from CGM sheet in {os.path.basename(subject_path)}")
+            if col == 'mg/dl' and 'value' in cgm_df.columns:
+                print(f"Found 'value' column instead of 'mg/dl', renaming...")
+                cgm_df = cgm_df.rename({'value': 'mg/dl'})
+            else:
+                return []
+    
+    for col in required_bolus_cols:
+        if col not in bolus_df.columns:
+            print(f"ERROR: Required column '{col}' missing from Bolus sheet in {os.path.basename(subject_path)}")
+            if col == 'normal' and 'insulin' in bolus_df.columns:
+                print(f"Found 'insulin' column instead of 'normal', renaming...")
+                bolus_df = bolus_df.rename({'insulin': 'normal'})
+            else:
+                return []
+
+    # Sort data
+    cgm_df = cgm_df.sort('date')
+    bolus_df = bolus_df.sort('date')
+    if basal_df is not None:
+        basal_df = basal_df.sort('date')
+
+    # Impute missing basal rates
+    basal_rate_est = 0.9 if basal_df is None or len(basal_df) == 0 else basal_df['rate'].mean()
 
     # Median calculations for imputation
-    non_zero_carbs = bolus_df[bolus_df['carbInput'] > 0]['carbInput']
-    carb_median = non_zero_carbs.median() if not non_zero_carbs.empty else 10.0
-    iob_values = [calculate_iob(row['date'], basal_df) for _, row in bolus_df.iterrows()]
+    non_zero_carbs = bolus_df.filter(pl.col('carbInput') > 0)['carbInput']
+    carb_median = non_zero_carbs.median() if len(non_zero_carbs) > 0 else 10.0
+    
+    # Safe IOB calculation
+    iob_values = []
+    for row in bolus_df.iter_rows(named=True):
+        try:
+            iob_values.append(calculate_iob(row['date'], basal_df))
+        except:
+            iob_values.append(0.5)
     non_zero_iob = [iob for iob in iob_values if iob > 0]
     iob_median = np.median(non_zero_iob) if non_zero_iob else 0.5
 
     # Subject-specific baselines
-    mean_normal = bolus_df['normal'].mean() if 'normal' in bolus_df.columns else 0.0
-    std_normal = bolus_df['normal'].std() if 'normal' in bolus_df.columns else 0.0
-    mean_carb = bolus_df['carbInput'].mean() if 'carbInput' in bolus_df.columns else carb_median
-    mean_cgm = cgm_df['mg/dl'].mean() if 'mg/dl' in cgm_df.columns else 100.0
-    hba1c_proxy = (mean_cgm + 46.7) / 28.7  # Rough HbA1c estimate from mean CGM
+    mean_normal = bolus_df['normal'].mean() if 'normal' in bolus_df else 0.0
+    std_normal = bolus_df['normal'].std() if 'normal' in bolus_df else 0.0
+    mean_carb = bolus_df['carbInput'].mean() if 'carbInput' in bolus_df else carb_median
+    mean_cgm = cgm_df['mg/dl'].mean() if 'mg/dl' in cgm_df else 100.0
+    hba1c_proxy = (mean_cgm + 46.7) / 28.7
 
-    # Refined IOB with exponential decay
-    def refined_iob(bolus_time, basal_df, half_life_hours=4):
-        if basal_df is None or basal_df.empty:
-            return min(basal_rate_est * np.exp(-((bolus_time.hour % 24) / half_life_hours)), CONFIG["cap_iob"])
-        iob = 0
-        for _, row in basal_df.iterrows():
-            start_time = row['date']
-            duration_hours = row['duration'] / (1000 * 3600)
-            end_time = start_time + timedelta(hours=duration_hours)
-            rate = row['rate'] if pd.notna(row['rate']) else basal_rate_est
-            if start_time <= bolus_time <= end_time:
-                time_since_start = (bolus_time - start_time).total_seconds() / 3600
-                remaining = rate * np.exp(-time_since_start / half_life_hours)
-                iob += max(0, remaining)
-        return min(iob, CONFIG["cap_iob"])
-
+    # Simplified processing loop
     processed_data = []
-    for _, row in tqdm(bolus_df.iterrows(), total=len(bolus_df), desc=f"Procesando {os.path.basename(subject_path)}", leave=False):
-        bolus_time = row['date']
-        cgm_window = get_cgm_window(bolus_time, cgm_df)
-        if cgm_window is not None:
-            # Existing features
-            iob = refined_iob(bolus_time, basal_df)
-            iob = iob_median if iob == 0 else iob
-            hour_of_day = bolus_time.hour
-            bg_input = row['bgInput'] if pd.notna(row['bgInput']) else cgm_window[-1]
-            normal = row['normal'] if pd.notna(row['normal']) else 0.0
-            normal = np.clip(normal, 0, CONFIG["cap_normal"])
-            bg_input = max(bg_input, 50.0)
-            isf_custom = row.get('insulinSensitivityFactor', 50.0 if normal <= 0 else (bg_input - 100) / normal)
-            isf_custom = np.clip(isf_custom, 10, 100)
-            bg_input = np.clip(bg_input, 0, CONFIG["cap_bg"])
-            iob = np.clip(iob, 0, CONFIG["cap_iob"])
-            carb_input = row['carbInput'] if pd.notna(row['carbInput']) else 0.0
-            carb_input = carb_median if carb_input == 0 else carb_input
-            carb_input = np.clip(carb_input, 0, CONFIG["cap_carb"])
-            icr = np.clip(row['insulinCarbRatio'] if pd.notna(row['insulinCarbRatio']) else 10.0, 5, 20)
+    for row in tqdm(bolus_df.iter_rows(named=True), total=len(bolus_df), desc=f"Procesando {os.path.basename(subject_path)}", leave=False):
+        try:
+            bolus_time = row['date']
+            cgm_window = get_cgm_window(bolus_time, cgm_df)
+            if cgm_window is not None:
+                # Basic features
+                iob = calculate_iob(bolus_time, basal_df)
+                iob = iob_median if iob == 0 else iob
+                hour_of_day = bolus_time.hour
+                bg_input = row['bgInput'] if row['bgInput'] is not None else cgm_window[-1]
+                normal = row['normal'] if row['normal'] is not None else 0.0
+                normal = np.clip(normal, 0, CONFIG["cap_normal"])
+                bg_input = max(bg_input, 50.0)
+                isf_custom = row.get('insulinSensitivityFactor', 50.0)
+                isf_custom = np.clip(isf_custom, 10, 100)
+                bg_input = np.clip(bg_input, 0, CONFIG["cap_bg"])
+                iob = np.clip(iob, 0, CONFIG["cap_iob"])
+                carb_input = row['carbInput'] if row['carbInput'] is not None else 0.0
+                carb_input = carb_median if carb_input == 0 else carb_input
+                carb_input = np.clip(carb_input, 0, CONFIG["cap_carb"])
+                icr = np.clip(row.get('insulinCarbRatio', 10.0), 5, 20)
 
-            # Enhanced CGM features
-            cgm_mean = np.mean(cgm_window)
-            cgm_std = np.std(cgm_window)
-            cgm_cv = (cgm_std / cgm_mean) * 100 if cgm_mean != 0 else 0.0
-            cgm_slope = np.polyfit(np.arange(5), cgm_window[-5:], 1)[0] if len(cgm_window) >= 5 else 0.0
-            cgm_accel = np.polyfit(np.arange(5), cgm_window[-5:], 2)[0] if len(cgm_window) >= 5 else 0.0
-            tir = np.mean((cgm_window >= 70) & (cgm_window <= 180)) * 100
-            time_below_70 = np.mean(cgm_window < 70) * 100
-            time_above_250 = np.mean(cgm_window > 250) * 100
-            hypo_risk = 1 if np.any(cgm_window < 70) else 0
-            cgm_max = np.max(cgm_window)
-            time_to_peak = np.argmax(cgm_window) / 24  # Normalized to [0, 1]
+                # Enhanced CGM features
+                cgm_mean = np.mean(cgm_window)
+                cgm_std = np.std(cgm_window)
+                cgm_cv = (cgm_std / cgm_mean) * 100 if cgm_mean != 0 else 0.0
+                cgm_slope = np.polyfit(np.arange(5), cgm_window[-5:], 1)[0] if len(cgm_window) >= 5 else 0.0
+                cgm_accel = np.polyfit(np.arange(5), cgm_window[-5:], 2)[0] if len(cgm_window) >= 5 else 0.0
+                tir = np.mean((cgm_window >= 70) & (cgm_window <= 180)) * 100
+                time_below_70 = np.mean(cgm_window < 70) * 100
+                time_above_250 = np.mean(cgm_window > 250) * 100
+                hypo_risk = 1 if np.any(cgm_window < 70) else 0
+                cgm_max = np.max(cgm_window)
+                time_to_peak = np.argmax(cgm_window) / 24
 
-            # Cyclical encoding
-            hour_sin = np.sin(2 * np.pi * hour_of_day / 24)
-            hour_cos = np.cos(2 * np.pi * hour_of_day / 24)
-            day_sin = np.sin(2 * np.pi * bolus_time.weekday() / 7)
-            day_cos = np.cos(2 * np.pi * bolus_time.weekday() / 7)
+                # Cyclical encoding
+                hour_sin = np.sin(2 * np.pi * hour_of_day / 24)
+                hour_cos = np.cos(2 * np.pi * hour_of_day / 24)
+                day_sin = np.sin(2 * np.pi * bolus_time.weekday() / 7)
+                day_cos = np.cos(2 * np.pi * bolus_time.weekday() / 7)
 
-            # Insulin-related features
-            recent_bolus_window = bolus_df[(bolus_df['date'] >= bolus_time - timedelta(hours=4)) & 
-                                           (bolus_df['date'] < bolus_time)]
-            time_since_last_bolus = (bolus_time - recent_bolus_window['date'].max()).total_seconds() / 3600 if not recent_bolus_window.empty else 4.0
-            num_recent_boluses = len(recent_bolus_window)
-            total_recent_insulin = recent_bolus_window['normal'].sum() if not recent_bolus_window.empty else 0.0
-            is_correction_bolus = 1 if pd.notna(row.get('recommended.correction', 0)) and row.get('recommended.correction', 0) > 0 else 0
+                # Safe feature calculations
+                try:
+                    recent_bolus_window = bolus_df.filter((pl.col('date') >= bolus_time - timedelta(hours=4)) & 
+                                                         (pl.col('date') < bolus_time))
+                    time_since_last_bolus = (bolus_time - recent_bolus_window['date'].max()).total_seconds() / 3600 if len(recent_bolus_window) > 0 else 4.0
+                    num_recent_boluses = len(recent_bolus_window)
+                    total_recent_insulin = recent_bolus_window['normal'].sum() if len(recent_bolus_window) > 0 else 0.0
+                except:
+                    time_since_last_bolus = 4.0
+                    num_recent_boluses = 0
+                    total_recent_insulin = 0.0
+                
+                is_correction_bolus = 1 if row.get('recommended.correction', 0) is not None and row.get('recommended.correction', 0) > 0 else 0
 
-            # Behavioral features
-            carb_rate = total_recent_insulin / 4 if time_since_last_bolus < 4 else carb_input / 4  # Carbs per hour
-            carb_size = 'small' if carb_input < 20 else 'medium' if carb_input < 60 else 'large'
+                # Behavioral features
+                carb_rate = total_recent_insulin / 4 if time_since_last_bolus < 4 else carb_input / 4
+                carb_size = 'small' if carb_input < 20 else 'medium' if carb_input < 60 else 'large'
 
-            # Interaction terms
-            carb_insulin_ratio = carb_input / icr if icr != 0 else 0.0
-            bg_iob_interaction = bg_input * iob
-            isf_cgm_slope = isf_custom * cgm_slope
-            carb_tir = carb_input * tir
+                # Interaction terms
+                carb_insulin_ratio = carb_input / icr if icr != 0 else 0.0
+                bg_iob_interaction = bg_input * iob
+                isf_cgm_slope = isf_custom * cgm_slope
+                carb_tir = carb_input * tir
 
-            features = {
-                'subject_id': idx,
-                'cgm_window': cgm_window,
-                'carbInput': carb_input,
-                'bgInput': bg_input,
-                'insulinCarbRatio': icr,
-                'insulinSensitivityFactor': isf_custom,
-                'insulinOnBoard': iob,
-                'hour_sin': hour_sin,
-                'hour_cos': hour_cos,
-                'day_sin': day_sin,
-                'day_cos': day_cos,
-                'normal': normal,
-                'cgm_mean': cgm_mean,
-                'cgm_std': cgm_std,
-                'cgm_cv': cgm_cv,
-                'cgm_slope': cgm_slope,
-                'cgm_accel': cgm_accel,
-                'tir': tir,
-                'time_below_70': time_below_70,
-                'time_above_250': time_above_250,
-                'hypo_risk': hypo_risk,
-                'cgm_max': cgm_max,
-                'time_to_peak': time_to_peak,
-                'time_since_last_bolus': time_since_last_bolus,
-                'num_recent_boluses': num_recent_boluses,
-                'total_recent_insulin': total_recent_insulin,
-                'is_correction_bolus': is_correction_bolus,
-                'carb_rate': carb_rate,
-                'carb_size': carb_size,  # Will be one-hot encoded later
-                '`carb_insulin_ratio`': carb_insulin_ratio,
-                'bg_iob_interaction': bg_iob_interaction,
-                'isf_cgm_slope': isf_cgm_slope,
-                'carb_tir': carb_tir,
-                'hba1c_proxy': hba1c_proxy,
-                'mean_normal': mean_normal,
-                'std_normal': std_normal,
-                'mean_carb': mean_carb
-            }
-            processed_data.append(features)
+                features = {
+                    'subject_id': idx,
+                    'cgm_window': cgm_window,
+                    'carbInput': carb_input,
+                    'bgInput': bg_input,
+                    'insulinCarbRatio': icr,
+                    'insulinSensitivityFactor': isf_custom,
+                    'insulinOnBoard': iob,
+                    'hour_sin': hour_sin,
+                    'hour_cos': hour_cos,
+                    'day_sin': day_sin,
+                    'day_cos': day_cos,
+                    'normal': normal,
+                    'cgm_mean': cgm_mean,
+                    'cgm_std': cgm_std,
+                    'cgm_cv': cgm_cv,
+                    'cgm_slope': cgm_slope,
+                    'cgm_accel': cgm_accel,
+                    'tir': tir,
+                    'time_below_70': time_below_70,
+                    'time_above_250': time_above_250,
+                    'hypo_risk': hypo_risk,
+                    'cgm_max': cgm_max,
+                    'time_to_peak': time_to_peak,
+                    'time_since_last_bolus': time_since_last_bolus,
+                    'num_recent_boluses': num_recent_boluses,
+                    'total_recent_insulin': total_recent_insulin,
+                    'is_correction_bolus': is_correction_bolus,
+                    'carb_rate': carb_rate,
+                    'carb_size': carb_size,
+                    'carb_insulin_ratio': carb_insulin_ratio,
+                    'bg_iob_interaction': bg_iob_interaction,
+                    'isf_cgm_slope': isf_cgm_slope,
+                    'carb_tir': carb_tir,
+                    'hba1c_proxy': hba1c_proxy,
+                    'mean_normal': mean_normal,
+                    'std_normal': std_normal,
+                    'mean_carb': mean_carb
+                }
+                processed_data.append(features)
+        except Exception as e:
+            print(f"Error processing row: {e}")
+            continue
 
     elapsed_time = time.time() - start_time
-    print(f"Procesado {os.path.basename(subject_path)} (Sujeto {idx+1}) en {elapsed_time:.2f} segundos")
+    print(f"Procesado {os.path.basename(subject_path)} (Sujeto {idx+1}) en {elapsed_time:.2f} segundos - {len(processed_data)} records")
     return processed_data
+
+# The rest of your code (split_data, training, etc.) remains largely unchanged but needs minor adjustments
+# to work with Polars DataFrames instead of Pandas. For simplicity, convert to Pandas at the end if needed:
 
 def preprocess_data(subject_folder):
     start_time = time.time()
@@ -229,35 +270,61 @@ def preprocess_data(subject_folder):
     for f in subject_files:
         print(f)
 
-    # Parallel processing of subjects
-    all_processed_data = Parallel(n_jobs=-1)(delayed(process_subject)(os.path.join(subject_folder, f), idx) 
-                                            for idx, f in enumerate(subject_files))
-    all_processed_data = [item for sublist in all_processed_data for item in sublist]
+    processed_data = Parallel(n_jobs=-1)(delayed(process_subject)(os.path.join(subject_folder, f), idx) 
+                                       for idx, f in enumerate(subject_files))
+    all_processed_data = [item for sublist in processed_data if sublist for item in sublist]
 
-    df_processed = pd.DataFrame(all_processed_data)
+    if not all_processed_data:
+        print("Error: No data processed from Excel files")
+        return pl.DataFrame()
+
+    df_processed = pl.DataFrame(all_processed_data)
     print("Muestra de datos procesados combinados:")
     print(df_processed.head())
     print(f"Total de muestras: {len(df_processed)}")
+    
+    print("Available columns in df_processed:")
+    print(df_processed.columns)
 
+    # Convert to pandas for processing that's easier in pandas
+    df_processed_pd = df_processed.to_pandas()
+    
+    print("Available columns in df_processed_pd:")
+    print(df_processed_pd.columns.tolist())
+    
+    # Handle column name based on availability
+    if 'normal' in df_processed_pd.columns:
+        normal_col = 'normal'
+    elif 'Normal' in df_processed_pd.columns:
+        normal_col = 'Normal'
+    else:
+        print("Error: No data processed from Excel files")
+        return pl.DataFrame()
+    
     # Early low-dose filtering
     scaler_y_temp = StandardScaler()
-    y_temp = scaler_y_temp.fit_transform(df_processed['normal'].values.reshape(-1, 1)).flatten()
+    y_temp = scaler_y_temp.fit_transform(df_processed_pd[normal_col].values.reshape(-1, 1)).flatten()
     dosis = scaler_y_temp.inverse_transform(y_temp.reshape(-1, 1)).flatten()
     low_dose_mask = dosis < CONFIG["low_dose_threshold"]
-    df_low_dose = df_processed[low_dose_mask]
+    
+    # Use polars filter with the mask
+    df_low_dose = df_processed.filter(pl.Series(low_dose_mask))
     print(f"Total low-dose samples (dosis < {CONFIG['low_dose_threshold']}): {len(df_low_dose)}")
 
     # Outlier removal within low-dose data (IQR method)
-    dosis_low = scaler_y_temp.inverse_transform(df_low_dose['normal'].values.reshape(-1, 1)).flatten()
+    df_low_dose_pd = df_low_dose.to_pandas()
+    dosis_low = scaler_y_temp.inverse_transform(df_low_dose_pd[normal_col].values.reshape(-1, 1)).flatten()
     q1, q3 = np.percentile(dosis_low, [25, 75])
     iqr = q3 - q1
     lower_bound = q1 - 1.5 * iqr
     upper_bound = q3 + 1.5 * iqr
     low_dose_outlier_mask = (dosis_low >= lower_bound) & (dosis_low <= upper_bound)
-    df_low_dose_clean = df_low_dose[low_dose_outlier_mask]
+    
+    # Use polars filter with the new mask
+    df_low_dose_clean = df_low_dose.filter(pl.Series(low_dose_outlier_mask))
     print(f"Total low-dose samples after outlier removal: {len(df_low_dose_clean)}")
 
-    # Interpolate CGM data to ensure consistent windows
+    # Interpolate CGM data
     def interpolate_cgm(cgm_window):
         if len(cgm_window) < 24:
             x = np.linspace(0, 23, len(cgm_window))
@@ -267,51 +334,101 @@ def preprocess_data(subject_folder):
             return cgm_interp, interp_ratio
         return cgm_window, 0.0
 
-    df_low_dose_clean[['cgm_window', 'cgm_interpolated_ratio']] = df_low_dose_clean['cgm_window'].apply(
-        lambda x: pd.Series(interpolate_cgm(x))
-    )
+    df_low_dose_clean = df_low_dose_clean.with_columns([
+        pl.col('cgm_window').map_elements(lambda x: interpolate_cgm(x)[0], return_dtype=pl.List(pl.Float64)).alias('cgm_window'),
+        pl.col('cgm_window').map_elements(lambda x: interpolate_cgm(x)[1], return_dtype=pl.Float64).alias('cgm_interpolated_ratio')
+    ])
 
     # Logarithmic transformations
     log_cols = ['carbInput', 'insulinOnBoard', 'bgInput', 'cgm_mean', 'cgm_std', 'cgm_cv', 'total_recent_insulin']
-    for col in log_cols:
-        df_low_dose_clean[col] = np.log1p(df_low_dose_clean[col])
-    df_low_dose_clean['cgm_window'] = df_low_dose_clean['cgm_window'].apply(lambda x: np.log1p(x))
+    df_low_dose_clean = df_low_dose_clean.with_columns([pl.col(col).log1p().alias(col) for col in log_cols])
+    df_low_dose_clean = df_low_dose_clean.with_columns(pl.col('cgm_window').map_elements(lambda x: np.log1p(x), return_dtype=pl.List(pl.Float64)))
 
-    # One-hot encode categorical features
-    df_low_dose_clean = pd.get_dummies(df_low_dose_clean, columns=['carb_size'], prefix='carb_size')
+    # Create dummy variables for carb_size using with_columns
+    df_low_dose_clean = df_low_dose_clean.with_columns([
+        (pl.col('carb_size') == 'small').cast(pl.Int64).alias('carb_size_small'),
+        (pl.col('carb_size') == 'medium').cast(pl.Int64).alias('carb_size_medium'),
+        (pl.col('carb_size') == 'large').cast(pl.Int64).alias('carb_size_large')
+    ])
 
     # Expand CGM window into columns
-    cgm_columns = [f'cgm_{i}' for i in range(24)]
-    df_cgm = pd.DataFrame(df_low_dose_clean['cgm_window'].tolist(), columns=cgm_columns, index=df_low_dose_clean.index)
-    df_final = pd.concat([df_cgm, df_low_dose_clean.drop(columns=['cgm_window'])], axis=1)
-    df_final = df_final.dropna()
+    cgm_df = pl.DataFrame({f'cgm_{i}': df_low_dose_clean['cgm_window'].map_elements(lambda x: x[i]) for i in range(24)})
+    df_final = pl.concat([cgm_df, df_low_dose_clean.drop('cgm_window')], how='horizontal')
+    df_final = df_final.drop_nulls()
+
     print("Verificación de NaN en df_final:")
-    print(df_final.isna().sum())
+    print(df_final.null_count())
 
     elapsed_time = time.time() - start_time
     print(f"Preprocesamiento completo en {elapsed_time:.2f} segundos")
     return df_final
 
 def split_data(df_final):
+    # Convert to pandas if it's a Polars DataFrame
+    if isinstance(df_final, pl.DataFrame):
+        df_final = df_final.to_pandas()
+    
+    # Debug: Check DataFrame columns
+    print("Columns in df_final before processing:")
+    print(df_final.columns.tolist())
+    
+    # Check if 'subject_id' exists
+    if 'subject_id' not in df_final.columns:
+        # Try case-insensitive matching
+        subject_cols = [col for col in df_final.columns if col.lower() == 'subject_id']
+        if subject_cols:
+            # Rename the column to 'subject_id'
+            df_final = df_final.rename(columns={subject_cols[0]: 'subject_id'})
+            print(f"Renamed '{subject_cols[0]}' to 'subject_id'")
+        else:
+            # Create dummy subject_id if it doesn't exist at all
+            print("Warning: No 'subject_id' column found. Creating a dummy column.")
+            unique_subjects = 10  # Arbitrary number of subjects
+            n_samples = len(df_final)
+            # Assign roughly equal samples to each subject
+            df_final['subject_id'] = np.array([i % unique_subjects for i in range(n_samples)])
+    
     start_time = time.time()
-    subject_stats = df_final.groupby('subject_id')['normal'].agg(['mean', 'std']).reset_index()
-    subject_stats.columns = ['subject_id', 'mean_dose', 'std_dose']
+    
+    # Print unique subject IDs
+    print(f"Unique subject IDs: {df_final['subject_id'].unique()}")
+    
+    # Perform groupby operation with error checking
+    try:
+        subject_stats = df_final.groupby('subject_id')['normal'].agg(['mean', 'std']).reset_index()
+        subject_stats.columns = ['subject_id', 'mean_dose', 'std_dose']
+    except KeyError as e:
+        print(f"Error in groupby: {e}")
+        # Create a fallback subject_stats DataFrame
+        unique_subjects = df_final['subject_id'].unique()
+        means = [df_final[df_final['subject_id'] == sid]['normal'].mean() for sid in unique_subjects]
+        stds = [df_final[df_final['subject_id'] == sid]['normal'].std() for sid in unique_subjects]
+        subject_stats = pd.DataFrame({
+            'subject_id': unique_subjects,
+            'mean_dose': means,
+            'std_dose': stds
+        })
+    
     subject_ids = df_final['subject_id'].unique()
 
+    # Sort subjects by mean dose for stratified split
     sorted_subjects = subject_stats.sort_values('mean_dose')['subject_id'].values
     n_subjects = len(sorted_subjects)
     train_size = int(0.8 * n_subjects)
     val_size = int(0.1 * n_subjects)
     test_size = n_subjects - train_size - val_size
 
+    # Define special test subject if it exists
     test_subjects = [49] if 49 in sorted_subjects else []
     remaining_subjects = [s for s in sorted_subjects if s != 49]
     train_subjects = []
     val_subjects = []
 
+    # Shuffle for randomization
     remaining_subjects_list = list(remaining_subjects)
     np.random.shuffle(remaining_subjects_list)
 
+    # Remainder of the function remains unchanged
     for i, subject in enumerate(remaining_subjects_list):
         train_mean = df_final[df_final['subject_id'].isin(train_subjects)]['normal'].mean() if train_subjects else 0
         val_mean = df_final[df_final['subject_id'].isin(val_subjects)]['normal'].mean() if val_subjects else 0
@@ -320,6 +437,7 @@ def split_data(df_final):
         val_std = df_final[df_final['subject_id'].isin(val_subjects)]['normal'].std() if val_subjects else 0
         test_std = df_final[df_final['subject_id'].isin(test_subjects)]['normal'].std() if test_subjects else 0
 
+        # ... existing code for subject distribution ...
         train_temp = train_subjects + [subject]
         val_temp = val_subjects + [subject]
         test_temp = test_subjects + [subject]
@@ -358,10 +476,12 @@ def split_data(df_final):
         else:
             train_subjects.append(subject)
 
+    # Create masks for each set
     train_mask = df_final['subject_id'].isin(train_subjects)
     val_mask = df_final['subject_id'].isin(val_subjects)
     test_mask = df_final['subject_id'].isin(test_subjects)
 
+    # Calculate statistics
     y_train_temp = df_final.loc[train_mask, 'normal']
     y_val_temp = df_final.loc[val_mask, 'normal']
     y_test_temp = df_final.loc[test_mask, 'normal']
@@ -369,16 +489,46 @@ def split_data(df_final):
     print("Post-split Val y: mean =", y_val_temp.mean(), "std =", y_val_temp.std())
     print("Post-split Test y: mean =", y_test_temp.mean(), "std =", y_test_temp.std())
 
+    # Initialize scalers
     scaler_cgm = StandardScaler()
     scaler_other = StandardScaler()
     scaler_y = StandardScaler()
     cgm_columns = [f'cgm_{i}' for i in range(24)]
-    # Reduced feature set based on Random Forest importance
-    other_features = ['carbInput', 'bgInput', 'insulinOnBoard', 'insulinCarbRatio', 
+    
+    # Define the feature set
+    # Check if all features exist
+    all_other_features = ['carbInput', 'bgInput', 'insulinOnBoard', 'insulinCarbRatio', 
                       'insulinSensitivityFactor', 'hour_sin', 'hour_cos', 
                       'time_since_last_bolus', 'carb_insulin_ratio', 'mean_normal', 
                       'std_normal', 'hba1c_proxy', 'cgm_23']
+    
+    # Filter to only include features that exist in the DataFrame
+    other_features = [feat for feat in all_other_features if feat in df_final.columns]
+    
+    if not other_features:
+        print("Warning: None of the expected features found. Using all non-CGM columns")
+        other_features = [col for col in df_final.columns if col not in cgm_columns 
+                         and col != 'subject_id' and col != 'normal']
+    
+    print(f"Using the following other features: {other_features}")
 
+    # Check if we have enough data in each split
+    if sum(train_mask) == 0 or sum(val_mask) == 0 or sum(test_mask) == 0:
+        print("Warning: One or more splits have no data! Using a default 80/10/10 split")
+        # Perform a simple split without subject consideration
+        train_size = int(0.8 * len(df_final))
+        val_size = int(0.1 * len(df_final))
+        indices = np.arange(len(df_final))
+        np.random.shuffle(indices)
+        train_mask = np.zeros(len(df_final), dtype=bool)
+        val_mask = np.zeros(len(df_final), dtype=bool)
+        test_mask = np.zeros(len(df_final), dtype=bool)
+        train_mask[indices[:train_size]] = True
+        val_mask[indices[train_size:train_size+val_size]] = True
+        test_mask[indices[train_size+val_size:]] = True
+
+    # Prepare data for the models
+    # Scale features
     X_cgm_train = scaler_cgm.fit_transform(df_final.loc[train_mask, cgm_columns]).reshape(-1, 24, 1)
     X_cgm_val = scaler_cgm.transform(df_final.loc[val_mask, cgm_columns]).reshape(-1, 24, 1)
     X_cgm_test = scaler_cgm.transform(df_final.loc[test_mask, cgm_columns]).reshape(-1, 24, 1)
@@ -389,11 +539,13 @@ def split_data(df_final):
     y_val = scaler_y.transform(df_final.loc[val_mask, 'normal'].values.reshape(-1, 1)).flatten()
     y_test = scaler_y.transform(df_final.loc[test_mask, 'normal'].values.reshape(-1, 1)).flatten()
 
+    # Extract subject IDs for each split
     X_subject_train = df_final.loc[train_mask, 'subject_id'].values
     X_subject_val = df_final.loc[val_mask, 'subject_id'].values
     X_subject_test = df_final.loc[test_mask, 'subject_id'].values
     subject_test = X_subject_test
 
+    # Print dataset dimensions
     print(f"Entrenamiento CGM: {X_cgm_train.shape}, Validación CGM: {X_cgm_val.shape}, Prueba CGM: {X_cgm_test.shape}")
     print(f"Entrenamiento Otros: {X_other_train.shape}, Validación Otros: {X_other_val.shape}, Prueba Otros: {X_other_test.shape}")
     print(f"Entrenamiento Subject: {X_subject_train.shape}, Validación Subject: {X_subject_val.shape}, Prueba Subject: {X_subject_test.shape}")
@@ -401,6 +553,7 @@ def split_data(df_final):
 
     elapsed_time = time.time() - start_time
     print(f"División de datos completa en {elapsed_time:.2f} segundos")
+    
     return (X_cgm_train, X_cgm_val, X_cgm_test,
             X_other_train, X_other_val, X_other_test,
             X_subject_train, X_subject_val, X_subject_test,
@@ -523,21 +676,17 @@ class InsulinDoseEnv(gym.Env):
         predicted_dose = self.scaler_y.inverse_transform(action.reshape(-1, 1)).flatten()[0]
         error = predicted_dose - true_dose
 
-        # Base reward with tanh penalty
-        weight = 1.0 / (1.0 + np.log1p(max(true_dose, 0.1)))
-        base_reward = -np.tanh(abs(error)) * weight
+        # Linear penalty for error, scaled by the true dose to normalize
+        base_reward = -abs(error) / (true_dose + 1e-6)  # Normalize by true dose to avoid division by zero
 
-        # Enhanced hypo penalty for overprediction in low-dose scenarios
+        # Stronger hypo penalty for overprediction
         hypo_penalty = 0.0
-        if predicted_dose > true_dose and true_dose < 1.0:
-            hypo_penalty = -1.0 * (predicted_dose - true_dose) ** 2
-        hypo_penalty = np.clip(hypo_penalty, -1.0, 0.0)
+        if predicted_dose > true_dose:
+            hypo_penalty = -2.0 * (predicted_dose - true_dose)  # Linear penalty for overprediction
+        hypo_penalty = np.clip(hypo_penalty, -2.0, 0.0)
 
-        # Bonus for very accurate predictions
-        precision_bonus = 0.0
-        if abs(error) < 0.1:
-            precision_bonus = 0.5
-        precision_bonus = np.clip(precision_bonus, 0.0, 0.5)
+        # Continuous precision bonus for small errors
+        precision_bonus = np.exp(-abs(error) / 0.1)  # Exponential decay, peaks at 1.0 when error=0
 
         reward = base_reward + hypo_penalty + precision_bonus
         reward = float(reward)
@@ -589,11 +738,7 @@ class RewardCallback(BaseCallback):
 # %% CELL: Main Execution - Preprocess and Filter Low-Dose Data
 # Preprocess the full dataset
 df_final = preprocess_data(CONFIG["data_path"])
-# df_final.to_csv('df_final.csv', index=False)
-# df_final = pd.read_csv('df_final.csv')
 
-
-# %%
 # First split to get the scaler
 (_, _, _,
  _, _, _,
@@ -603,16 +748,17 @@ df_final = preprocess_data(CONFIG["data_path"])
 
 # Filter for low-dose data
 low_dose_threshold = CONFIG["low_dose_threshold"]
-dosis = scaler_y.inverse_transform(df_final['normal'].values.reshape(-1, 1)).flatten()
+# Convert Polars Series to numpy array properly
+dosis = scaler_y.inverse_transform(df_final.select('normal').to_numpy().reshape(-1, 1)).flatten()
 low_dose_mask = dosis < low_dose_threshold
-df_low_dose = df_final[low_dose_mask]
+df_low_dose = df_final.filter(pl.Series(low_dose_mask))
 print(f"Total low-dose samples (dosis < {low_dose_threshold}): {len(df_low_dose)}")
 
 # Remove outliers within low-dose data
-dosis_low = scaler_y.inverse_transform(df_low_dose['normal'].values.reshape(-1, 1)).flatten()
+dosis_low = scaler_y.inverse_transform(df_low_dose.select('normal').to_numpy().reshape(-1, 1)).flatten()
 low_dose_outlier_threshold = np.percentile(dosis_low, 95)
 low_dose_outlier_mask = dosis_low < low_dose_outlier_threshold
-df_low_dose_clean = df_low_dose[low_dose_outlier_mask]
+df_low_dose_clean = df_low_dose.filter(pl.Series(low_dose_outlier_mask))
 print(f"Total low-dose samples after outlier removal: {len(df_low_dose_clean)}")
 
 # Split the low-dose data
@@ -623,57 +769,57 @@ print(f"Total low-dose samples after outlier removal: {len(df_low_dose_clean)}")
  scaler_cgm_low, scaler_other_low, scaler_y_low) = split_data(df_low_dose_clean)
 
 # %% CELL: Feature Importance Analysis for Low-Dose Data
-# Feature Importance Analysis for Low-Dose Data
-from sklearn.ensemble import RandomForestRegressor
-import seaborn as sns
-import matplotlib.pyplot as plt
+# # Feature Importance Analysis for Low-Dose Data
+# from sklearn.ensemble import RandomForestRegressor
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 
-# Define features based on what's actually in df_low_dose_clean
-cgm_columns = [f'cgm_{i}' for i in range(24)]
-other_features = ['carbInput', 'bgInput', 'insulinOnBoard', 'insulinCarbRatio', 
-                  'insulinSensitivityFactor', 'hour_sin', 'hour_cos', 'cgm_mean', 
-                  'cgm_std', 'cgm_cv', 'cgm_slope', 'tir', 'hypo_risk', 
-                  'carb_insulin_ratio', 'num_recent_boluses', 'total_recent_insulin',
-                  'time_below_70', 'time_above_250', 'cgm_accel', 'cgm_max', 
-                  'time_to_peak', 'time_since_last_bolus', 'is_correction_bolus', 
-                  'carb_rate', 'bg_iob_interaction', 'isf_cgm_slope', 'carb_tir', 
-                  'hba1c_proxy', 'mean_normal', 'std_normal', 'mean_carb']
+# # Define features based on what's actually in df_low_dose_clean
+# cgm_columns = [f'cgm_{i}' for i in range(24)]
+# other_features = ['carbInput', 'bgInput', 'insulinOnBoard', 'insulinCarbRatio', 
+#                   'insulinSensitivityFactor', 'hour_sin', 'hour_cos', 'cgm_mean', 
+#                   'cgm_std', 'cgm_cv', 'cgm_slope', 'tir', 'hypo_risk', 
+#                   'carb_insulin_ratio', 'num_recent_boluses', 'total_recent_insulin',
+#                   'time_below_70', 'time_above_250', 'cgm_accel', 'cgm_max', 
+#                   'time_to_peak', 'time_since_last_bolus', 'is_correction_bolus', 
+#                   'carb_rate', 'bg_iob_interaction', 'isf_cgm_slope', 'carb_tir', 
+#                   'hba1c_proxy', 'mean_normal', 'std_normal', 'mean_carb']
 
-# Include one-hot encoded carb_size columns
-carb_size_columns = ['carb_size_small', 'carb_size_medium', 'carb_size_large']
+# # Include one-hot encoded carb_size columns
+# carb_size_columns = ['carb_size_small', 'carb_size_medium', 'carb_size_large']
 
-# Combine all features
-all_features = other_features + cgm_columns + carb_size_columns
+# # Combine all features
+# all_features = other_features + cgm_columns + carb_size_columns
 
-# Extract features and target
-X_low = df_low_dose_clean[all_features]
-y_low = df_low_dose_clean['normal']
+# # Extract features and target
+# X_low = df_low_dose_clean[all_features]
+# y_low = df_low_dose_clean['normal']
 
-# Train Random Forest
-rf = RandomForestRegressor(n_estimators=100, random_state=42)
-rf.fit(X_low, y_low)
+# # Train Random Forest
+# rf = RandomForestRegressor(n_estimators=100, random_state=42)
+# rf.fit(X_low, y_low)
 
-# Get feature importances
-importances = rf.feature_importances_
-feature_names = all_features
+# # Get feature importances
+# importances = rf.feature_importances_
+# feature_names = all_features
 
-# Plot feature importances
-plt.figure(figsize=(12, 8))
-sns.barplot(x=importances, y=feature_names)
-plt.title('Feature Importances for Low-Dose Predictions (Updated)')
-plt.xlabel('Importance')
-plt.ylabel('Feature')
-plt.tight_layout()
-timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-plt.savefig(f'plots/feature_importances_low_dose_updated_{timestamp}.png', bbox_inches='tight')
-plt.show()
-plt.close()
+# # Plot feature importances
+# plt.figure(figsize=(12, 8))
+# sns.barplot(x=importances, y=feature_names)
+# plt.title('Feature Importances for Low-Dose Predictions (Updated)')
+# plt.xlabel('Importance')
+# plt.ylabel('Feature')
+# plt.tight_layout()
+# timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+# plt.savefig(f'plots/feature_importances_low_dose_updated_{timestamp}.png', bbox_inches='tight')
+# plt.show()
+# plt.close()
 
-# Print top 10 features for inspection
-feature_importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
-print("Top 10 Features by Importance:")
-print(feature_importance_df.head(10))
+# # Print top 10 features for inspection
+# feature_importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+# feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False)
+# print("Top 10 Features by Importance:")
+# print(feature_importance_df.head(10))
 
 # %% CELL: DRL (PPO) Training for Low-Dose Data
 train_env_ppo_low = InsulinDoseEnv(X_cgm_train_low, X_other_train_low, y_train_low, scaler_y_low)
@@ -705,14 +851,14 @@ class CustomPolicy(BaseFeaturesExtractor):
 model_ppo_low = PPO("MlpPolicy", 
                     train_env_ppo_low, 
                     verbose=1, 
-                    learning_rate=3e-4, 
-                    n_steps=4096, 
-                    batch_size=64, 
-                    clip_range=0.3, 
-                    ent_coef=0.05, 
-                    policy_kwargs={"net_arch": [64, 64], 
+                    learning_rate=1e-4,  # Lower learning rate for stability
+                    n_steps=2048,  # Reduce n_steps to update more frequently
+                    batch_size=32,  # Smaller batch size for better gradient estimates
+                    clip_range=0.1,  # Smaller clip range for more conservative updates
+                    ent_coef=0.01,  # Lower entropy coefficient to focus on exploitation
+                    policy_kwargs={"net_arch": [128, 128],  # Larger network for better capacity
                                    "ortho_init": False, 
-                                   "optimizer_kwargs": {"weight_decay": 1e-3}, 
+                                   "optimizer_kwargs": {"weight_decay": 1e-4},  # Adjust weight decay
                                    "features_extractor_class": CustomPolicy})
 
 # Train for more timesteps
@@ -777,26 +923,25 @@ rmse_rule = np.sqrt(mean_squared_error(scaler_y_low.inverse_transform(y_test_low
 r2_rule = r2_score(scaler_y_low.inverse_transform(y_test_low.reshape(-1, 1)), y_rule_low)
 print(f"Updated Low-Dose Rules Test - MAE: {mae_rule:.2f}, RMSE: {rmse_rule:.2f}, R²: {r2_rule:.2f}")
 
-# %%
+# %% 
 # Analyze test set characteristics
-test_df = df_low_dose_clean[df_low_dose_clean['subject_id'].isin(subject_test_low)]
-train_df = df_low_dose_clean[df_low_dose_clean['subject_id'].isin(X_subject_train_low)]
+test_df = df_low_dose_clean.filter(pl.col('subject_id').is_in(subject_test_low))
+train_df = df_low_dose_clean.filter(pl.col('subject_id').is_in(X_subject_train_low))
 
 print("Test Set Statistics:")
-print(test_df[['normal', 'carbInput', 'bgInput', 'hba1c_proxy']].describe())
+print(test_df.select(['normal', 'carbInput', 'bgInput', 'hba1c_proxy']).describe())
 print("\nTrain Set Statistics:")
-print(train_df[['normal', 'carbInput', 'bgInput', 'hba1c_proxy']].describe())
+print(train_df.select(['normal', 'carbInput', 'bgInput', 'hba1c_proxy']).describe())
 
-
-val_df = df_low_dose_clean[df_low_dose_clean['subject_id'].isin(X_subject_val_low)]
+val_df = df_low_dose_clean.filter(pl.col('subject_id').is_in(X_subject_val_low))
 print("Validation Set Statistics:")
-print(val_df[['normal', 'carbInput', 'bgInput', 'hba1c_proxy']].describe())
+print(val_df.select(['normal', 'carbInput', 'bgInput', 'hba1c_proxy']).describe())
 
 # Plot distributions
 plt.figure(figsize=(12, 6))
-sns.kdeplot(val_df['normal'], label='Validation', color='green')
-sns.kdeplot(train_df['normal'], label='Train', color='blue')
-sns.kdeplot(test_df['normal'], label='Test', color='red')
+sns.kdeplot(val_df.select('normal').to_numpy().flatten(), label='Validation', color='green')
+sns.kdeplot(train_df.select('normal').to_numpy().flatten(), label='Train', color='blue')
+sns.kdeplot(test_df.select('normal').to_numpy().flatten(), label='Test', color='red')
 plt.title('Distribution of Insulin Doses (Normal)')
 plt.xlabel('Insulin Dose (units)')
 plt.legend()

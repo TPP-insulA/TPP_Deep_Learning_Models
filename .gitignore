@@ -16,3 +16,4 @@ Cargo.lock
 *.keras
 *.h5
 __pycache__
+pandas/plots
