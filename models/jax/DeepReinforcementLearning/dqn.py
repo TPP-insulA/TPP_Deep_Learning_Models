@@ -1432,3 +1432,15 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo DQN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_dqn_model

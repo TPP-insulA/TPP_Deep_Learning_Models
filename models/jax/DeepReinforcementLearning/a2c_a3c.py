@@ -1899,7 +1899,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     # Envolver en DRLModelWrapper para compatibilidad total con el sistema
     return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="a2c")
 
-def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """
     Retorna una función para crear un modelo A2C compatible con la API del sistema.
     
