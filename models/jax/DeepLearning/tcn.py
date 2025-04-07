@@ -2,12 +2,24 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import numpy as np
 from typing import Tuple, List, Dict, Any, Optional, Callable, Sequence
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import TCN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_SELU = "selu"
+CONST_SIGMOID = "sigmoid"
+CONST_TANH = "tanh"
+CONST_VALID = "VALID"
+CONST_SAME = "SAME"
+CONST_DROPOUT = "dropout"
 
 class WeightNormalization(nn.Module):
     """
@@ -27,7 +39,7 @@ class WeightNormalization(nn.Module):
     filters: int
     kernel_size: int
     dilation_rate: int = 1
-    padding: str = 'VALID'
+    padding: str = CONST_VALID
     
     @nn.compact
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
@@ -133,7 +145,7 @@ def create_tcn_block(inputs: jnp.ndarray, filters: int, kernel_size: int,
             features=filters * 2,  # Double for gating
             kernel_size=(kernel_size,),
             kernel_dilation=(dilation_rate,),
-            padding='VALID'
+            padding=CONST_VALID
         )(padded_input)
     
     # Gating mechanism (GLU)
@@ -155,8 +167,10 @@ def create_tcn_block(inputs: jnp.ndarray, filters: int, kernel_size: int,
     if TCN_CONFIG['use_spatial_dropout']:
         # Simulate spatial dropout by repeating dropout mask across time dimension
         conv_shape = conv.shape
+        # Usar PRNGKey específica para reproducibilidad
+        key = jax.random.PRNGKey(0) if deterministic else jax.random.PRNGKey(int(jnp.sum(conv) * 1e6) % 2**32)
         dropout_mask = jax.random.bernoulli(
-            jax.random.PRNGKey(0), 1.0 - dropout_rate, (conv_shape[0], 1, conv_shape[2])
+            key, 1.0 - dropout_rate, (conv_shape[0], 1, conv_shape[2])
         )
         dropout_mask = jnp.tile(dropout_mask, (1, conv_shape[1], 1))
         scale = 1.0 / (1.0 - dropout_rate) if not deterministic else 1.0
@@ -184,40 +198,41 @@ class TCNModel(nn.Module):
     -----------
     config : Dict
         Configuración del modelo
-    input_shape : Tuple
+    cgm_shape : Tuple
         Forma de los datos CGM
     other_features_shape : Tuple
         Forma de otras características
     """
     config: Dict
-    input_shape: Tuple
+    cgm_shape: Tuple
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
         Aplica el modelo TCN a las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
-        training : bool
-            Indica si está en modo entrenamiento
+        cgm_input : jnp.ndarray
+            Datos CGM de entrada
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
             
         Retorna:
         --------
         jnp.ndarray
             Predicciones del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
         # Proyección inicial
         x = nn.Conv(
             features=self.config['filters'][0],
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(cgm_input)
         
         # Bloques TCN con skip connections
@@ -256,23 +271,13 @@ class TCNModel(nn.Module):
         x = nn.Dense(128)(x)
         
         # Aplicar activación según configuración
-        if self.config['activation'] == 'relu':
-            x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
-            x = nn.gelu(x)
-        else:
-            x = nn.relu(x)  # Default
+        x = apply_activation(x, self.config['activation'])
             
         x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
         x = nn.Dropout(rate=self.config['dropout_rate'][0], deterministic=deterministic)(x)
         x = nn.Dense(128)(x)
         
-        if self.config['activation'] == 'relu':
-            x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
-            x = nn.gelu(x)
-        else:
-            x = nn.relu(x)  # Default
+        x = apply_activation(x, self.config['activation'])
             
         # Residual connection si las dimensiones coinciden
         if skip.shape[-1] == 128:
@@ -280,12 +285,7 @@ class TCNModel(nn.Module):
         
         x = nn.Dense(64)(x)
         
-        if self.config['activation'] == 'relu':
-            x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
-            x = nn.gelu(x)
-        else:
-            x = nn.relu(x)  # Default
+        x = apply_activation(x, self.config['activation'])
             
         x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
         x = nn.Dropout(rate=self.config['dropout_rate'][1], deterministic=deterministic)(x)
@@ -293,30 +293,6 @@ class TCNModel(nn.Module):
         output = nn.Dense(1)(x)
         
         return output
-
-def create_tcn_model(input_shape: tuple, other_features_shape: tuple) -> TCNModel:
-    """
-    Crea un modelo TCN completo con JAX/Flax.
-    
-    Parámetros:
-    -----------
-    input_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
-        
-    Retorna:
-    --------
-    tcn_model
-        Modelo TCN inicializado
-    """
-    model = TCNModel(
-        config=TCN_CONFIG,
-        input_shape=input_shape,
-        other_features_shape=other_features_shape
-    )
-    
-    return model
 
 def apply_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     """
@@ -334,15 +310,51 @@ def apply_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     jnp.ndarray
         Tensor con la activación aplicada
     """
-    if activation_name == 'relu':
+    if activation_name == CONST_RELU:
         return nn.relu(x)
-    elif activation_name == 'gelu':
+    elif activation_name == CONST_GELU:
         return nn.gelu(x)
-    elif activation_name == 'selu':
+    elif activation_name == CONST_SELU:
         return nn.selu(x)
-    elif activation_name == 'sigmoid':
+    elif activation_name == CONST_SIGMOID:
         return jax.nn.sigmoid(x)
-    elif activation_name == 'tanh':
+    elif activation_name == CONST_TANH:
         return jnp.tanh(x)
     else:
         return nn.relu(x)  # Default
+
+def create_tcn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+    """
+    Crea un modelo TCN completo con JAX/Flax envuelto en DLModelWrapper.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
+        
+    Retorna:
+    --------
+    DLModelWrapper
+        Modelo TCN inicializado y envuelto en DLModelWrapper
+    """
+    model = TCNModel(
+        config=TCN_CONFIG,
+        cgm_shape=cgm_shape,
+        other_features_shape=other_features_shape
+    )
+    
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo TCN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_tcn_model

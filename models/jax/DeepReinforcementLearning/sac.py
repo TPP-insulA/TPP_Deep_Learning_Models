@@ -5,17 +5,33 @@ import numpy as np
 import flax
 import flax.linen as nn
 import optax
+import random
 from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 from functools import partial
-import matplotlib.pyplot as plt
 from collections import deque
-import random
+import matplotlib.pyplot as plt
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SAC_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_GELU = "gelu"
+CONST_LEAKY_RELU = "leaky_relu"
+CONST_SIGMOID = "sigmoid"
+CONST_DROPOUT = "dropout"
+CONST_EPSILON = "epsilon"
+CONST_PARAMS = "params"
+CONST_ACTOR_PREFIX = "actor"
+CONST_CRITIC_PREFIX = "critic"
+CONST_TARGET_PREFIX = "target"
+
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "sac")
 
 
 class ReplayBuffer:
@@ -65,14 +81,17 @@ class ReplayBuffer:
         Retorna:
         --------
         Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-            (states, actions, rewards, next_states, dones)
+            (estados, acciones, recompensas, siguientes_estados, terminados)
         """
         if len(self.buffer) < batch_size:
-            # Si no hay suficientes transiciones, devuelve lo que haya
-            batch = random.sample(self.buffer, len(self.buffer))
+            # Si no hay suficientes experiencias, muestrear con reemplazo
+            rng = np.random.Generator(np.random.PCG64(42))
+            batch = rng.choice(self.buffer, batch_size, replace=True)
         else:
-            batch = random.sample(self.buffer, batch_size)
-            
+            # Muestreo aleatorio sin reemplazo
+            rng = np.random.Generator(np.random.PCG64(42))
+            batch = rng.choice(self.buffer, batch_size, replace=False)
+        
         states, actions, rewards, next_states, dones = zip(*batch)
         
         return (
@@ -377,6 +396,9 @@ class SAC:
         self.action_dim = action_dim
         self.action_high = jnp.array(action_high, dtype=jnp.float32)
         self.action_low = jnp.array(action_low, dtype=jnp.float32)
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # Valores predeterminados para capas ocultas
         if actor_hidden_units is None:
@@ -1319,6 +1341,7 @@ class SAC:
         axs[2, 1].grid(alpha=0.3)
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, 'training_history.png'))
         plt.show()
 
 class SACWrapper:
@@ -1733,7 +1756,7 @@ class SACWrapper:
         return config
 
 
-def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> SACWrapper:
+def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en SAC (Soft Actor-Critic) para predicción de dosis de insulina.
     
@@ -1746,8 +1769,8 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    SACWrapper
-        Wrapper de SAC que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper de SAC que implementa la interfaz compatible con el sistema
     """
     # Configurar el espacio de estados y acciones
     state_dim = 64  # Dimensión del espacio de estado latente
@@ -1787,9 +1810,23 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=42
     )
     
-    # Crear y devolver wrapper
-    return SACWrapper(
+    # Crear wrapper del agente
+    wrapper = SACWrapper(
         sac_agent=sac_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Envolver en DRLModelWrapper para compatibilidad completa con la interfaz del sistema
+    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="sac")
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo SAC compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_sac_model

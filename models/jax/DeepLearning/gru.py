@@ -2,12 +2,17 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from typing import List, Tuple, Dict, Any, Optional
+import numpy as np
+from typing import List, Tuple, Dict, Any, Optional, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import GRU_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_DROPOUT = "dropout"
 
 def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
                               deterministic: bool = False) -> jnp.ndarray:
@@ -36,7 +41,7 @@ def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
     # Definir y aplicar GRU
     gru = nn.scan(nn.GRUCell, 
                   variable_broadcast="params", 
-                  split_rngs={"params": False, "dropout": True})
+                  split_rngs={"params": False, CONST_DROPOUT: True})
     
     batch_size, _, _ = x.shape
     x = x.transpose(1, 0, 2)  # Cambiar a [seq_len, batch_size, features] para scan
@@ -91,8 +96,24 @@ class GRUModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
-        cgm_input, other_input = inputs
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Ejecuta el modelo GRU sobre las entradas.
+        
+        Parámetros:
+        -----------
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones del modelo
+        """
         deterministic = not training
         
         # Proyección inicial
@@ -127,21 +148,21 @@ class GRUModel(nn.Module):
         
         return output
 
-def create_gru_model(cgm_shape: tuple, other_features_shape: tuple) -> GRUModel:
+def create_gru_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
     Crea un modelo GRU avanzado con self-attention y conexiones residuales con JAX/Flax.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    gru_model
-        Modelo GRU inicializado
+    DLModelWrapper
+        Modelo GRU inicializado y envuelto en DLModelWrapper
     """
     model = GRUModel(
         config=GRU_CONFIG,
@@ -149,4 +170,16 @@ def create_gru_model(cgm_shape: tuple, other_features_shape: tuple) -> GRUModel:
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo GRU compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_gru_model

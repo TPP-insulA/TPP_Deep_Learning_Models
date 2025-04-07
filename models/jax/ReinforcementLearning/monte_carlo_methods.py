@@ -14,6 +14,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import MONTE_CARLO_CONFIG
 
+FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'monte_carlo')
 
 class MonteCarlo:
     """
@@ -1242,6 +1243,9 @@ class MonteCarlo:
         history : Optional[Dict[str, List[float]]], opcional
             Diccionario con historial de entrenamiento (default: None)
         """
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
+        
         if history is None:
             # Si no se proporciona historia, usar datos internos
             history = {
@@ -1320,6 +1324,7 @@ class MonteCarlo:
             axs[plot_idx].grid(True)
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, "training_history.png"), dpi=300)
         plt.show()
     
     def train(
@@ -2631,7 +2636,7 @@ class MonteCarloWrapper:
 
 def create_monte_carlo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> MonteCarloWrapper:
     """
-    Crea un modelo de MonteCarlo compatible con la interfaz de modelos de aprendizaje profundo.
+    Crea un modelo de Monte Carlo compatible con la interfaz de modelos de aprendizaje profundo.
     
     Parámetros:
     -----------
@@ -2643,10 +2648,9 @@ def create_monte_carlo_model(cgm_shape: Tuple[int, ...], other_features_shape: T
     Retorna:
     --------
     MonteCarloWrapper
-        Wrapper de MonteCarlo que implementa la interfaz compatible
+        Wrapper de Monte Carlo que implementa la interfaz compatible
     """
     # Configurar el tamaño del espacio de estados y acciones
-    # Esto es una simplificación - en un caso real habría que definirlo según los datos
     n_states = 100  # Por ejemplo: discretización del espacio de estados
     n_actions = 20   # Por ejemplo: niveles discretos de dosis de insulina
     
@@ -2663,3 +2667,14 @@ def create_monte_carlo_model(cgm_shape: Tuple[int, ...], other_features_shape: T
     
     # Crear y devolver wrapper
     return MonteCarloWrapper(mc_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], MonteCarloWrapper]:
+    """
+    Retorna una función para crear un modelo Monte Carlo compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], MonteCarloWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_monte_carlo_model

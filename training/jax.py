@@ -484,29 +484,51 @@ def train_model_sequential(model_creator: Callable,
     print(f"\nEntrenando modelo {name}...")
     
     # Crear modelo
-    model = model_creator(input_shapes[0], input_shapes[1])
+    model_wrapper = model_creator(input_shapes[0], input_shapes[1])
     
-    # Organizar datos en estructura esperada
-    data = {
-        'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
-        'val': {'x_cgm': x_cgm_val, 'x_other': x_other_val, 'y': y_val},
-        'test': {'x_cgm': x_cgm_test, 'x_other': x_other_test, 'y': y_test}
-    }
+    # Verificar si es un wrapper (DLModelWrapper, RLModelWrapper, etc.)
+    is_wrapper = hasattr(model_wrapper, 'model') and not isinstance(model_wrapper, nn.Module)
     
-    # Configuración por defecto
-    training_config = {
-        'epochs': 100,
-        'batch_size': 32
-    }
-    
-    # Entrenar y evaluar modelo
-    history, y_pred, _ = train_and_evaluate_model(
-        model=model,
-        model_name=name,
-        data=data,
-        models_dir=models_dir,
-        training_config=training_config
-    )
+    if is_wrapper:
+        # Caso ModelWrapper: usar su API interna
+        # Inicializar
+        model_wrapper.start(x_cgm_train, x_other_train, y_train)
+        
+        # Entrenar
+        history = model_wrapper.train(
+            x_cgm_train, x_other_train, y_train,
+            validation_data=((x_cgm_val, x_other_val), y_val),
+            epochs=100, batch_size=32
+        )
+        
+        # Predecir
+        y_pred = model_wrapper.predict(x_cgm_test, x_other_test)
+        
+    else:
+        # Caso nn.Module: usar la lógica existente
+        model = model_wrapper
+        
+        # Organizar datos en estructura esperada
+        data = {
+            'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
+            'val': {'x_cgm': x_cgm_val, 'x_other': x_other_val, 'y': y_val},
+            'test': {'x_cgm': x_cgm_test, 'x_other': x_other_test, 'y': y_test}
+        }
+        
+        # Configuración por defecto
+        training_config = {
+            'epochs': 100,
+            'batch_size': 32
+        }
+        
+        # Entrenar y evaluar modelo
+        history, y_pred, _ = train_and_evaluate_model(
+            model=model,
+            model_name=name,
+            data=data,
+            models_dir=models_dir,
+            training_config=training_config
+        )
     
     # Limpiar memoria
     jax.clear_caches()
@@ -658,23 +680,31 @@ def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray],
 
 def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Mejora las características de entrada con características derivadas.
+    Mejora las características de entrada añadiendo derivadas y estadísticas.
     
     Parámetros:
     -----------
     x_cgm : np.ndarray
-        Datos CGM
+        Datos CGM de forma (muestras, pasos_tiempo, características)
     x_other : np.ndarray
-        Otras características
+        Otras características de forma (muestras, características)
         
     Retorna:
     --------
     Tuple[np.ndarray, np.ndarray]
-        (x_cgm_mejorado, x_other)
+        Tupla con (cgm_features_mejoradas, other_features_mejoradas)
     """
-    # Añadir características derivadas para CGM
-    cgm_diff = np.diff(x_cgm.squeeze(), axis=1)
-    cgm_diff = np.pad(cgm_diff, ((0,0), (1,0), (0,0)), mode='edge')
+    # Calcular diferencia entre puntos de tiempo consecutivos (derivada)
+    cgm_diff = np.diff(x_cgm, axis=1)
+    
+    # Verificar la forma de cgm_diff antes de aplicar padding
+    print(f"Forma de cgm_diff: {cgm_diff.shape}")
+    
+    # Aplicar padding según la dimensionalidad real
+    if cgm_diff.ndim == 3:
+        cgm_diff = np.pad(cgm_diff, ((0, 0), (1, 0), (0, 0)), mode='edge')
+    else:
+        cgm_diff = np.pad(cgm_diff, ((0, 0), (1, 0)), mode='edge')
     
     # Añadir estadísticas móviles
     window = 5
@@ -686,8 +716,8 @@ def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray
     # Concatenar características mejoradas
     x_cgm_enhanced = np.concatenate([
         x_cgm,
-        cgm_diff[..., np.newaxis],
-        rolling_mean[..., np.newaxis]
+        cgm_diff,  # Sin np.newaxis ya que cgm_diff ya tiene 3 dimensiones
+        rolling_mean[..., np.newaxis]  # Necesario añadir dimensión para que coincida con x_cgm
     ], axis=-1)
     
     return x_cgm_enhanced, x_other

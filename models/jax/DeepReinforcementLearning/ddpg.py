@@ -7,12 +7,25 @@ import numpy as np
 import optax
 from typing import Dict, List, Tuple, Any, Optional, Callable, Sequence
 from collections import deque
-import random
+from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_LEAKY_RELU = "leaky_relu"
+CONST_GELU = "gelu"
+CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_ACTOR_PREFIX = "actor"
+CONST_CRITIC_PREFIX = "critic"
+
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "ddpg")
 
 
 class ReplayBuffer:
@@ -66,9 +79,11 @@ class ReplayBuffer:
         """
         if len(self.buffer) < batch_size:
             # Si no hay suficientes transiciones, devuelve lo que haya
-            batch = random.sample(self.buffer, len(self.buffer))
+            indices = self.rng.choice(len(self.buffer), size=len(self.buffer), replace=False)
+            batch = [self.buffer[i] for i in indices]
         else:
-            batch = random.sample(self.buffer, batch_size)
+            indices = self.rng.choice(len(self.buffer), size=batch_size, replace=False)
+            batch = [self.buffer[i] for i in indices]
             
         states, actions, rewards, next_states, dones = zip(*batch)
         
@@ -472,6 +487,9 @@ class DDPG:
         self.action_dim = action_dim
         self.action_high = action_high
         self.action_low = action_low
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # Inicializar clave para generación de números aleatorios
         self.key = jax.random.PRNGKey(seed)
@@ -1192,6 +1210,7 @@ class DDPG:
         axs[1, 1].grid(alpha=0.3)
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, 'training_results.png'))
         plt.show()
 
 class DDPGWrapper:
@@ -1206,22 +1225,22 @@ class DDPGWrapper:
         other_features_shape: Tuple[int, ...],
     ) -> None:
         """
-        Inicializa el wrapper para DDPG.
+        Inicializa el wrapper DDPG.
         
         Parámetros:
         -----------
         ddpg_agent : DDPG
-            Agente DDPG a utilizar
+            Agente DDPG a encapsular
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
         """
         self.ddpg_agent = ddpg_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
-        # Inicializar clave para generador de números aleatorios
+        # Inicializar generador de números aleatorios
         self.key = jax.random.PRNGKey(42)
         self.key, self.encoder_key = jax.random.split(self.key)
         
@@ -1258,75 +1277,77 @@ class DDPGWrapper:
     
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación.
+        Crea una función de codificación para transformar entradas.
         
         Parámetros:
         -----------
         weights : jnp.ndarray
-            Matriz de pesos para la transformación
+            Pesos de la transformación
             
         Retorna:
         --------
         Callable
-            Función de codificación JIT-compilada
+            Función de codificación
         """
-        def encoder_fn(x):
-            x_flat = x.reshape((x.shape[0], -1))
-            return jnp.tanh(jnp.dot(x_flat, weights))
-        return encoder_fn
+        def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
+            # Aplanar entrada
+            flat_x = x.reshape(x.shape[0], -1)
+            # Transformar a espacio de estados
+            encoded = jnp.tanh(jnp.matmul(flat_x, weights))
+            return encoded
+        return encode_fn
     
-    def __call__(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Implementa la interfaz de llamada para predicción.
+        Realiza una predicción usando el modelo DDPG.
         
         Parámetros:
         -----------
-        inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+        cgm_input : jnp.ndarray
+            Datos CGM de entrada
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: False)
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones de dosis
         """
-        return self.predict(inputs)
+        return self.predict([cgm_input, other_input])
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo DDPG.
+        Realiza predicciones con el modelo.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista con [cgm_input, other_input]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones de dosis
         """
-        # Obtener entradas
-        cgm_data, other_features = inputs
+        cgm_input, other_input = inputs
         
-        # Convertir a arrays de JAX si no lo son
-        cgm_data = jnp.array(cgm_data)
-        other_features = jnp.array(other_features)
+        # Codificar entradas a espacio de estado
+        cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
+        other_encoded = self.encode_other(jnp.array(other_input))
         
-        # Codificar entradas a representación de estado
-        cgm_encoded = self.encode_cgm(cgm_data)
-        other_encoded = self.encode_other(other_features)
-        states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+        # Combinar características en un estado
+        states = np.concatenate([cgm_encoded, other_encoded], axis=-1)
         
-        # Obtener acciones usando el agente DDPG (sin ruido para predicción)
-        batch_size = states.shape[0]
-        actions = np.zeros((batch_size, 1))
-        
-        for i in range(batch_size):
-            state = np.array(states[i])
+        # Predecir acciones (dosis) para cada estado
+        predictions = np.zeros((len(states), 1))
+        for i, state in enumerate(states):
+            # Usar el actor sin ruido para predicción determinística
             action = self.ddpg_agent.get_action(state, add_noise=False)
-            actions[i] = action
+            predictions[i] = action
         
-        return actions
+        return predictions
     
     def fit(
         self, 
@@ -1339,18 +1360,18 @@ class DDPGWrapper:
         verbose: int = 0
     ) -> Dict:
         """
-        Entrena el modelo DDPG en los datos proporcionados.
+        Entrena el modelo DDPG con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista con [cgm_input, other_input]
         y : jnp.ndarray
-            Etiquetas (dosis objetivo)
+            Valores objetivo de dosis
         validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
+            Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de episodios (default: 1)
+            Número de episodios de entrenamiento (default: 1)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1411,7 +1432,7 @@ class DDPGWrapper:
         targets: jnp.ndarray
     ) -> Any:
         """
-        Crea un entorno de entrenamiento para RL a partir de los datos.
+        Crea un entorno de entrenamiento personalizado basado en los datos.
         
         Parámetros:
         -----------
@@ -1420,14 +1441,13 @@ class DDPGWrapper:
         other_features : jnp.ndarray
             Otras características
         targets : jnp.ndarray
-            Dosis objetivo
+            Valores objetivo de dosis
             
         Retorna:
         --------
         Any
-            Entorno simulado para RL
+            Entorno de entrenamiento
         """
-        # Crear entorno personalizado para DDPG
         class InsulinDosingEnv:
             """Entorno personalizado para problema de dosificación de insulina."""
             
@@ -1466,7 +1486,7 @@ class DDPGWrapper:
                 self.current_idx = self.rng.integers(0, self.max_idx)
                 state = self._get_state()
                 return state, {}
-                
+            
             def step(self, action):
                 """Ejecuta un paso con la acción dada."""
                 # Obtener valor de dosis (acción continua)
@@ -1502,42 +1522,19 @@ class DDPGWrapper:
                 state = np.concatenate([cgm_encoded[0], other_encoded[0]])
                 
                 return state
-                
-        # Importar lo necesario para el entorno
-        from types import SimpleNamespace
         
         # Crear y devolver el entorno
         return InsulinDosingEnv(cgm_data, other_features, targets, self)
     
     def save(self, filepath: str) -> None:
         """
-        Guarda el modelo DDPG en un archivo.
+        Guarda el modelo en disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta donde guardar el modelo
         """
-        # Crear directorio si no existe
-        import os
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Guardar datos del modelo
-        import pickle
-        model_data = {
-            'cgm_shape': self.cgm_shape,
-            'other_features_shape': self.other_features_shape,
-            'cgm_weight': self.cgm_weight,
-            'other_weight': self.other_weight,
-            'state_dim': self.ddpg_agent.state_dim,
-            'action_dim': self.ddpg_agent.action_dim,
-            'action_high': self.ddpg_agent.action_high,
-            'action_low': self.ddpg_agent.action_low
-        }
-        
-        with open(filepath + "_wrapper.pkl", 'wb') as f:
-            pickle.dump(model_data, f)
-        
         # Guardar modelos actor y crítico
         self.ddpg_agent.save_models(filepath + "_actor.h5", filepath + "_critic.h5")
         
@@ -1545,28 +1542,13 @@ class DDPGWrapper:
     
     def load(self, filepath: str) -> None:
         """
-        Carga el modelo DDPG desde un archivo.
+        Carga el modelo DDPG desde disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta desde donde cargar el modelo
         """
-        import pickle
-        
-        # Cargar datos del wrapper
-        with open(filepath + "_wrapper.pkl", 'rb') as f:
-            model_data = pickle.load(f)
-        
-        self.cgm_shape = model_data['cgm_shape']
-        self.other_features_shape = model_data['other_features_shape']
-        self.cgm_weight = model_data['cgm_weight']
-        self.other_weight = model_data['other_weight']
-        
-        # Recompilar funciones de codificación
-        self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
-        self.encode_other = jax.jit(self._create_encoder_fn(self.other_weight))
-        
         # Cargar modelos actor y crítico
         self.ddpg_agent.load_models(filepath + "_actor.h5", filepath + "_critic.h5")
         
@@ -1579,19 +1561,18 @@ class DDPGWrapper:
         Retorna:
         --------
         Dict
-            Diccionario con configuración del modelo
+            Configuración del modelo
         """
         return {
-            'cgm_shape': self.cgm_shape,
-            'other_features_shape': self.other_features_shape,
-            'state_dim': self.ddpg_agent.state_dim,
-            'action_dim': self.ddpg_agent.action_dim,
-            'action_high': self.ddpg_agent.action_high.tolist(),
-            'action_low': self.ddpg_agent.action_low.tolist()
+            "cgm_shape": self.cgm_shape,
+            "other_features_shape": self.other_features_shape,
+            "state_dim": self.ddpg_agent.state_dim,
+            "action_dim": self.ddpg_agent.action_dim,
+            "action_high": self.ddpg_agent.action_high.tolist(),
+            "action_low": self.ddpg_agent.action_low.tolist()
         }
 
-
-def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DDPGWrapper:
+def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en DDPG (Deep Deterministic Policy Gradient) para predicción de dosis de insulina.
     
@@ -1604,8 +1585,8 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         
     Retorna:
     --------
-    DDPGWrapper
-        Wrapper de DDPG que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper de DDPG que implementa la interfaz compatible con el sistema de model creators
     """
     # Configurar el espacio de estados y acciones
     state_dim = 64  # Dimensión del espacio de estado latente
@@ -1643,9 +1624,23 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         seed=42
     )
     
-    # Crear y devolver wrapper
-    return DDPGWrapper(
+    # Crear wrapper DDPG
+    ddpg_wrapper = DDPGWrapper(
         ddpg_agent=ddpg_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Envolver en DRLModelWrapper para compatibilidad con el sistema
+    return DRLModelWrapper(lambda **kwargs: ddpg_wrapper, algorithm="ddpg")
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo DDPG compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_ddpg_model

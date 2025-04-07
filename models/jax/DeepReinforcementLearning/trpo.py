@@ -15,6 +15,8 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TRPO_CONFIG
 
+FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'trpo')
+
 
 class ActorNetwork(nn.Module):
     """
@@ -248,6 +250,9 @@ class TRPO:
             'kl_divergence': 0.0,
             'entropy': 0.0
         }
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # JIT-compilar funciones clave
         self.get_action_and_log_prob = jax.jit(self._get_action_and_log_prob)
@@ -1537,6 +1542,7 @@ class TRPO:
         axs[2, 1].legend()
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, 'training_history.png'))
         plt.show()
 class TRPOWrapper:
     """
@@ -1937,13 +1943,24 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         continuous=continuous,
         gamma=TRPO_CONFIG['gamma'],
         delta=TRPO_CONFIG['delta'],  # Restricción KL para la región de confianza
-        vf_coeff=TRPO_CONFIG['vf_coeff'],
+        hidden_units=TRPO_CONFIG['hidden_units'],
+        backtrack_iters=TRPO_CONFIG['backtrack_iters'],
+        backtrack_coeff=TRPO_CONFIG['backtrack_coeff'],
         cg_iters=TRPO_CONFIG['cg_iters'],
-        max_backtrack=TRPO_CONFIG['max_backtrack'],
-        backtrack_ratio=TRPO_CONFIG['backtrack_ratio'],
-        hidden_sizes=TRPO_CONFIG['hidden_units'],
+        damping=TRPO_CONFIG['damping'],
         seed=TRPO_CONFIG.get('seed', 42)
     )
     
     # Crear y devolver wrapper para compatibilidad con la interfaz de modelos
     return TRPOWrapper(trpo_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], TRPOWrapper]:
+    """
+    Retorna una función para crear un modelo TRPO compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], TRPOWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_trpo_model

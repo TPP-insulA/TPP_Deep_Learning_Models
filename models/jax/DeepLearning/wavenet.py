@@ -2,12 +2,20 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import numpy as np
 from typing import Tuple, Dict, List, Any, Optional, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import WAVENET_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_SAME = "SAME"
+CONST_VALID = "VALID"
 
 class WavenetBlock(nn.Module):
     """
@@ -60,7 +68,7 @@ class WavenetBlock(nn.Module):
             features=self.filters,
             kernel_size=(self.kernel_size,),
             kernel_dilation=(self.dilation_rate,),
-            padding='VALID'
+            padding=CONST_VALID
         )(padded_inputs)
         
         # Convolución para gate
@@ -68,7 +76,7 @@ class WavenetBlock(nn.Module):
             features=self.filters,
             kernel_size=(self.kernel_size,),
             kernel_dilation=(self.dilation_rate,),
-            padding='VALID'
+            padding=CONST_VALID
         )(padded_inputs)
         
         # Normalización
@@ -95,7 +103,7 @@ class WavenetBlock(nn.Module):
         residual = nn.Conv(
             features=self.filters,
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(inputs)
         
         # Ajuste temporal para dimensiones
@@ -109,7 +117,7 @@ class WavenetBlock(nn.Module):
         skip_out = nn.Conv(
             features=self.filters,
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(gated_out)
         
         # Opcional: escalado de skip connection
@@ -153,7 +161,7 @@ def create_wavenet_block(x: jnp.ndarray, filters: int, kernel_size: int,
         features=filters,
         kernel_size=(kernel_size,),
         kernel_dilation=(dilation_rate,),
-        padding='VALID'
+        padding=CONST_VALID
     )(padded_x)
     
     conv = nn.BatchNorm(
@@ -174,7 +182,7 @@ def create_wavenet_block(x: jnp.ndarray, filters: int, kernel_size: int,
         x = nn.Conv(
             features=filters,
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(x)
     
     # Alinear dimensiones temporales
@@ -201,30 +209,31 @@ class WavenetModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
         Aplica el modelo WaveNet a las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
-        training : bool
-            Indica si está en modo entrenamiento
+        cgm_input : jnp.ndarray
+            Datos CGM de entrada
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
             
         Retorna:
         --------
         jnp.ndarray
             Predicciones del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
         # Proyección inicial
         x = nn.Conv(
             features=self.config['filters'][0],
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(cgm_input)
         
         # Saltar conexiones
@@ -249,9 +258,9 @@ class WavenetModel(nn.Module):
             x = sum(aligned_skips) / jnp.sqrt(float(len(skip_outputs)))
         
         # Post-procesamiento
-        if self.config['activation'] == 'relu':
+        if self.config['activation'] == CONST_RELU:
             x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
+        elif self.config['activation'] == CONST_GELU:
             x = nn.gelu(x)
         else:
             x = nn.relu(x)  # Default
@@ -259,12 +268,12 @@ class WavenetModel(nn.Module):
         x = nn.Conv(
             features=self.config['filters'][-1],
             kernel_size=(1,),
-            padding='SAME'
+            padding=CONST_SAME
         )(x)
         
-        if self.config['activation'] == 'relu':
+        if self.config['activation'] == CONST_RELU:
             x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
+        elif self.config['activation'] == CONST_GELU:
             x = nn.gelu(x)
         else:
             x = nn.relu(x)  # Default
@@ -283,9 +292,9 @@ class WavenetModel(nn.Module):
             epsilon=1e-5
         )(x)
         
-        if self.config['activation'] == 'relu':
+        if self.config['activation'] == CONST_RELU:
             x = nn.relu(x)
-        elif self.config['activation'] == 'gelu':
+        elif self.config['activation'] == CONST_GELU:
             x = nn.gelu(x)
         else:
             x = nn.relu(x)  # Default
@@ -305,21 +314,21 @@ class WavenetModel(nn.Module):
         
         return output
 
-def create_wavenet_model(cgm_shape: tuple, other_features_shape: tuple) -> WavenetModel:
+def create_wavenet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Crea un modelo WaveNet para predicción de series temporales con JAX/Flax.
+    Crea un modelo WaveNet para predicción de series temporales con JAX/Flax envuelto en DLModelWrapper.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    wavenet_model
-        Modelo WaveNet inicializado
+    DLModelWrapper
+        Modelo WaveNet inicializado y envuelto en DLModelWrapper
     """
     model = WavenetModel(
         config=WAVENET_CONFIG,
@@ -327,4 +336,16 @@ def create_wavenet_model(cgm_shape: tuple, other_features_shape: tuple) -> Waven
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo WaveNet compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_wavenet_model

@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import optax
+import numpy as np
 from flax.training import train_state
 from typing import Tuple, Dict, List, Any, Optional, Callable, Union
 
@@ -10,9 +11,17 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import FNN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_SWISH = "swish"
+CONST_SILU = "silu"
+CONST_DROPOUT = "dropout"
 
 def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2, 
-                         activation: str = 'relu', use_layer_norm: bool = True, 
+                         activation: str = CONST_RELU, use_layer_norm: bool = True, 
                          training: bool = True, rng: Optional[jax.random.PRNGKey] = None) -> jnp.ndarray:
     """
     Crea un bloque residual para FNN con normalización y dropout.
@@ -55,7 +64,7 @@ def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2,
     else:
         x = nn.BatchNorm(use_running_average=not training)(x)
     x = get_activation(x, activation)
-    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={'dropout': dropout_rng})
+    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={CONST_DROPOUT: dropout_rng})
     
     # Segunda capa densa con normalización
     x = nn.Dense(units)(x)
@@ -71,7 +80,7 @@ def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2,
     # Conexión residual
     x = x + skip
     x = get_activation(x, activation)
-    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={'dropout': dropout_rng2})
+    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={CONST_DROPOUT: dropout_rng2})
     
     return x
 
@@ -91,13 +100,13 @@ def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     jnp.ndarray
         Tensor con la activación aplicada
     """
-    if activation_name == 'relu':
+    if activation_name == CONST_RELU:
         return nn.relu(x)
-    elif activation_name == 'gelu':
+    elif activation_name == CONST_GELU:
         return nn.gelu(x)
-    elif activation_name == 'swish':
+    elif activation_name == CONST_SWISH:
         return nn.swish(x)
-    elif activation_name == 'silu':
+    elif activation_name == CONST_SILU:
         return nn.silu(x)
     else:
         return nn.relu(x)  # Valor por defecto
@@ -119,7 +128,20 @@ class FNNModel(nn.Module):
     input_shape: Tuple
     other_features_shape: Optional[Tuple] = None
     
-    def _process_inputs(self, inputs):
+    def _process_inputs(self, inputs: Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]) -> jnp.ndarray:
+        """
+        Procesa y combina entradas para el modelo.
+        
+        Parámetros:
+        -----------
+        inputs : Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]
+            Entradas del modelo, pueden ser una sola entrada o una tupla
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Entradas procesadas combinadas
+        """
         # Manejar entradas múltiples o única
         if self.other_features_shape is not None:
             main_input, other_input = inputs
@@ -139,13 +161,41 @@ class FNNModel(nn.Module):
             
         return x
     
-    def _apply_normalization(self, x, training):
+    def _apply_normalization(self, x: jnp.ndarray, training: bool) -> jnp.ndarray:
+        """
+        Aplica normalización dependiendo de la configuración.
+        
+        Parámetros:
+        -----------
+        x : jnp.ndarray
+            Tensor para normalizar
+        training : bool
+            Si está en modo entrenamiento
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Tensor normalizado
+        """
         if self.config['use_layer_norm']:
             return nn.LayerNorm(epsilon=self.config['epsilon'])(x)
         else:
             return nn.BatchNorm(use_running_average=not training)(x)
     
-    def _build_output_layer(self, x):
+    def _build_output_layer(self, x: jnp.ndarray) -> jnp.ndarray:
+        """
+        Construye la capa de salida según el tipo de tarea.
+        
+        Parámetros:
+        -----------
+        x : jnp.ndarray
+            Tensor de entrada a la capa final
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Salida del modelo
+        """
         if self.config['regression']:
             return nn.Dense(1)(x)
         else:
@@ -153,8 +203,26 @@ class FNNModel(nn.Module):
             return nn.softmax(x)
     
     @nn.compact
-    def __call__(self, inputs: Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]], 
-                training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Ejecuta el modelo FNN sobre las entradas.
+        
+        Parámetros:
+        -----------
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones del modelo
+        """
+        # Procesar entradas combinadas
+        inputs = (cgm_input, other_input) if self.other_features_shape is not None else cgm_input
         x = self._process_inputs(inputs)
         
         # Capa inicial
@@ -168,7 +236,7 @@ class FNNModel(nn.Module):
             dropout_rate = self.config['dropout_rates'][min(i+1, len(self.config['dropout_rates'])-1)]
             dropout_rng = None
             if training:
-                dropout_rng = self.make_rng('dropout')
+                dropout_rng = self.make_rng(CONST_DROPOUT)
             x = create_residual_block(
                 x, 
                 units,
@@ -188,172 +256,38 @@ class FNNModel(nn.Module):
         
         return self._build_output_layer(x)
 
-def create_fnn_model(input_shape: tuple, 
-                     other_features_shape: Optional[tuple] = None) -> FNNModel:
+def create_fnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Crea un modelo de red neuronal feedforward (FNN) con JAX/Flax.
+    Crea un modelo FNN (Red Neuronal Feedforward) con JAX/Flax envuelto en DLModelWrapper.
     
     Parámetros:
     -----------
-    input_shape : tuple
-        Forma del tensor de entrada principal
-    other_features_shape : tuple, opcional
-        Forma del tensor de características adicionales
-    
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
+        
     Retorna:
     --------
-    fnn_model
-        Modelo FNN inicializado
+    DLModelWrapper
+        Modelo FNN inicializado y envuelto en DLModelWrapper
     """
     model = FNNModel(
         config=FNN_CONFIG,
-        input_shape=input_shape,
+        input_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
 
-def create_train_state(model: FNNModel, 
-                       rng: jax.random.PRNGKey, 
-                       input_shape: tuple,
-                       other_features_shape: Optional[tuple] = None,
-                       learning_rate: float = None) -> train_state.TrainState:
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
     """
-    Crea un estado de entrenamiento para un modelo FNN.
-    
-    Parámetros:
-    -----------
-    model : fnn_model
-        Modelo FNN a entrenar
-    rng : jax.random.PRNGKey
-        Clave para generación de números aleatorios
-    input_shape : tuple
-        Forma del tensor de entrada principal
-    other_features_shape : tuple, opcional
-        Forma del tensor de características adicionales
-    learning_rate : float, opcional
-        Tasa de aprendizaje para el optimizador
+    Retorna una función para crear un modelo FNN compatible con la API del sistema.
     
     Retorna:
     --------
-    train_state.TrainState
-        Estado de entrenamiento inicializado
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
     """
-    if learning_rate is None:
-        learning_rate = FNN_CONFIG['learning_rate']
-    
-    # Inicializar parámetros con datos ficticios
-    if other_features_shape is not None:
-        dummy_main = jnp.ones((1,) + input_shape)
-        dummy_other = jnp.ones((1,) + other_features_shape)
-        variables = model.init({'params': rng, 'dropout': rng}, (dummy_main, dummy_other), training=False)
-    else:
-        dummy_input = jnp.ones((1,) + input_shape)
-        variables = model.init({'params': rng, 'dropout': rng}, dummy_input, training=False)
-    
-    # Crear optimizador
-    tx = optax.adam(
-        learning_rate=learning_rate,
-        b1=FNN_CONFIG['beta_1'],
-        b2=FNN_CONFIG['beta_2'],
-        eps=FNN_CONFIG['optimizer_epsilon']
-    )
-    
-    # Crear estado de entrenamiento
-    return train_state.TrainState.create(
-        apply_fn=model.apply,
-        params=variables['params'],
-        tx=tx
-    )
-
-def train_step(state: train_state.TrainState, 
-               batch: Tuple, 
-               rng: jax.random.PRNGKey, 
-               loss_fn: Callable) -> Tuple[train_state.TrainState, Dict, jax.random.PRNGKey]:
-    """
-    Ejecuta un paso de entrenamiento para un modelo FNN.
-    
-    Parámetros:
-    -----------
-    state : train_state.TrainState
-        Estado actual del entrenamiento
-    batch : Tuple
-        Lote de datos (x, y)
-    rng : jax.random.PRNGKey
-        Clave para generación de números aleatorios
-    loss_fn : Callable
-        Función de pérdida a utilizar
-    
-    Retorna:
-    --------
-    Tuple[train_state.TrainState, Dict, jax.random.PRNGKey]
-        Nuevo estado de entrenamiento, métricas y nueva clave aleatoria
-    """
-    rng, dropout_rng = jax.random.split(rng)
-    
-    def loss_fn_with_params(params):
-        logits = state.apply_fn(
-            {'params': params}, 
-            batch[0], 
-            training=True,
-            rngs={'dropout': dropout_rng}
-        )
-        loss = loss_fn(logits, batch[1])
-        return loss, logits
-    
-    grad_fn = jax.value_and_grad(loss_fn_with_params, has_aux=True)
-    (loss, logits), grads = grad_fn(state.params)
-    
-    # Actualizar parámetros
-    state = state.apply_gradients(grads=grads)
-    
-    # Calcular métricas
-    metrics = {
-        'loss': loss,
-    }
-    
-    # Añadir MAE para regresión, accuracy para clasificación
-    if FNN_CONFIG['regression']:
-        metrics['mae'] = jnp.mean(jnp.abs(logits - batch[1]))
-    else:
-        preds = jnp.argmax(logits, axis=-1)
-        metrics['accuracy'] = jnp.mean(preds == batch[1])
-    
-    return state, metrics, rng
-
-def eval_step(state: train_state.TrainState, 
-              batch: Tuple, 
-              loss_fn: Callable) -> Dict:
-    """
-    Ejecuta un paso de evaluación para un modelo FNN.
-    
-    Parámetros:
-    -----------
-    state : train_state.TrainState
-        Estado actual del entrenamiento
-    batch : Tuple
-        Lote de datos (x, y)
-    loss_fn : Callable
-        Función de pérdida a utilizar
-    
-    Retorna:
-    --------
-    Dict
-        Diccionario de métricas
-    """
-    logits = state.apply_fn({'params': state.params}, batch[0], training=False)
-    loss = loss_fn(logits, batch[1])
-    
-    # Calcular métricas
-    metrics = {
-        'loss': loss,
-    }
-    
-    # Añadir MAE para regresión, accuracy para clasificación
-    if FNN_CONFIG['regression']:
-        metrics['mae'] = jnp.mean(jnp.abs(logits - batch[1]))
-    else:
-        preds = jnp.argmax(logits, axis=-1)
-        metrics['accuracy'] = jnp.mean(preds == batch[1])
-    
-    return metrics
+    return create_fnn_model

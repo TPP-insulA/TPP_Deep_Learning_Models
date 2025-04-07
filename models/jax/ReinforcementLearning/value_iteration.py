@@ -4,13 +4,23 @@ import matplotlib.pyplot as plt
 import time
 import jax
 import jax.numpy as jnp
-from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple
+from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple, Callable
 import pickle
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import VALUE_ITERATION_CONFIG
+
+# Constantes para rutas de figuras y etiquetas comunes
+CONST_FIGURES_DIR = "figures/reinforcement_learning/value_iteration"
+CONST_ITERATION = "Iteración"
+CONST_VALUE = "Valor"
+CONST_DELTA = "Delta"
+CONST_TIME = "Tiempo (segundos)"
+CONST_POLICY = "Política"
+CONST_PROBABILITY = 1.0  # Probabilidad de transición para modelo determinista
+CONST_EINSUM_PATTERN = 'san,n->sa'  # Patrón para cálculos vectorizados
 
 
 class ValueIterationState(NamedTuple):
@@ -370,6 +380,9 @@ class ValueIteration:
             print("El entorno no tiene estructura de cuadrícula para visualización")
             return
         
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
+        
         grid_shape = env.shape
         _, ax = plt.subplots(figsize=(8, 8))
         
@@ -424,6 +437,9 @@ class ValueIteration:
         
         ax.set_title(title)
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, f"politica_{title.lower().replace(' ', '_')}.png"), dpi=300)
         plt.show()
 
     def visualize_value_function(self, env: Any, title: str = "Función de Valor") -> None:
@@ -440,6 +456,9 @@ class ValueIteration:
         if not hasattr(env, 'shape'):
             print("El entorno no tiene estructura de cuadrícula para visualización")
             return
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
         
         grid_shape = env.shape
         
@@ -471,6 +490,9 @@ class ValueIteration:
         
         ax.set_title(title)
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, f"funcion_valor_{title.lower().replace(' ', '_')}.png"), dpi=300)
         plt.show()
 
     def visualize_training(self, history: Dict[str, List]) -> None:
@@ -482,26 +504,32 @@ class ValueIteration:
         history : Dict[str, List]
             Diccionario con historial de entrenamiento
         """
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
+        
         _, axs = plt.subplots(2, 1, figsize=(12, 8))
         
         # Gráfico de cambios en la función de valor (delta)
         axs[0].plot(range(1, len(history['value_changes']) + 1), 
                     history['value_changes'])
-        axs[0].set_title('Cambios en la Función de Valor (Delta)')
-        axs[0].set_xlabel('Iteración')
-        axs[0].set_ylabel('Delta')
+        axs[0].set_title(f'Cambios en la Función de {CONST_VALUE} ({CONST_DELTA})')
+        axs[0].set_xlabel(CONST_ITERATION)
+        axs[0].set_ylabel(CONST_DELTA)
         axs[0].set_yscale('log')  # Escala logarítmica para ver mejor la convergencia
         axs[0].grid(True)
         
         # Gráfico de tiempos de iteración
         axs[1].plot(range(1, len(history['iteration_times']) + 1), 
                     history['iteration_times'])
-        axs[1].set_title('Tiempos de Iteración')
-        axs[1].set_xlabel('Iteración')
-        axs[1].set_ylabel('Tiempo (segundos)')
+        axs[1].set_title(f'Tiempos de {CONST_ITERATION}')
+        axs[1].set_xlabel(CONST_ITERATION)
+        axs[1].set_ylabel(CONST_TIME)
         axs[1].grid(True)
         
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, "entrenamiento_resumen.png"), dpi=300)
         plt.show()
 
     def parallel_value_iteration(self, env: Any) -> Dict[str, List]:
@@ -852,8 +880,6 @@ class ValueIterationWrapper:
     
     def _create_env_class(self):
         """Crea y devuelve la clase del entorno de dosificación de insulina."""
-        PROBABILITY_OF_TRANSITION = 1.0
-        
         class InsulinDosingEnv:
             """Entorno personalizado para problema de dosificación de insulina."""
             
@@ -959,7 +985,7 @@ class ValueIterationWrapper:
                         avg_reward = self._get_reward_for_state_action(s, a, dose)
                         
                         # Para Value Iteration, asumimos estado terminal después de cada acción
-                        P[s][a].append((PROBABILITY_OF_TRANSITION, s, avg_reward, True))
+                        P[s][a].append((CONST_PROBABILITY, s, avg_reward, True))
                 
             def reset(self):
                 """Reinicia el entorno eligiendo un ejemplo aleatorio."""
@@ -1125,3 +1151,14 @@ def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shap
     
     # Crear y devolver wrapper
     return ValueIterationWrapper(vi_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], ValueIterationWrapper]:
+    """
+    Retorna una función para crear un modelo de Iteración de Valor compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], ValueIterationWrapper]
+        Función para crear un modelo con las formas de entrada especificadas
+    """
+    return create_value_iteration_model
