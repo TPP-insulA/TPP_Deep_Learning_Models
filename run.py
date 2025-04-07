@@ -31,6 +31,33 @@ CONST_MODELS_DIR = "models"
 CONST_RESULTS_DIR = "results"
 CONST_ENSEMBLE = "ensemble"
 
+# Auxiliary Functions
+def is_model_creator(fn: Any) -> bool:
+    """
+    Verifica si una función es un model creator que debe ser llamada para obtener
+    la función de creación del modelo.
+    
+    Parámetros:
+    -----------
+    fn : Any
+        Función a verificar
+        
+    Retorna:
+    --------
+    bool
+        True si es un model creator, False si ya es una función de creación de modelo
+    """
+    if callable(fn):
+        try:
+            import inspect
+            sig = inspect.signature(fn)
+            # Si no tiene parámetros, es probable que sea un model creator
+            # que debe llamarse para obtener la función de creación real
+            return len(sig.parameters) == 0
+        except Exception:
+            pass
+    return False
+
 # Importación dinámica de módulos de entrenamiento según el framework seleccionado
 cprint(f"Framework seleccionado: {FRAMEWORK}", 'blue', 'bold')
 
@@ -43,7 +70,7 @@ if FRAMEWORK == "tensorflow":
     # Configurar TensorFlow para uso eficiente de memoria GPU
     import tensorflow as tf
     gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
+    if (gpus):
         try:
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
@@ -69,17 +96,28 @@ else:
     cprint(f"Error: Framework no soportado: {FRAMEWORK}. Debe ser 'tensorflow' o 'jax'.", 'red', 'bold')
     sys.exit(1)
 
-use_models = {}
+# Constante para mensaje repetido
+CONST_MODEL_ACTIVATED = "Modelo {} activado."
+CONST_MODEL_DEACTIVATED = "Modelo {} desactivado."
 
+use_models = {}
 MODELS_TO_USE = USE_JAX_MODELS if FRAMEWORK == "jax" else USE_TF_MODELS
 AVAILABLE_MODELS = JAX_MODELS if FRAMEWORK == "jax" else TF_MODELS
 
 for model_name, use in MODELS_TO_USE.items():
     if use:
-        use_models[model_name] = AVAILABLE_MODELS[model_name]
-        cprint(f"Modelo {model_name} activado.", 'green', 'bold')
+        model_fn = AVAILABLE_MODELS[model_name]
+        
+        # Si estamos usando JAX, asegurar que todos los modelos estén en formato uniforme
+        if FRAMEWORK == "jax":
+            # Verificar si es un model creator que necesita ser llamado
+            if is_model_creator(model_fn):
+                model_fn = model_fn()
+        
+        use_models[model_name] = model_fn
+        cprint(CONST_MODEL_ACTIVATED.format(model_name), 'green', 'bold')
     else:
-        cprint(f"Modelo {model_name} desactivado.", 'red', 'bold')
+        cprint(CONST_MODEL_DEACTIVATED.format(model_name), 'red', 'bold')
 
 # Validaciones Previas
 if PROCESSING not in ["pandas", "polars"]:

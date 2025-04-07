@@ -24,12 +24,21 @@ CONST_METRIC_R2 = "r2"
 CONST_MODELS = "models"
 CONST_BEST_PREFIX = "best_"
 CONST_LOGS_DIR = "logs"
+CONST_DEFAULT_EPOCHS = 100
+CONST_DEFAULT_BATCH_SIZE = 32
+CONST_DEFAULT_SEED = 42
+CONST_FIGURES_DIR = "figures"
+CONST_MODEL_TYPES = {
+    "dl": "deep_learning",
+    "drl": "deep_reinforcement_learning",
+    "rl": "reinforcement_learning"
+}
 
 
 def create_batched_dataset(x_cgm: np.ndarray, 
                           x_other: np.ndarray, 
                           y: np.ndarray, 
-                          batch_size: int = 32, 
+                          batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
                           shuffle: bool = True, 
                           rng: Optional[jax.random.PRNGKey] = None) -> Tuple[List[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]], int]:
     """
@@ -61,10 +70,10 @@ def create_batched_dataset(x_cgm: np.ndarray,
     # Crear índices y mezclarlos si es necesario
     indices = np.arange(n_samples)
     if shuffle and rng is not None:
-        indices = random.permutation(rng, indices)
+        indices = jax.random.permutation(rng, indices)
     elif shuffle:
-        rng = np.random.Generator(np.random.PCG64(42))
-        rng.shuffle(indices)
+        rng_np = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
+        rng_np.shuffle(indices)
     
     # Calcular número de batches
     n_batches = int(np.ceil(n_samples / batch_size))
@@ -72,15 +81,16 @@ def create_batched_dataset(x_cgm: np.ndarray,
     # Crear lista de batches
     batches = []
     for i in range(n_batches):
-        # Obtener índices para el batch actual
-        batch_indices = indices[i * batch_size:(i + 1) * batch_size]
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, n_samples)
+        batch_indices = indices[start_idx:end_idx]
         
-        # Crear batch
-        batch = (
-            (x_cgm[batch_indices], x_other[batch_indices]),
-            y[batch_indices]
-        )
-        batches.append(batch)
+        # Seleccionar datos correspondientes a los índices
+        x_cgm_batch = x_cgm[batch_indices]
+        x_other_batch = x_other[batch_indices]
+        y_batch = y[batch_indices]
+        
+        batches.append(((x_cgm_batch, x_other_batch), y_batch))
     
     return batches, n_batches
 
@@ -262,11 +272,11 @@ def train_and_evaluate_model(model: nn.Module,
     # Configuración por defecto
     if training_config is None:
         training_config = {
-            'epochs': 100,
-            'batch_size': 32,
+            'epochs': CONST_DEFAULT_EPOCHS,
+            'batch_size': CONST_DEFAULT_BATCH_SIZE,
             'learning_rate': 0.001,
             'patience': 10,
-            'seed': 42
+            'seed': CONST_DEFAULT_SEED
         }
     
     # Extraer datos
@@ -283,11 +293,11 @@ def train_and_evaluate_model(model: nn.Module,
     y_test = data['test']['y']
     
     # Extraer parámetros de configuración
-    epochs = training_config.get('epochs', 100)
-    batch_size = training_config.get('batch_size', 32)
+    epochs = training_config.get('epochs', CONST_DEFAULT_EPOCHS)
+    batch_size = training_config.get('batch_size', CONST_DEFAULT_BATCH_SIZE)
     learning_rate = training_config.get('learning_rate', 0.001)
     patience = training_config.get('patience', 10)
-    seed = training_config.get('seed', 42)
+    seed = training_config.get('seed', CONST_DEFAULT_SEED)
     
     # Crear directorio para modelos si no existe
     os.makedirs(models_dir, exist_ok=True)
@@ -483,22 +493,29 @@ def train_model_sequential(model_creator: Callable,
     """
     print(f"\nEntrenando modelo {name}...")
     
-    # Crear modelo
+    # Identificar tipo de modelo para organización de figuras
+    model_type = get_model_type(name)
+    figures_path = os.path.join(CONST_FIGURES_DIR, CONST_MODEL_TYPES[model_type], name)
+    os.makedirs(figures_path, exist_ok=True)
+    
+    # Crear modelo usando el model_creator
     model_wrapper = model_creator(input_shapes[0], input_shapes[1])
     
-    # Verificar si es un wrapper (DLModelWrapper, RLModelWrapper, etc.)
-    is_wrapper = hasattr(model_wrapper, 'model') and not isinstance(model_wrapper, nn.Module)
+    # Verificar si es un wrapper (DLModelWrapper, RLModelWrapper, DRLModelWrapper)
+    # Modificación: mejorar la condición para detectar wrappers
+    is_wrapper = (hasattr(model_wrapper, 'model') or not hasattr(model_wrapper, 'init')) and not isinstance(model_wrapper, nn.Module)
     
     if is_wrapper:
         # Caso ModelWrapper: usar su API interna
-        # Inicializar
-        model_wrapper.start(x_cgm_train, x_other_train, y_train)
+        # Inicializar con clave aleatoria
+        rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
+        model_wrapper.start(x_cgm_train, x_other_train, y_train, rng_key)
         
         # Entrenar
         history = model_wrapper.train(
             x_cgm_train, x_other_train, y_train,
             validation_data=((x_cgm_val, x_other_val), y_val),
-            epochs=100, batch_size=32
+            epochs=CONST_DEFAULT_EPOCHS, batch_size=CONST_DEFAULT_BATCH_SIZE
         )
         
         # Predecir
@@ -506,8 +523,6 @@ def train_model_sequential(model_creator: Callable,
         
     else:
         # Caso nn.Module: usar la lógica existente
-        model = model_wrapper
-        
         # Organizar datos en estructura esperada
         data = {
             'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
@@ -517,13 +532,13 @@ def train_model_sequential(model_creator: Callable,
         
         # Configuración por defecto
         training_config = {
-            'epochs': 100,
-            'batch_size': 32
+            'epochs': CONST_DEFAULT_EPOCHS,
+            'batch_size': CONST_DEFAULT_BATCH_SIZE
         }
         
         # Entrenar y evaluar modelo
         history, y_pred, _ = train_and_evaluate_model(
-            model=model,
+            model=model_wrapper,
             model_name=name,
             data=data,
             models_dir=models_dir,
@@ -537,7 +552,7 @@ def train_model_sequential(model_creator: Callable,
     return {
         'name': name,
         'history': history,
-        'predictions': y_pred.tolist(),
+        'predictions': y_pred.tolist() if hasattr(y_pred, 'tolist') else y_pred,
     }
 
 def cross_validate_model(create_model_fn: Callable, 
@@ -569,7 +584,7 @@ def cross_validate_model(create_model_fn: Callable,
     Tuple[Dict[str, float], Dict[str, float]]
         (métricas_promedio, métricas_desviación)
     """
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_DEFAULT_EPOCHS)
     scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(x_cgm)):
@@ -865,3 +880,24 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         metrics[name] = metric
     
     return histories, predictions, metrics
+
+def get_model_type(model_name: str) -> str:
+    """
+    Determina el tipo de modelo basado en su nombre.
+    
+    Parámetros:
+    -----------
+    model_name : str
+        Nombre del modelo
+        
+    Retorna:
+    --------
+    str
+        Tipo de modelo: "dl", "rl" o "drl"
+    """
+    if any(x in model_name for x in ["monte_carlo", "policy_iteration", "q_learning", "sarsa", "value_iteration", "reinforce"]):
+        return "rl"
+    elif any(x in model_name for x in ["a2c", "a3c", "ddpg", "dqn", "ppo", "sac", "trpo"]):
+        return "drl"
+    else:
+        return "dl"
