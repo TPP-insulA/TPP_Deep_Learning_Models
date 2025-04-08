@@ -730,26 +730,6 @@ else:
 
 plot_evaluation(y_test, y_pred_ppo, y_rule, subject_test, scaler_y)
 
-# # %% CELL: Main Execution - Tune PPO Training (Optional)
-# # Test different timesteps to check convergence
-# for timesteps in [50000, 200000]:
-#     print(f"\nTraining PPO with {timesteps} timesteps:")
-#     model_ppo_tune = PPO("MlpPolicy", train_env_ppo, verbose=1, learning_rate=3e-4, n_steps=2048, batch_size=64)
-#     callback_tune = RewardCallback(val_env=val_env_ppo)
-#     model_ppo_tune.learn(total_timesteps=timesteps, callback=callback_tune)
-    
-#     y_pred_ppo_test_tune = predict_with_ppo(model_ppo_tune, X_cgm_test, X_other_test)
-#     mae_tune = mean_absolute_error(scaler_y.inverse_transform(y_test.reshape(-1, 1)), y_pred_ppo_test_tune)
-#     rmse_tune = np.sqrt(mean_squared_error(scaler_y.inverse_transform(y_test.reshape(-1, 1)), y_pred_ppo_test_tune))
-#     r2_tune = r2_score(scaler_y.inverse_transform(y_test.reshape(-1, 1)), y_pred_ppo_test_tune)
-#     print(f"PPO Test (tuned {timesteps}) - MAE: {mae_tune:.2f}, RMSE: {rmse_tune:.2f}, R²: {r2_tune:.2f}")
-    
-#     plt.plot(callback_tune.train_rewards, label=f'Train Reward ({timesteps})')
-#     plt.plot(np.arange(len(callback_tune.val_rewards)) * 1000, callback_tune.val_rewards, label=f'Val Reward ({timesteps})')
-#     plt.xlabel('Timestep')
-#     plt.ylabel('Reward')
-#     plt.legend()
-#     plt.title(f'PPO Training vs Validation Reward ({timesteps} timesteps)')
-#     plt.show()
+
 
 # %%
