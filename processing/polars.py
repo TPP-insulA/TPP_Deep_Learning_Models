@@ -307,8 +307,13 @@ def preprocess_data(subject_folder: str) -> pl.DataFrame:
     ])
     
     # Para cgm_window, necesitamos extraer, transformar y volver a empaquetar
+    # Extraer los arrays como numpy
+    cgm_windows = df_processed["cgm_window"].to_numpy()
+    # Transformar con NumPy
+    transformed_windows = np.array([np.log1p(window) for window in cgm_windows])
+    # Reemplazar en el DataFrame
     df_processed = df_processed.with_columns(
-        pl.col("cgm_window").map_elements(lambda x: np.log1p(x)).alias("cgm_window")
+        pl.lit(transformed_windows).alias("cgm_window")
     )
 
     # Creación de columnas para las ventanas CGM
