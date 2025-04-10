@@ -10,7 +10,7 @@ from typing import Dict, Any, Tuple, Optional, List, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import FNN_CONFIG
+from config.models_config import FNN_CONFIG
 
 def get_activation(x: tf.Tensor, activation_name: str) -> tf.Tensor:
     """

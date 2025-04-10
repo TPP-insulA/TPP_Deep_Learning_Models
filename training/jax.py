@@ -14,22 +14,18 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 import orbax.checkpoint as orbax_ckpt
-
-# Constantes para uso común
-CONST_VAL_LOSS = "val_loss"
-CONST_LOSS = "loss"
-CONST_METRIC_MAE = "mae"
-CONST_METRIC_RMSE = "rmse"
-CONST_METRIC_R2 = "r2"
-CONST_MODELS = "models"
-CONST_BEST_PREFIX = "best_"
-CONST_LOGS_DIR = "logs"
-
+from training.common import (
+    CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
+    CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
+    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES,
+    calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
+    enhance_features, get_model_type, process_training_results
+)
 
 def create_batched_dataset(x_cgm: np.ndarray, 
                           x_other: np.ndarray, 
                           y: np.ndarray, 
-                          batch_size: int = 32, 
+                          batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
                           shuffle: bool = True, 
                           rng: Optional[jax.random.PRNGKey] = None) -> Tuple[List[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]], int]:
     """
@@ -61,10 +57,10 @@ def create_batched_dataset(x_cgm: np.ndarray,
     # Crear índices y mezclarlos si es necesario
     indices = np.arange(n_samples)
     if shuffle and rng is not None:
-        indices = random.permutation(rng, indices)
+        indices = jax.random.permutation(rng, indices)
     elif shuffle:
-        rng = np.random.Generator(np.random.PCG64(42))
-        rng.shuffle(indices)
+        rng_np = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
+        rng_np.shuffle(indices)
     
     # Calcular número de batches
     n_batches = int(np.ceil(n_samples / batch_size))
@@ -72,41 +68,18 @@ def create_batched_dataset(x_cgm: np.ndarray,
     # Crear lista de batches
     batches = []
     for i in range(n_batches):
-        # Obtener índices para el batch actual
-        batch_indices = indices[i * batch_size:(i + 1) * batch_size]
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, n_samples)
+        batch_indices = indices[start_idx:end_idx]
         
-        # Crear batch
-        batch = (
-            (x_cgm[batch_indices], x_other[batch_indices]),
-            y[batch_indices]
-        )
-        batches.append(batch)
+        # Seleccionar datos correspondientes a los índices
+        x_cgm_batch = x_cgm[batch_indices]
+        x_other_batch = x_other[batch_indices]
+        y_batch = y[batch_indices]
+        
+        batches.append(((x_cgm_batch, x_other_batch), y_batch))
     
     return batches, n_batches
-
-
-def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
-    """
-    Calcula métricas de rendimiento para las predicciones del modelo.
-    
-    Parámetros:
-    -----------
-    y_true : np.ndarray
-        Valores objetivo verdaderos
-    y_pred : np.ndarray
-        Valores predichos por el modelo
-        
-    Retorna:
-    --------
-    Dict[str, float]
-        Diccionario con métricas MAE, RMSE y R²
-    """
-    return {
-        CONST_METRIC_MAE: float(mean_absolute_error(y_true, y_pred)),
-        CONST_METRIC_RMSE: float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        CONST_METRIC_R2: float(r2_score(y_true, y_pred))
-    }
-
 
 @jit
 def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
@@ -262,11 +235,11 @@ def train_and_evaluate_model(model: nn.Module,
     # Configuración por defecto
     if training_config is None:
         training_config = {
-            'epochs': 100,
-            'batch_size': 32,
+            'epochs': CONST_DEFAULT_EPOCHS,
+            'batch_size': CONST_DEFAULT_BATCH_SIZE,
             'learning_rate': 0.001,
             'patience': 10,
-            'seed': 42
+            'seed': CONST_DEFAULT_SEED
         }
     
     # Extraer datos
@@ -283,11 +256,11 @@ def train_and_evaluate_model(model: nn.Module,
     y_test = data['test']['y']
     
     # Extraer parámetros de configuración
-    epochs = training_config.get('epochs', 100)
-    batch_size = training_config.get('batch_size', 32)
+    epochs = training_config.get('epochs', CONST_DEFAULT_EPOCHS)
+    batch_size = training_config.get('batch_size', CONST_DEFAULT_BATCH_SIZE)
     learning_rate = training_config.get('learning_rate', 0.001)
     patience = training_config.get('patience', 10)
-    seed = training_config.get('seed', 42)
+    seed = training_config.get('seed', CONST_DEFAULT_SEED)
     
     # Crear directorio para modelos si no existe
     os.makedirs(models_dir, exist_ok=True)
@@ -419,6 +392,18 @@ def train_and_evaluate_model(model: nn.Module,
         step=epoch
     )
     
+    @jax.jit
+    def eval_step(params, x_cgm, x_other, y):
+        # Verificar si el modelo acepta un parámetro 'training'
+        try:
+            # Intentar llamar al modelo con el parámetro training=False
+            preds = model.apply(params, x_cgm, x_other, training=False)
+        except TypeError:
+            # Si falla, llamar sin el parámetro training
+            preds = model.apply(params, x_cgm, x_other)
+        loss = jnp.mean((preds - y) ** 2)
+        return loss, preds
+    
     # Hacer predicciones con el mejor modelo
     x_cgm_test_array = jnp.array(x_cgm_test)
     x_other_test_array = jnp.array(x_other_test)
@@ -483,30 +468,57 @@ def train_model_sequential(model_creator: Callable,
     """
     print(f"\nEntrenando modelo {name}...")
     
-    # Crear modelo
-    model = model_creator(input_shapes[0], input_shapes[1])
+    # Identificar tipo de modelo para organización de figuras
+    model_type = get_model_type(name)
+    figures_path = os.path.join(CONST_FIGURES_DIR, CONST_MODEL_TYPES[model_type], name)
+    os.makedirs(figures_path, exist_ok=True)
     
-    # Organizar datos en estructura esperada
-    data = {
-        'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
-        'val': {'x_cgm': x_cgm_val, 'x_other': x_other_val, 'y': y_val},
-        'test': {'x_cgm': x_cgm_test, 'x_other': x_other_test, 'y': y_test}
-    }
+    # Crear modelo usando el model_creator
+    model_wrapper = model_creator(input_shapes[0], input_shapes[1])
     
-    # Configuración por defecto
-    training_config = {
-        'epochs': 100,
-        'batch_size': 32
-    }
+    # Verificar si es un wrapper (DLModelWrapper, RLModelWrapper, DRLModelWrapper)
+    # Modificación: mejorar la condición para detectar wrappers
+    is_wrapper = (hasattr(model_wrapper, 'model') or not hasattr(model_wrapper, 'init')) and not isinstance(model_wrapper, nn.Module)
     
-    # Entrenar y evaluar modelo
-    history, y_pred, _ = train_and_evaluate_model(
-        model=model,
-        model_name=name,
-        data=data,
-        models_dir=models_dir,
-        training_config=training_config
-    )
+    if is_wrapper:
+        # Caso ModelWrapper: usar su API interna
+        # Inicializar con clave aleatoria
+        rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
+        model_wrapper.start(x_cgm_train, x_other_train, y_train, rng_key)
+        
+        # Entrenar
+        history = model_wrapper.train(
+            x_cgm_train, x_other_train, y_train,
+            validation_data=((x_cgm_val, x_other_val), y_val),
+            epochs=CONST_DEFAULT_EPOCHS, batch_size=CONST_DEFAULT_BATCH_SIZE
+        )
+        
+        # Predecir
+        y_pred = model_wrapper.predict(x_cgm_test, x_other_test)
+        
+    else:
+        # Caso nn.Module: usar la lógica existente
+        # Organizar datos en estructura esperada
+        data = {
+            'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
+            'val': {'x_cgm': x_cgm_val, 'x_other': x_other_val, 'y': y_val},
+            'test': {'x_cgm': x_cgm_test, 'x_other': x_other_test, 'y': y_test}
+        }
+        
+        # Configuración por defecto
+        training_config = {
+            'epochs': CONST_DEFAULT_EPOCHS,
+            'batch_size': CONST_DEFAULT_BATCH_SIZE
+        }
+        
+        # Entrenar y evaluar modelo
+        history, y_pred, _ = train_and_evaluate_model(
+            model=model_wrapper,
+            model_name=name,
+            data=data,
+            models_dir=models_dir,
+            training_config=training_config
+        )
     
     # Limpiar memoria
     jax.clear_caches()
@@ -515,7 +527,7 @@ def train_model_sequential(model_creator: Callable,
     return {
         'name': name,
         'history': history,
-        'predictions': y_pred.tolist(),
+        'predictions': y_pred.tolist() if hasattr(y_pred, 'tolist') else y_pred,
     }
 
 def cross_validate_model(create_model_fn: Callable, 
@@ -547,7 +559,7 @@ def cross_validate_model(create_model_fn: Callable,
     Tuple[Dict[str, float], Dict[str, float]]
         (métricas_promedio, métricas_desviación)
     """
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_DEFAULT_EPOCHS)
     scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(x_cgm)):
@@ -592,106 +604,6 @@ def cross_validate_model(create_model_fn: Callable,
     }
     
     return mean_scores, std_scores
-
-
-def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray], 
-                             weights: Optional[np.ndarray] = None) -> np.ndarray:
-    """
-    Combina predicciones de múltiples modelos usando promedio ponderado.
-    
-    Parámetros:
-    -----------
-    predictions_dict : Dict[str, np.ndarray]
-        Diccionario con predicciones de cada modelo
-    weights : Optional[np.ndarray], opcional
-        Pesos para cada modelo. Si es None, usa promedio simple (default: None)
-        
-    Retorna:
-    --------
-    np.ndarray
-        Predicciones combinadas del ensemble
-    """
-    all_preds = np.stack(list(predictions_dict.values()))
-    if weights is None:
-        weights = np.ones(len(predictions_dict)) / len(predictions_dict)
-    return np.average(all_preds, axis=0, weights=weights)
-
-
-def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray], 
-                            y_true: np.ndarray) -> np.ndarray:
-    """
-    Optimiza pesos del ensemble usando optimización.
-    
-    Parámetros:
-    -----------
-    predictions_dict : Dict[str, np.ndarray]
-        Diccionario con predicciones de cada modelo
-    y_true : np.ndarray
-        Valores objetivo verdaderos
-        
-    Retorna:
-    --------
-    np.ndarray
-        Pesos optimizados para cada modelo
-    """
-    def objective(weights):
-        # Normalizar pesos
-        weights = weights / np.sum(weights)
-        # Obtener predicción del ensemble
-        ensemble_pred = create_ensemble_prediction(predictions_dict, weights)
-        # Calcular error
-        return mean_squared_error(y_true, ensemble_pred)
-    
-    n_models = len(predictions_dict)
-    initial_weights = np.ones(n_models) / n_models
-    bounds = [(0, 1) for _ in range(n_models)]
-    
-    result = minimize(
-        objective,
-        initial_weights,
-        bounds=bounds,
-        constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    )
-    
-    return result.x / np.sum(result.x)
-
-
-def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Mejora las características de entrada con características derivadas.
-    
-    Parámetros:
-    -----------
-    x_cgm : np.ndarray
-        Datos CGM
-    x_other : np.ndarray
-        Otras características
-        
-    Retorna:
-    --------
-    Tuple[np.ndarray, np.ndarray]
-        (x_cgm_mejorado, x_other)
-    """
-    # Añadir características derivadas para CGM
-    cgm_diff = np.diff(x_cgm.squeeze(), axis=1)
-    cgm_diff = np.pad(cgm_diff, ((0,0), (1,0), (0,0)), mode='edge')
-    
-    # Añadir estadísticas móviles
-    window = 5
-    rolling_mean = np.apply_along_axis(
-        lambda x: np.convolve(x, np.ones(window)/window, mode='same'),
-        1, x_cgm.squeeze()
-    )
-    
-    # Concatenar características mejoradas
-    x_cgm_enhanced = np.concatenate([
-        x_cgm,
-        cgm_diff[..., np.newaxis],
-        rolling_mean[..., np.newaxis]
-    ], axis=-1)
-    
-    return x_cgm_enhanced, x_other
-
 
 def predict_model(model_path: str, 
                  model_creator: Callable, 

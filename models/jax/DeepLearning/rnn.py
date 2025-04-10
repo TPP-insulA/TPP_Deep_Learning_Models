@@ -2,12 +2,21 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import numpy as np
 from typing import List, Tuple, Dict, Any, Optional, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import RNN_CONFIG
+from config.models_config import RNN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_SIGMOID = "sigmoid"
+CONST_SWISH = "swish"
+CONST_DROPOUT = "dropout"
 
 class TimeDistributed(nn.Module):
     """
@@ -280,23 +289,24 @@ class RNNModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
         Aplica el modelo RNN a las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
-        training : bool
-            Indica si está en modo entrenamiento
+        cgm_input : jnp.ndarray
+            Datos CGM de entrada
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
             
         Retorna:
         --------
         jnp.ndarray
             Predicción del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
         # Procesamiento temporal distribuido inicial
@@ -413,32 +423,32 @@ def get_activation_fn(activation_name: str) -> Callable:
     Callable
         Función de activación
     """
-    if activation_name == 'relu':
+    if activation_name == CONST_RELU:
         return jax.nn.relu
-    elif activation_name == 'tanh':
+    elif activation_name == CONST_TANH:
         return jax.nn.tanh
-    elif activation_name == 'sigmoid':
+    elif activation_name == CONST_SIGMOID:
         return jax.nn.sigmoid
-    elif activation_name == 'swish':
+    elif activation_name == CONST_SWISH:
         return jax.nn.swish
     else:
         return jax.nn.relu  # Por defecto
 
-def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> RNNModel:
+def create_rnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
     Crea un modelo RNN optimizado para velocidad con procesamiento temporal distribuido con JAX/Flax.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (samples, timesteps, features)
-    other_features_shape : tuple
-        Forma de otras características (samples, features)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    rnn_model
-        Modelo RNN inicializado
+    DLModelWrapper
+        Modelo RNN inicializado y envuelto en DLModelWrapper
     """
     model = RNNModel(
         config=RNN_CONFIG,
@@ -446,4 +456,16 @@ def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> RNNModel:
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo RNN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_rnn_model

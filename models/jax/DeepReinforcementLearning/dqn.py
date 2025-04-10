@@ -1,4 +1,5 @@
 import os, sys
+from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -14,7 +15,22 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import DQN_CONFIG
+from config.models_config import DQN_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_TANH = "tanh"
+CONST_SELU = "selu"
+CONST_SIGMOID = "sigmoid"
+CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_TARGET = "target"
+CONST_Q_VALUE = "q_value"
+CONST_LOSS = "loss"
+
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "dqn")
 
 
 class ReplayBuffer:
@@ -67,11 +83,15 @@ class ReplayBuffer:
             (states, actions, rewards, next_states, dones)
         """
         if len(self.buffer) < batch_size:
-            # Si no hay suficientes transiciones, devuelve lo que haya
-            batch = random.sample(self.buffer, len(self.buffer))
+            # Si no hay suficientes experiencias, muestrear con reemplazo
+            rng = np.random.Generator(np.random.PCG64(42))
+            indices = rng.integers(0, len(self.buffer), size=batch_size)
+            batch = [self.buffer[i] for i in indices]
         else:
-            batch = random.sample(self.buffer, batch_size)
-            
+            # Uso del nuevo método de muestreo con Generator
+            rng = np.random.Generator(np.random.PCG64(42))
+            batch = rng.choice(self.buffer, batch_size, replace=False)
+        
         states, actions, rewards, next_states, dones = zip(*batch)
         
         return (
@@ -131,8 +151,9 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         max_priority = max(np.max(self.priorities), 1e-5)
         
         if len(self.buffer) < self.buffer.maxlen:
-            self.buffer.append((state, action, reward, next_state, done))
+            super().add(state, action, reward, next_state, done)
         else:
+            # Reemplazar en posición actual
             self.buffer[self.pos] = (state, action, reward, next_state, done)
         
         self.priorities[self.pos] = max_priority
@@ -157,15 +178,17 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             (states, actions, rewards, next_states, dones, índices, pesos de importancia)
         """
         if len(self.buffer) < batch_size:
-            idx = list(range(len(self.buffer)))
+            # Si no hay suficientes experiencias, usar todas con reemplazo
+            idx = np.random.Generator(np.random.PCG64(42)).choice(
+                len(self.buffer), batch_size, replace=True).tolist()
         else:
-            # Calcular probabilidades de muestreo basadas en prioridad
+            # Muestreo basado en prioridades
             priorities = self.priorities[:len(self.buffer)]
             probabilities = priorities ** DQN_CONFIG['priority_alpha']
             probabilities /= np.sum(probabilities)
             
-            # Muestreo según distribución
-            rng = np.random.default_rng(seed=42)
+            # Muestreo según distribución de probabilidad
+            rng = np.random.Generator(np.random.PCG64(42))
             idx = rng.choice(len(self.buffer), batch_size, p=probabilities, replace=False).tolist()
         
         # Extraer batch
@@ -208,7 +231,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             Nuevas prioridades
         """
         for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority
+            self.priorities[idx] = priority + 1e-5
 
 
 class QNetwork(nn.Module):
@@ -233,13 +256,36 @@ class QNetwork(nn.Module):
     action_dim: int
     hidden_units: Optional[Sequence[int]] = None
     dueling: bool = False
-    activation: str = 'relu'
+    activation: str = CONST_RELU
     dropout_rate: float = 0.0
+    
+    def _get_activation_fn(self, activation_name):
+        """
+        Obtiene la función de activación según el nombre.
+        
+        Parámetros:
+        -----------
+        activation_name : str
+            Nombre de la función de activación
+            
+        Retorna:
+        --------
+        Callable
+            Función de activación correspondiente
+        """
+        activation_map = {
+            CONST_RELU: nn.relu,
+            CONST_GELU: nn.gelu,
+            CONST_SELU: nn.selu,
+            CONST_TANH: jnp.tanh,
+            CONST_SIGMOID: jax.nn.sigmoid
+        }
+        return activation_map.get(activation_name, nn.relu)
     
     @nn.compact
     def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Pasa la entrada por la red Q.
+        Aplica la red Q a las entradas.
         
         Parámetros:
         -----------
@@ -253,16 +299,13 @@ class QNetwork(nn.Module):
         jnp.ndarray
             Valores Q para cada acción
         """
-        # Valores predeterminados para capas ocultas
-        if self.hidden_units is None:
-            hidden_units = DQN_CONFIG['hidden_units']
-        else:
-            hidden_units = self.hidden_units
-            
-        # Función de activación
-        activation_fn = getattr(nn, self.activation)
+        # Default para capas ocultas si no se especifican
+        hidden_units = self.hidden_units or [256, 256]
         
-        # Capas para el procesamiento del estado (feature extractor)
+        # Obtener función de activación
+        activation_fn = self._get_activation_fn(self.activation)
+        
+        # Procesar características de estado
         for i, units in enumerate(hidden_units):
             x = nn.Dense(units, name=f'feature_dense_{i}')(x)
             x = nn.LayerNorm(epsilon=DQN_CONFIG['epsilon'], name=f'feature_ln_{i}')(x)
@@ -305,6 +348,8 @@ class DQNTrainState(train_state.TrainState):
     ----------
     target_params : Any
         Parámetros del modelo target
+    rng: jax.random.PRNGKey
+        Clave para generación aleatoria
     """
     target_params: Any
     rng: jax.random.PRNGKey
@@ -368,6 +413,9 @@ class DQN:
         self.rng = jax.random.PRNGKey(seed)
         np.random.seed(seed)
         random.seed(seed)
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # Dividir la clave para inicialización y uso posterior
         self.rng, init_rng = jax.random.split(self.rng)
@@ -442,12 +490,12 @@ class DQN:
         
         Parámetros:
         -----------
-        state : dqn_train_state
+        state : DQNTrainState
             Estado actual del entrenamiento
             
         Retorna:
         --------
-        dqn_train_state
+        DQNTrainState
             Nuevo estado con parámetros target actualizados
         """
         return state.replace(target_params=state.params)
@@ -460,7 +508,7 @@ class DQN:
         
         Parámetros:
         -----------
-        state : dqn_train_state
+        state : DQNTrainState
             Estado actual del entrenamiento
         batch : Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]
             (estados, acciones, recompensas, siguientes_estados, terminados)
@@ -469,7 +517,7 @@ class DQN:
             
         Retorna:
         --------
-        Tuple[dqn_train_state, jnp.ndarray, jnp.ndarray]
+        Tuple[DQNTrainState, jnp.ndarray, jnp.ndarray]
             (nuevo_estado, pérdida, td_errors)
         """
         states, actions, rewards, next_states, dones = batch
@@ -508,8 +556,8 @@ class DQN:
                 loss = jnp.mean(optax.huber_loss(q_values_selected, targets))
             
             metrics = {
-                'loss': loss,
-                'q_values': jnp.mean(q_values_selected),
+                CONST_LOSS: loss,
+                CONST_Q_VALUE: jnp.mean(q_values_selected),
                 'td_errors': td_errors
             }
             
@@ -593,53 +641,52 @@ class DQN:
     
     def _update_model(self, episode_loss: List[float], update_every: int, update_after: int) -> None:
         """
-        Actualiza el modelo si es necesario.
+        Actualiza el modelo si hay suficientes datos y es momento de hacerlo.
         
         Parámetros:
         -----------
         episode_loss : List[float]
             Lista para almacenar pérdidas del episodio
         update_every : int
-            Frecuencia de actualización
+            Frecuencia de actualización (cada cuántos pasos)
         update_after : int
-            Pasos antes de empezar a actualizar la red
+            Número de pasos antes de empezar a actualizar
         """
-        # Entrenar modelo si hay suficientes datos
-        if (len(self.replay_buffer) > self.batch_size and 
-            self.update_counter >= update_after and 
-            self.update_counter % update_every == 0):
+        # Actualizar sólo si el buffer tiene suficientes datos y es momento de actualizar
+        if len(self.replay_buffer) < self.batch_size or self.update_counter < update_after:
+            return
             
-            # Muestrear batch
-            if self.prioritized:
-                batch, indices, importance_weights = self._sample_batch()
-            else:
-                batch, _, _ = self._sample_batch()
-                importance_weights = None
+        if self.update_counter % update_every != 0:
+            self.update_counter += 1
+            return
             
-            # Entrenar red
-            self.state, loss, td_errors = self.train_step_jit(self.state, batch, importance_weights)
-            episode_loss.append(float(loss))
-            
-            # Actualizar métricas acumuladas
-            self.loss_sum += float(loss)
-            # Calcular q_values del batch
-            states, actions = batch[0], batch[1]
-            q_values = self.q_network.apply(self.state.params, states)
-            q_values_selected = q_values[jnp.arange(q_values.shape[0]), actions]
-            self.q_value_sum += float(jnp.mean(q_values_selected))
-            self.updates_count += 1
-            
-            # Actualizar prioridades si es PER
-            if self.prioritized and indices is not None:
-                priorities = np.abs(np.array(td_errors)) + 1e-6
-                self.replay_buffer.update_priorities(indices, priorities)
+        # Muestrear batch
+        batch, indices, importance_weights = self._sample_batch()
+        
+        # Actualizar modelo
+        self.state, loss, td_errors = self.train_step_jit(self.state, batch, importance_weights)
+        episode_loss.append(float(loss))
+        
+        # Actualizar métricas acumuladas
+        self.loss_sum += float(loss)
+        # Calcular q_values del batch
+        states, actions = batch[0], batch[1]
+        q_values = self.q_network.apply(self.state.params, states)
+        q_values_selected = q_values[jnp.arange(q_values.shape[0]), actions]
+        self.q_value_sum += float(jnp.mean(q_values_selected))
+        self.updates_count += 1
+        
+        # Actualizar prioridades si es PER
+        if self.prioritized and indices is not None:
+            priorities = np.abs(np.array(td_errors)) + 1e-6
+            self.replay_buffer.update_priorities(indices, priorities)
                 
         # Actualizar target network periódicamente
         if self.update_counter % self.target_update_freq == 0 and self.update_counter > 0:
             self.update_target_network()
         
         self.update_counter += 1
-            
+    
     def _run_episode(self, env: Any, max_steps: int, render: bool, 
                    update_every: int, update_after: int) -> Tuple[float, List[float]]:
         """
@@ -694,34 +741,37 @@ class DQN:
                 break
                 
         return episode_reward, episode_loss
-        
+    
     def _update_history(self, history: Dict, episode_reward: float, episode_loss: List[float], 
                       episode_reward_history: List[float], log_interval: int) -> List[float]:
         """
-        Actualiza el historial de entrenamiento y métricas.
+        Actualiza el historial de entrenamiento con los resultados del episodio.
         
         Parámetros:
         -----------
         history : Dict
-            Historial de entrenamiento a actualizar
+            Diccionario de historial a actualizar
         episode_reward : float
-            Recompensa del episodio
+            Recompensa obtenida en el episodio
         episode_loss : List[float]
-            Lista de pérdidas del episodio
+            Lista de pérdidas durante el episodio
         episode_reward_history : List[float]
-            Historial reciente de recompensas
+            Historial de recompensas para cálculos de promedio
         log_interval : int
-            Intervalo para mostrar información
+            Intervalo para limitar el tamaño del historial
             
         Retorna:
         --------
         List[float]
             Historial de recompensas actualizado
         """
-        # Almacenar métricas
-        history['episode_rewards'].append(episode_reward)
-        history['epsilons'].append(self.epsilon)
+        # Guardar recompensa
+        history['episode_rewards'].append(float(episode_reward))
         
+        # Guardar epsilon
+        history['epsilons'].append(float(self.epsilon))
+        
+        # Guardar pérdida media si hay actualizaciones
         if episode_loss:
             history['losses'].append(float(np.mean(episode_loss)))
         else:
@@ -749,7 +799,7 @@ class DQN:
             episode_reward_history.pop(0)
             
         return episode_reward_history
-        
+    
     def train(self, env: Any, episodes: int = 1000, max_steps: int = 1000, 
              update_after: int = 1000, update_every: int = 4, 
              render: bool = False, log_interval: int = 10) -> Dict:
@@ -866,57 +916,63 @@ class DQN:
     
     def save_model(self, filepath: str) -> None:
         """
-        Guarda los parámetros del modelo en un archivo.
+        Guarda el modelo en disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta donde guardar el modelo
         """
-        import flax.serialization
-        with open(filepath, 'wb') as f:
-            f.write(flax.serialization.to_bytes(self.state.params))
-        print(f"Modelo guardado en {filepath}")
+        from flax.training import checkpoints
+        
+        # Crear directorio si no existe
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        # Guardar parámetros del modelo
+        checkpoints.save_checkpoint(
+            filepath, 
+            self.state,
+            step=int(self.update_counter),
+            overwrite=True
+        )
     
     def load_model(self, filepath: str) -> None:
         """
-        Carga los parámetros del modelo desde un archivo.
+        Carga el modelo desde disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta desde donde cargar el modelo
         """
-        import flax.serialization
-        with open(filepath, 'rb') as f:
-            params = flax.serialization.from_bytes(self.state.params, f.read())
+        from flax.training import checkpoints
         
-        # Actualizar parámetros del modelo y del target
-        self.state = self.state.replace(params=params, target_params=params)
-        print(f"Modelo cargado desde {filepath}")
+        # Cargar parámetros
+        self.state = checkpoints.restore_checkpoint(filepath, self.state)
     
     def visualize_training(self, history: Dict, window_size: int = 10) -> None:
         """
-        Visualiza los resultados del entrenamiento.
+        Visualiza el historial de entrenamiento con gráficos.
         
         Parámetros:
         -----------
         history : Dict
-            Historia de entrenamiento
+            Historial de entrenamiento
         window_size : int, opcional
             Tamaño de ventana para suavizado (default: 10)
         """
-        # Función para aplicar suavizado
+        import matplotlib.pyplot as plt
+        
         def smooth(data, window_size):
             kernel = np.ones(window_size) / window_size
             return np.convolve(data, kernel, mode='valid')
         
-        # Crear figura con múltiples subplots
-        _, axs = plt.subplots(2, 2, figsize=(15, 10))
+        # Crear figura
+        _, axs = plt.subplots(2, 2, figsize=(14, 10))
         
-        # Graficar recompensas
+        # Recompensas
         rewards = history['episode_rewards']
-        axs[0, 0].plot(rewards, alpha=0.3, color='blue', label='Raw')
+        axs[0, 0].plot(rewards, alpha=0.3, color='blue', label='Original')
         if len(rewards) > window_size:
             axs[0, 0].plot(range(window_size-1, len(rewards)), smooth(rewards, window_size), 
                          color='blue', label=f'Suavizado (ventana={window_size})')
@@ -926,7 +982,7 @@ class DQN:
         axs[0, 0].legend()
         axs[0, 0].grid(alpha=0.3)
         
-        # Graficar epsilon
+        # Epsilon
         epsilons = history['epsilons']
         axs[0, 1].plot(epsilons, color='green')
         axs[0, 1].set_title('Valor Epsilon')
@@ -934,9 +990,9 @@ class DQN:
         axs[0, 1].set_ylabel('Epsilon')
         axs[0, 1].grid(alpha=0.3)
         
-        # Graficar pérdida
+        # Pérdida
         losses = history['losses']
-        axs[1, 0].plot(losses, alpha=0.3, color='red', label='Raw')
+        axs[1, 0].plot(losses, alpha=0.3, color='red', label='Original')
         if len(losses) > window_size:
             axs[1, 0].plot(range(window_size-1, len(losses)), smooth(losses, window_size), 
                          color='red', label=f'Suavizado (ventana={window_size})')
@@ -946,9 +1002,9 @@ class DQN:
         axs[1, 0].legend()
         axs[1, 0].grid(alpha=0.3)
         
-        # Graficar valores Q promedio
+        # Valores Q promedio
         q_values = history['avg_q_values']
-        axs[1, 1].plot(q_values, alpha=0.3, color='purple', label='Raw')
+        axs[1, 1].plot(q_values, alpha=0.3, color='purple', label='Original')
         if len(q_values) > window_size:
             axs[1, 1].plot(range(window_size-1, len(q_values)), smooth(q_values, window_size), 
                          color='purple', label=f'Suavizado (ventana={window_size})')
@@ -959,7 +1015,9 @@ class DQN:
         axs[1, 1].grid(alpha=0.3)
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, 'training_results.png'))
         plt.show()
+
 
 class DQNWrapper:
     """
@@ -973,24 +1031,23 @@ class DQNWrapper:
         other_features_shape: Tuple[int, ...],
     ) -> None:
         """
-        Inicializa el wrapper para DQN.
+        Inicializa el wrapper DQN.
         
         Parámetros:
         -----------
         dqn_agent : DQN
-            Agente DQN a utilizar
+            Agente DQN a encapsular
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
         """
         self.dqn_agent = dqn_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
-        # Inicializar clave para generador de números aleatorios
+        # Inicializar generador de números aleatorios
         self.key = jax.random.PRNGKey(42)
-        self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
         self._setup_encoders()
@@ -999,8 +1056,8 @@ class DQNWrapper:
         self.history = {
             'loss': [],
             'val_loss': [],
-            'episode_rewards': [],
-            'avg_q_values': []
+            'losses': [],
+            'episode_rewards': []
         }
     
     def _setup_encoders(self) -> None:
@@ -1024,63 +1081,67 @@ class DQNWrapper:
     
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación.
+        Crea una función de codificación para transformar entradas.
         
         Parámetros:
         -----------
         weights : jnp.ndarray
-            Matriz de pesos para la transformación
+            Pesos de la transformación
             
         Retorna:
         --------
         Callable
-            Función de codificación JIT-compilada
+            Función de codificación
         """
-        def encoder_fn(x):
-            x_flat = x.reshape((x.shape[0], -1))
-            return jnp.tanh(jnp.dot(x_flat, weights))
-        return encoder_fn
+        def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
+            # Aplanar entrada
+            flat_x = x.reshape(x.shape[0], -1)
+            # Transformar a espacio de estados
+            encoded = jnp.tanh(jnp.matmul(flat_x, weights))
+            return encoded
+        return encode_fn
     
-    def __call__(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Implementa la interfaz de llamada para predicción.
+        Realiza una predicción usando el modelo DQN.
         
         Parámetros:
         -----------
-        inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+        cgm_input : jnp.ndarray
+            Datos CGM de entrada
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: False)
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones de dosis
         """
-        return self.predict(inputs)
+        return self.predict([cgm_input, other_input])
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo DQN.
+        Realiza predicciones con el modelo.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista con [cgm_input, other_input]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones de dosis
         """
-        # Obtener entradas
-        cgm_data, other_features = inputs
+        cgm_input, other_input = inputs
         
-        # Convertir a arrays de JAX si no lo son
-        cgm_data = jnp.array(cgm_data)
-        other_features = jnp.array(other_features)
+        # Codificar entradas a espacio de estado
+        cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
+        other_encoded = self.encode_other(jnp.array(other_input))
         
-        # Codificar entradas a representación de estado
-        cgm_encoded = self.encode_cgm(cgm_data)
-        other_encoded = self.encode_other(other_features)
+        # Concatenar codificaciones
         states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
         
         # Convertir a dosis usando política DQN (sin exploración)
@@ -1095,7 +1156,7 @@ class DQNWrapper:
             # Convertir índice discreto a valor continuo de dosis (0-15 unidades)
             action_value = action / (self.dqn_agent.action_dim - 1) * 15.0
             actions[i, 0] = action_value
-        
+            
         return actions
     
     def fit(
@@ -1109,18 +1170,18 @@ class DQNWrapper:
         verbose: int = 0
     ) -> Dict:
         """
-        Entrena el modelo DQN en los datos proporcionados.
+        Entrena el modelo DQN con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista con [cgm_input, other_input]
         y : jnp.ndarray
-            Etiquetas (dosis objetivo)
+            Valores objetivo de dosis
         validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
+            Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de episodios (default: 1)
+            Número de episodios de entrenamiento (default: 1)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1140,30 +1201,30 @@ class DQNWrapper:
         env = self._create_training_environment(x[0], x[1], y)
         
         # Entrenar el agente DQN
-        dqn_history = self.dqn_agent.train(
+        training_history = self.dqn_agent.train(
             env=env,
             episodes=epochs,
             max_steps=batch_size,
             update_after=min(1000, batch_size // 2),
-            update_every=4,
+            update_every=1,
             render=False,
             log_interval=max(1, epochs // 10) if verbose > 0 else epochs + 1
         )
         
         # Actualizar historial con métricas del entrenamiento
-        self.history['episode_rewards'].extend(dqn_history.get('episode_rewards', []))
-        self.history['avg_q_values'].extend(dqn_history.get('avg_q_values', []))
+        self.history['losses'].extend(training_history.get('losses', []))
+        self.history['episode_rewards'].extend(training_history.get('episode_rewards', []))
         
-        # Calcular pérdida en los datos de entrenamiento
+        # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
-        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        train_loss = float(np.mean((train_preds.flatten() - y) ** 2))
         self.history['loss'].append(train_loss)
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
-            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            val_loss = float(np.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
@@ -1180,7 +1241,7 @@ class DQNWrapper:
         targets: jnp.ndarray
     ) -> Any:
         """
-        Crea un entorno de entrenamiento para RL a partir de los datos.
+        Crea un entorno de entrenamiento personalizado basado en los datos.
         
         Parámetros:
         -----------
@@ -1189,14 +1250,13 @@ class DQNWrapper:
         other_features : jnp.ndarray
             Otras características
         targets : jnp.ndarray
-            Dosis objetivo
+            Valores objetivo de dosis
             
         Retorna:
         --------
         Any
-            Entorno simulado para RL
+            Entorno de entrenamiento
         """
-        # Crear entorno personalizado para DQN
         class InsulinDosingEnv:
             """Entorno personalizado para problema de dosificación de insulina."""
             
@@ -1212,15 +1272,20 @@ class DQNWrapper:
                 # Para compatibilidad con algoritmos RL
                 self.observation_space = SimpleNamespace(
                     shape=(model_wrapper.dqn_agent.state_dim,),
-                    low=np.full((model_wrapper.dqn_agent.state_dim,), -10.0),
-                    high=np.full((model_wrapper.dqn_agent.state_dim,), 10.0)
+                    low=-np.ones(model_wrapper.dqn_agent.state_dim) * 10,
+                    high=np.ones(model_wrapper.dqn_agent.state_dim) * 10
                 )
                 
                 self.action_space = SimpleNamespace(
+                    shape=(1,),
                     n=model_wrapper.dqn_agent.action_dim,
-                    sample=lambda: self.rng.integers(0, model_wrapper.dqn_agent.action_dim)
+                    sample=self._sample_action
                 )
             
+            def _sample_action(self):
+                """Muestrea una acción aleatoria del espacio discreto."""
+                return self.rng.integers(0, self.action_space.n)
+                
             def reset(self):
                 """Reinicia el entorno eligiendo un ejemplo aleatorio."""
                 self.current_idx = self.rng.integers(0, self.max_idx)
@@ -1263,69 +1328,32 @@ class DQNWrapper:
                 
                 return state
         
-        # Importar lo necesario para el entorno
-        from types import SimpleNamespace
-        
         # Crear y devolver el entorno
         return InsulinDosingEnv(cgm_data, other_features, targets, self)
     
     def save(self, filepath: str) -> None:
         """
-        Guarda el modelo DQN en un archivo.
+        Guarda el modelo en disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta donde guardar el modelo
         """
-        # Crear directorio si no existe
-        import os
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Guardar el agente DQN
-        self.dqn_agent.save_model(filepath + "_dqn.h5")
-        
-        # Guardar datos adicionales del wrapper
-        import pickle
-        wrapper_data = {
-            'cgm_shape': self.cgm_shape,
-            'other_features_shape': self.other_features_shape,
-            'cgm_weight': self.cgm_weight,
-            'other_weight': self.other_weight,
-            'state_dim': self.dqn_agent.state_dim,
-            'action_dim': self.dqn_agent.action_dim
-        }
-        
-        with open(filepath + "_wrapper.pkl", 'wb') as f:
-            pickle.dump(wrapper_data, f)
+        self.dqn_agent.save_model(filepath)
         
         print(f"Modelo guardado en {filepath}")
     
     def load(self, filepath: str) -> None:
         """
-        Carga el modelo DQN desde un archivo.
+        Carga el modelo desde disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta desde donde cargar el modelo
         """
-        # Cargar el agente DQN
-        self.dqn_agent.load_model(filepath + "_dqn.h5")
-        
-        # Cargar datos adicionales del wrapper
-        import pickle
-        with open(filepath + "_wrapper.pkl", 'rb') as f:
-            wrapper_data = pickle.load(f)
-        
-        self.cgm_shape = wrapper_data['cgm_shape']
-        self.other_features_shape = wrapper_data['other_features_shape']
-        self.cgm_weight = wrapper_data['cgm_weight']
-        self.other_weight = wrapper_data['other_weight']
-        
-        # Recompilar funciones de codificación
-        self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
-        self.encode_other = jax.jit(self._create_encoder_fn(self.other_weight))
+        self.dqn_agent.load_model(filepath)
         
         print(f"Modelo cargado desde {filepath}")
     
@@ -1336,20 +1364,18 @@ class DQNWrapper:
         Retorna:
         --------
         Dict
-            Diccionario con configuración del modelo
+            Configuración del modelo
         """
         return {
-            'cgm_shape': self.cgm_shape,
-            'other_features_shape': self.other_features_shape,
-            'state_dim': self.dqn_agent.state_dim,
-            'action_dim': self.dqn_agent.action_dim,
-            'hidden_units': self.dqn_agent.hidden_units,
-            'gamma': self.dqn_agent.gamma,
-            'epsilon': self.dqn_agent.epsilon
+            "cgm_shape": self.cgm_shape,
+            "other_features_shape": self.other_features_shape,
+            "state_dim": self.dqn_agent.state_dim,
+            "action_dim": self.dqn_agent.action_dim,
+            "hidden_units": self.dqn_agent.hidden_units
         }
 
 
-def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DQNWrapper:
+def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en DQN (Deep Q-Network) para predicción de dosis de insulina.
     
@@ -1362,11 +1388,11 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    DQNWrapper
-        Wrapper de DQN que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper del modelo DQN compatible con la interfaz del sistema
     """
     # Configurar el espacio de estados y acciones
-    state_dim = 64  # Dimensión del espacio de estados codificado
+    state_dim = 64  # Dimensión del espacio de estado latente
     action_dim = 20  # 20 niveles discretos para dosis (0 a 15 unidades)
     
     # Crear configuración para el agente DQN
@@ -1401,8 +1427,20 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Crear y devolver wrapper
-    return DQNWrapper(
+    return DRLModelWrapper(
         dqn_agent=dqn_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo DQN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_dqn_model

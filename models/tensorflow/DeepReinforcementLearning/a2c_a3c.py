@@ -14,7 +14,7 @@ from typing import Tuple, Dict, List, Any, Optional, Union, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import A2C_A3C_CONFIG
+from config.models_config import A2C_A3C_CONFIG
 
 
 class ActorCriticModel(Model):

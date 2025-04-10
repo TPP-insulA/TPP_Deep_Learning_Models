@@ -14,8 +14,19 @@ import optax
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import REINFORCE_CONFIG
+from config.models_config import REINFORCE_CONFIG
 
+# Constantes para rutas de figuras y etiquetas comunes
+CONST_FIGURES_DIR = "figures/reinforcement_learning/reinforce_mcgp"
+CONST_EPISODE = "Episodio"
+CONST_REWARD = "Recompensa"
+CONST_POLICY_LOSS = "Pérdida de Política"
+CONST_ENTROPY = "Entropía"
+CONST_BASELINE_LOSS = "Pérdida de Baseline"
+CONST_RETURNS = "Retornos"
+CONST_STEPS = "Pasos"
+CONST_ORIGINAL = "Original"
+CONST_SMOOTHED = "Suavizado"
 
 class PolicyNetworkState(NamedTuple):
     """Estado para la red neuronal de política"""
@@ -692,49 +703,52 @@ class REINFORCE:
         render: bool = False
     ) -> Tuple[List[np.ndarray], List[Union[int, np.ndarray]], List[float], float, int]:
         """
-        Ejecuta un episodio completo y recolecta la experiencia.
+        Ejecuta un episodio completo.
         
         Parámetros:
         -----------
         env : Any
-            Entorno de OpenAI Gym o compatible
+            Entorno a interactuar
         render : bool, opcional
-            Si renderizar el entorno durante entrenamiento (default: False)
+            Si renderizar o no el entorno (default: False)
             
         Retorna:
         --------
         Tuple[List[np.ndarray], List[Union[int, np.ndarray]], List[float], float, int]
-            Tupla con (estados, acciones, recompensas, recompensa_total, longitud_episodio)
+            Estados, acciones, recompensas, recompensa total, longitud del episodio
         """
         state, _ = env.reset()
         done = False
+        states, actions, rewards = [], [], []
+        total_reward = 0
+        step = 0
         
-        # Almacenar datos del episodio
-        states = []
-        actions = []
-        rewards = []
-        
-        # Interactuar con el entorno hasta finalizar episodio
-        while not done:
+        while not done and step < REINFORCE_CONFIG.get('max_steps', 1000):
             if render:
                 env.render()
             
-            # Seleccionar acción según política actual
-            action = self.get_action(state)
+            # Convertir estado a array de JAX si es necesario
+            if not isinstance(state, np.ndarray):
+                state = np.array(state, dtype=np.float32)
             
-            # Dar paso en el entorno
+            # Tomar acción según la política actual
+            action = self.get_action(state, deterministic=False)
+            
+            # Ejecutar acción en el entorno
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
-            # Guardar transición
+            # Almacenar transición
             states.append(state)
             actions.append(action)
             rewards.append(reward)
             
-            # Avanzar al siguiente estado
+            # Actualizar
+            total_reward += reward
             state = next_state
+            step += 1
         
-        return states, actions, rewards, sum(rewards), len(rewards)
+        return states, actions, rewards, total_reward, step
     
     def _update_networks(
         self, 
@@ -1013,94 +1027,152 @@ class REINFORCE:
         
         print(f"Modelo cargado desde {policy_path}")
     
+    def _get_default_history(self) -> Dict[str, List[float]]:
+        """
+        Crea un historial predeterminado con las métricas actuales.
+        
+        Retorna:
+        --------
+        Dict[str, List[float]]
+            Historial predeterminado
+        """
+        history = {
+            'episode_rewards': [],
+            'episode_lengths': [],
+            'policy_losses': [self.policy_loss_metric],
+            'entropy': [self.entropy_metric],
+            'returns': [self.returns_metric]
+        }
+        if self.use_baseline:
+            history['baseline_losses'] = [self.baseline_loss_metric]
+        return history
+    
+    def _smooth_data(self, data: List[float], window_size: int) -> np.ndarray:
+        """
+        Suaviza datos usando una ventana deslizante.
+        
+        Parámetros:
+        -----------
+        data : List[float]
+            Datos a suavizar
+        window_size : int
+            Tamaño de la ventana de suavizado
+            
+        Retorna:
+        --------
+        np.ndarray
+            Datos suavizados
+        """
+        if len(data) < window_size:
+            return np.array(data)
+        kernel = np.ones(window_size) / window_size
+        return np.convolve(np.array(data), kernel, mode='valid')
+    
+    def _plot_metric(
+        self, 
+        ax: plt.Axes, 
+        data: List[float], 
+        smoothing_window: int, 
+        color: str,
+        title: str, 
+        xlabel: str, 
+        ylabel: str
+    ) -> None:
+        """
+        Dibuja un gráfico de métrica con datos originales y suavizados.
+        
+        Parámetros:
+        -----------
+        ax : plt.Axes
+            Ejes donde dibujar
+        data : List[float]
+            Datos a graficar
+        smoothing_window : int
+            Tamaño de ventana para suavizado
+        color : str
+            Color del gráfico
+        title : str
+            Título del gráfico
+        xlabel : str
+            Etiqueta del eje X
+        ylabel : str
+            Etiqueta del eje Y
+        """
+        ax.plot(data, alpha=0.3, color=color, label=CONST_ORIGINAL)
+        
+        if len(data) > smoothing_window:
+            smoothed = self._smooth_data(data, smoothing_window)
+            ax.plot(
+                range(smoothing_window-1, len(data)),
+                smoothed,
+                color=color,
+                label=f'{CONST_SMOOTHED} (ventana={smoothing_window})'
+            )
+            
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.legend()
+        ax.grid(alpha=0.3)
+    
     def visualize_training(
         self, 
         history: Optional[Dict[str, List[float]]] = None, 
         smoothing_window: Optional[int] = None
     ) -> None:
         """
-        Visualiza las métricas de entrenamiento.
+        Visualiza el historial de entrenamiento.
         
         Parámetros:
         -----------
         history : Optional[Dict[str, List[float]]], opcional
-            Historia de entrenamiento (default: None)
+            Historial de entrenamiento (default: None, usa el historial interno)
         smoothing_window : Optional[int], opcional
-            Tamaño de ventana para suavizado (default: None)
+            Tamaño de ventana para suavizado (default: None, usa valor configurado)
         """
-        if history is None:
-            return
+        # Usar historial proporcionado o interno
+        history = history or self._get_default_history()
         
-        if smoothing_window is None:
-            smoothing_window = REINFORCE_CONFIG['smoothing_window']
+        # Determinar tamaño de ventana de suavizado
+        smoothing_window = smoothing_window or REINFORCE_CONFIG.get('smoothing_window', 10)
         
-        # Función para suavizar datos
-        def smooth(data: List[float], window_size: int) -> np.ndarray:
-            """Aplica suavizado con media móvil"""
-            if len(data) < window_size:
-                return data
-            kernel = np.ones(window_size) / window_size
-            return np.convolve(data, kernel, mode='valid')
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
         
-        # Determinar número de subplots
-        n_plots = 4 if self.use_baseline else 3
-        _, axs = plt.subplots(n_plots, 1, figsize=(10, 3*n_plots))
+        # Comprobar métricas disponibles
+        metrics_config = [
+            ('episode_rewards', 'blue', f'{CONST_REWARD}s por {CONST_EPISODE}', CONST_EPISODE, CONST_REWARD),
+            ('episode_lengths', 'green', f'Longitud de {CONST_EPISODE}s', CONST_EPISODE, CONST_STEPS),
+            ('policy_losses', 'red', CONST_POLICY_LOSS, CONST_EPISODE, CONST_POLICY_LOSS),
+            ('entropy', 'purple', CONST_ENTROPY, CONST_EPISODE, CONST_ENTROPY),
+            ('baseline_losses', 'orange', CONST_BASELINE_LOSS, CONST_EPISODE, CONST_BASELINE_LOSS),
+            ('returns', 'brown', CONST_RETURNS, CONST_EPISODE, CONST_RETURNS)
+        ]
         
-        # 1. Gráfico de recompensas
-        axs[0].plot(history['episode_rewards'], alpha=0.3, color='blue', label='Original')
-        if len(history['episode_rewards']) > smoothing_window:
-            smoothed_rewards = smooth(history['episode_rewards'], smoothing_window)
-            axs[0].plot(range(smoothing_window-1, len(history['episode_rewards'])), 
-                      smoothed_rewards, color='blue', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[0].set_title('Recompensa por Episodio')
-        axs[0].set_xlabel('Episodio')
-        axs[0].set_ylabel('Recompensa')
-        axs[0].grid(alpha=0.3)
-        axs[0].legend()
+        # Filtrar métricas disponibles en el historial
+        available_metrics = [(key, color, title, xlabel, ylabel) 
+                             for key, color, title, xlabel, ylabel in metrics_config
+                             if key in history and history[key]]
         
-        # 2. Gráfico de longitud de episodios
-        axs[1].plot(history['episode_lengths'], alpha=0.3, color='green', label='Original')
-        if len(history['episode_lengths']) > smoothing_window:
-            smoothed_lengths = smooth(history['episode_lengths'], smoothing_window)
-            axs[1].plot(range(smoothing_window-1, len(history['episode_lengths'])), 
-                      smoothed_lengths, color='green', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[1].set_title('Longitud de Episodios')
-        axs[1].set_xlabel('Episodio')
-        axs[1].set_ylabel('Pasos')
-        axs[1].grid(alpha=0.3)
-        axs[1].legend()
+        n_plots = len(available_metrics)
         
-        # 3. Gráfico de pérdida de política
-        axs[2].plot(history['policy_losses'], alpha=0.3, color='red', label='Original')
-        if len(history['policy_losses']) > smoothing_window:
-            smoothed_losses = smooth(history['policy_losses'], smoothing_window)
-            axs[2].plot(range(smoothing_window-1, len(history['policy_losses'])), 
-                      smoothed_losses, color='red', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[2].set_title('Pérdida de Política')
-        axs[2].set_xlabel('Episodio')
-        axs[2].set_ylabel('Pérdida')
-        axs[2].grid(alpha=0.3)
-        axs[2].legend()
-        
-        # 4. Gráfico de pérdida de baseline (si se usa)
-        if self.use_baseline:
-            axs[3].plot(history['baseline_losses'], alpha=0.3, color='purple', label='Original')
-            if len(history['baseline_losses']) > smoothing_window:
-                smoothed_baseline = smooth(history['baseline_losses'], smoothing_window)
-                axs[3].plot(range(smoothing_window-1, len(history['baseline_losses'])), 
-                          smoothed_baseline, color='purple', 
-                          label=f'Suavizado (ventana={smoothing_window})')
-            axs[3].set_title('Pérdida de Baseline')
-            axs[3].set_xlabel('Episodio')
-            axs[3].set_ylabel('Pérdida')
-            axs[3].grid(alpha=0.3)
-            axs[3].legend()
-        
-        plt.tight_layout()
-        plt.show()
+        # Crear figura si hay datos para mostrar
+        if n_plots > 0:
+            _, axs = plt.subplots(n_plots, 1, figsize=(12, 3 * n_plots))
+            axs = [axs] if n_plots == 1 else axs
+            
+            # Graficar cada métrica disponible
+            for i, (key, color, title, xlabel, ylabel) in enumerate(available_metrics):
+                self._plot_metric(
+                    axs[i], history[key], smoothing_window, 
+                    color, title, xlabel, ylabel
+                )
+            
+            plt.tight_layout()
+            
+            # Guardar figura
+            plt.savefig(os.path.join(CONST_FIGURES_DIR, "entrenamiento_resumen.png"), dpi=300)
+            plt.show()
 
 class REINFORCEWrapper:
     """
@@ -1556,3 +1628,14 @@ def create_reinforce_mcgp_model(cgm_shape: Tuple[int, ...], other_features_shape
     
     # Crear y devolver wrapper
     return REINFORCEWrapper(reinforce_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], REINFORCEWrapper]:
+    """
+    Retorna una función para crear un modelo REINFORCE compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], REINFORCEWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_reinforce_mcgp_model

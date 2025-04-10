@@ -13,7 +13,17 @@ from functools import partial
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import A2C_A3C_CONFIG
+from config.models_config import A2C_A3C_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper
+
+# Constantes para uso repetido
+CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_POLICY_LOSS = "policy_loss"
+CONST_VALUE_LOSS = "value_loss"
+CONST_ENTROPY_LOSS = "entropy_loss"
+CONST_TOTAL_LOSS = "total_loss"
+CONST_EPISODE_REWARDS = "episode_rewards"
 
 
 class ActorCriticModel(nn.Module):
@@ -1844,7 +1854,7 @@ class A3CWrapper(A2CWrapper):
         return config
 
 
-def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> A2CWrapper:
+def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en A2C (Advantage Actor-Critic) para predicción de dosis de insulina.
     
@@ -1857,8 +1867,8 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    A2CWrapper
-        Wrapper de A2C que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper del modelo A2C compatible con la interfaz del sistema
     """
     # Configurar el espacio de estados y acciones
     state_dim = 64  # Dimensión del espacio de estado latente
@@ -1879,15 +1889,28 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=42
     )
     
-    # Crear y devolver wrapper
-    return A2CWrapper(
+    # Crear wrapper del agente para compatibilidad con sistema de model creators
+    wrapper = A2CWrapper(
         a2c_agent=a2c_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Envolver en DRLModelWrapper para compatibilidad total con el sistema
+    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="a2c")
 
+def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo A2C compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_a2c_model
 
-def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> A3CWrapper:
+def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en A3C (Asynchronous Advantage Actor-Critic) para predicción de dosis de insulina.
     
@@ -1900,8 +1923,8 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    A3CWrapper
-        Wrapper de A3C que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper del modelo A3C compatible con la interfaz del sistema
     """
     # Configurar el espacio de estados y acciones
     state_dim = 64  # Dimensión del espacio de estado latente
@@ -1924,9 +1947,23 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=42
     )
     
-    # Crear y devolver wrapper
-    return A3CWrapper(
+    # Crear wrapper del agente para compatibilidad con sistema de model creators
+    wrapper = A3CWrapper(
         a3c_agent=a3c_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Envolver en DRLModelWrapper para compatibilidad total con el sistema
+    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="a3c")
+
+def model_creator_a3c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
+    """
+    Retorna una función para crear un modelo A3C compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_a3c_model

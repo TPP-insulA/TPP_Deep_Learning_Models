@@ -7,7 +7,18 @@ from typing import Dict, Tuple, List, Any, Optional, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TRANSFORMER_CONFIG
+from config.models_config import TRANSFORMER_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_GELU = "gelu"
+CONST_RELU = "relu"
+CONST_SELU = "selu"
+CONST_SIGMOID = "sigmoid"
+CONST_TANH = "tanh"
+CONST_EPSILON = "epsilon"
+CONST_VALID = "VALID"
+CONST_SAME = "SAME"
 
 class PositionEncoding(nn.Module):
     """
@@ -72,15 +83,15 @@ def apply_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     jnp.ndarray
         Tensor con la activación aplicada
     """
-    if activation_name == 'gelu':
+    if activation_name == CONST_GELU:
         return nn.gelu(x)
-    elif activation_name == 'relu':
+    elif activation_name == CONST_RELU:
         return nn.relu(x)
-    elif activation_name == 'selu':
+    elif activation_name == CONST_SELU:
         return nn.selu(x)
-    elif activation_name == 'sigmoid':
+    elif activation_name == CONST_SIGMOID:
         return jax.nn.sigmoid(x)
-    elif activation_name == 'tanh':
+    elif activation_name == CONST_TANH:
         return jnp.tanh(x)
     else:
         return nn.relu(x)  # Por defecto
@@ -115,7 +126,7 @@ def create_transformer_block(inputs: jnp.ndarray, head_size: int, num_heads: int
     """
     if prenorm:
         # Pre-normalization architecture (mejor estabilidad de entrenamiento)
-        x = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG['epsilon'])(inputs)
+        x = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG[CONST_EPSILON])(inputs)
         x = nn.MultiHeadAttention(
             num_heads=num_heads,
             key_size=head_size,
@@ -128,7 +139,7 @@ def create_transformer_block(inputs: jnp.ndarray, head_size: int, num_heads: int
         res1 = inputs + x
         
         # Red feed-forward
-        x = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG['epsilon'])(res1)
+        x = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG[CONST_EPSILON])(res1)
         x = nn.Dense(ff_dim)(x)
         x = apply_activation(x, TRANSFORMER_CONFIG['activation'])
         x = nn.Dropout(rate=dropout_rate, deterministic=deterministic)(x)
@@ -146,7 +157,7 @@ def create_transformer_block(inputs: jnp.ndarray, head_size: int, num_heads: int
             deterministic=deterministic
         )(inputs, inputs)
         attn = nn.Dropout(rate=dropout_rate, deterministic=deterministic)(attn)
-        res1 = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG['epsilon'])(inputs + attn)
+        res1 = nn.LayerNorm(epsilon=TRANSFORMER_CONFIG[CONST_EPSILON])(inputs + attn)
         
         # Red feed-forward
         ffn = nn.Dense(ff_dim)(res1)
@@ -154,7 +165,7 @@ def create_transformer_block(inputs: jnp.ndarray, head_size: int, num_heads: int
         ffn = nn.Dropout(rate=dropout_rate, deterministic=deterministic)(ffn)
         ffn = nn.Dense(inputs.shape[-1])(ffn)
         ffn = nn.Dropout(rate=dropout_rate, deterministic=deterministic)(ffn)
-        return nn.LayerNorm(epsilon=TRANSFORMER_CONFIG['epsilon'])(res1 + ffn)
+        return nn.LayerNorm(epsilon=TRANSFORMER_CONFIG[CONST_EPSILON])(res1 + ffn)
 
 class TransformerModel(nn.Module):
     """
@@ -174,23 +185,24 @@ class TransformerModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
         Aplica el modelo Transformer a las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
-        training : bool
-            Indica si está en modo entrenamiento
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
             
         Retorna:
         --------
         jnp.ndarray
             Predicciones del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
         # Proyección inicial y codificación posicional
@@ -225,7 +237,7 @@ class TransformerModel(nn.Module):
         skip = x
         x = nn.Dense(128)(x)
         x = apply_activation(x, self.config['activation'])
-        x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
+        x = nn.LayerNorm(epsilon=self.config[CONST_EPSILON])(x)
         x = nn.Dropout(rate=self.config['dropout_rate'], deterministic=deterministic)(x)
         
         x = nn.Dense(128)(x)
@@ -237,28 +249,28 @@ class TransformerModel(nn.Module):
         
         x = nn.Dense(64)(x)
         x = apply_activation(x, self.config['activation'])
-        x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
+        x = nn.LayerNorm(epsilon=self.config[CONST_EPSILON])(x)
         x = nn.Dropout(rate=self.config['dropout_rate'], deterministic=deterministic)(x)
         
         output = nn.Dense(1)(x)
         
         return output
 
-def create_transformer_model(cgm_shape: tuple, other_features_shape: tuple) -> TransformerModel:
+def create_transformer_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
     Crea un modelo Transformer con entrada dual para datos CGM y otras características con JAX/Flax.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    transformer_model
-        Modelo Transformer inicializado
+    DLModelWrapper
+        Modelo Transformer inicializado y envuelto en DLModelWrapper
     """
     model = TransformerModel(
         config=TRANSFORMER_CONFIG,
@@ -266,4 +278,16 @@ def create_transformer_model(cgm_shape: tuple, other_features_shape: tuple) -> T
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo Transformer compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_transformer_model

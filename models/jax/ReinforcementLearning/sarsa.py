@@ -5,15 +5,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 import time
-from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple
+from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple, Callable
 from functools import partial
 from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import SARSA_CONFIG
+from config.models_config import SARSA_CONFIG
 
+# Constantes para rutas de figuras y etiquetas comunes
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "sarsa")
+CONST_EPISODE_LABEL = "Episodio"
+CONST_REWARD_LABEL = "Recompensa" 
+CONST_STEPS_LABEL = "Pasos"
+CONST_EPSILON_LABEL = "Epsilon"
+CONST_ORIGINAL_LABEL = "Original"
+CONST_SMOOTHED_LABEL = "Suavizado"
 
 class SARSAState(NamedTuple):
     """Estado interno para agente SARSA con JAX (inmutabilidad)"""
@@ -628,26 +636,31 @@ class SARSA:
         smoothing_window: Optional[int] = None
     ) -> None:
         """
-        Visualiza las métricas de entrenamiento.
+        Visualiza el historial de entrenamiento.
         
         Parámetros:
         -----------
         training_history : Optional[Dict[str, List[float]]], opcional
-            Historia de entrenamiento (default: None)
+            Historial de entrenamiento (default: None, usa historial interno)
         smoothing_window : Optional[int], opcional
-            Tamaño de ventana para suavizado (default: None)
+            Tamaño de ventana para suavizado (default: None, usa valor de configuración)
         """
+        # Usar historial proporcionado o interno
         if training_history is None:
-            # Usar historial almacenado internamente
             rewards = self.state.episode_rewards
             lengths = self.state.episode_lengths
             epsilons = self.state.epsilon_history
         else:
-            # Usar historial proporcionado
-            rewards = training_history['rewards']
-            lengths = training_history['lengths']
-            epsilons = training_history['epsilons']
+            rewards = training_history.get('rewards', [])
+            lengths = training_history.get('lengths', [])
+            epsilons = training_history.get('epsilons', [])
         
+        # Verificar que hay datos para graficar
+        if not rewards:
+            print("No hay datos de entrenamiento para visualizar")
+            return
+        
+        # Usar ventana de suavizado de configuración si no se especifica
         smoothing_window = smoothing_window or self.config['smoothing_window']
         
         # Función para suavizar datos
@@ -658,49 +671,55 @@ class SARSA:
             kernel = np.ones(window_size) / window_size
             return np.convolve(np.array(data), kernel, mode='valid')
         
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
+        
         # Crear figura con tres subplots
         _, axs = plt.subplots(3, 1, figsize=(10, 12))
         
         # 1. Gráfico de recompensas
-        axs[0].plot(rewards, alpha=0.3, color='blue', label='Original')
+        axs[0].plot(rewards, alpha=0.3, color='blue', label=CONST_ORIGINAL_LABEL)
         if len(rewards) > smoothing_window:
             smoothed_rewards = smooth(rewards, smoothing_window)
             axs[0].plot(
                 range(smoothing_window-1, len(rewards)),
                 smoothed_rewards,
                 color='blue',
-                label=f'Suavizado (ventana={smoothing_window})'
+                label=f'{CONST_SMOOTHED_LABEL} (ventana={smoothing_window})'
             )
-        axs[0].set_title('Recompensas por Episodio')
-        axs[0].set_xlabel('Episodio')
-        axs[0].set_ylabel('Recompensa')
+        axs[0].set_title(f'{CONST_REWARD_LABEL}s por {CONST_EPISODE_LABEL}')
+        axs[0].set_xlabel(CONST_EPISODE_LABEL)
+        axs[0].set_ylabel(CONST_REWARD_LABEL)
         axs[0].legend()
         axs[0].grid(alpha=0.3)
         
         # 2. Gráfico de longitud de episodios
-        axs[1].plot(lengths, alpha=0.3, color='green', label='Original')
+        axs[1].plot(lengths, alpha=0.3, color='green', label=CONST_ORIGINAL_LABEL)
         if len(lengths) > smoothing_window:
             smoothed_lengths = smooth(lengths, smoothing_window)
             axs[1].plot(
                 range(smoothing_window-1, len(lengths)),
                 smoothed_lengths,
                 color='green',
-                label=f'Suavizado (ventana={smoothing_window})'
+                label=f'{CONST_SMOOTHED_LABEL} (ventana={smoothing_window})'
             )
-        axs[1].set_title('Longitud de Episodios')
-        axs[1].set_xlabel('Episodio')
-        axs[1].set_ylabel('Pasos')
+        axs[1].set_title(f'Longitud de {CONST_EPISODE_LABEL}s')
+        axs[1].set_xlabel(CONST_EPISODE_LABEL)
+        axs[1].set_ylabel(CONST_STEPS_LABEL)
         axs[1].legend()
         axs[1].grid(alpha=0.3)
         
         # 3. Gráfico de epsilon
         axs[2].plot(epsilons, color='red')
-        axs[2].set_title('Valor de Epsilon (Exploración)')
-        axs[2].set_xlabel('Episodio')
-        axs[2].set_ylabel('Epsilon')
+        axs[2].set_title(f'Valor de {CONST_EPSILON_LABEL} (Exploración)')
+        axs[2].set_xlabel(CONST_EPISODE_LABEL)
+        axs[2].set_ylabel(CONST_EPSILON_LABEL)
         axs[2].grid(alpha=0.3)
         
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(FIGURES_DIR, "entrenamiento_resumen.png"), dpi=300)
         plt.show()
     
     def visualize_policy(
@@ -725,6 +744,9 @@ class SARSA:
         if self.state_dim < 2:
             print("Visualización requiere al menos 2 dimensiones de estado")
             return
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # Crear malla para visualización
         dim1, dim2 = state_dims
@@ -763,6 +785,9 @@ class SARSA:
         plt.xlabel(f'Dimensión de Estado {dim1}')
         plt.ylabel(f'Dimensión de Estado {dim2}')
         plt.grid(alpha=0.2)
+        
+        # Guardar figura
+        plt.savefig(os.path.join(FIGURES_DIR, "politica_visualizacion.png"), dpi=300)
         plt.show()
     
     def visualize_value_function(
@@ -1262,3 +1287,14 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
     
     # Crear y devolver wrapper
     return SARSAWrapper(sarsa_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], SARSAWrapper]:
+    """
+    Retorna una función para crear un modelo SARSA compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], SARSAWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_sarsa_model

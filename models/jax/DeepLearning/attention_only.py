@@ -1,13 +1,21 @@
-import os, sys
+import os
+import sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from typing import Tuple, Dict, Any, Optional, Callable
+import numpy as np
+from typing import Tuple, Dict, Any, Optional, Callable, Union
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import ATTENTION_CONFIG
+from config.models_config import ATTENTION_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_ATTENTION_BLOCK = "attention_block"
+CONST_ACTOR_KEY = "actor_key"
+CONST_CRITIC_KEY = "critic_key"
 
 class RelativePositionEncoding(nn.Module):
     """
@@ -19,16 +27,14 @@ class RelativePositionEncoding(nn.Module):
         Posición máxima a codificar
     depth : int
         Profundidad de la codificación
-        
-    Retorna:
-    --------
-    jnp.ndarray
-        Tensor de codificación de posición
     """
     max_position: int
     depth: int
     
-    def setup(self):
+    def setup(self) -> None:
+        """
+        Inicializa los parámetros de codificación de posición.
+        """
         self.rel_embeddings = self.param(
             "rel_embeddings", 
             nn.initializers.glorot_uniform(),
@@ -36,14 +42,31 @@ class RelativePositionEncoding(nn.Module):
         )
     
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Aplica la codificación de posición relativa a las entradas.
+        
+        Parámetros:
+        -----------
+        inputs : jnp.ndarray
+            Tensor de entrada
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Tensor de codificación de posición
+        """
         length = inputs.shape[1]
         pos_range = jnp.arange(length)
         pos_indices = pos_range[:, None] - pos_range[None, :] + self.max_position - 1
         pos_emb = self.rel_embeddings[pos_indices]
         return pos_emb
 
-def create_attention_block(x: jnp.ndarray, num_heads: int, key_dim: int,
-                           ff_dim: int, dropout_rate: float, deterministic: bool = False) -> jnp.ndarray:
+def create_attention_block(x: jnp.ndarray, 
+                          num_heads: int, 
+                          key_dim: int,
+                          ff_dim: int, 
+                          dropout_rate: float, 
+                          deterministic: bool = False) -> jnp.ndarray:
     """
     Crea un bloque de atención mejorado con posición relativa y gating.
 
@@ -59,8 +82,8 @@ def create_attention_block(x: jnp.ndarray, num_heads: int, key_dim: int,
         Dimensión de la red feed-forward
     dropout_rate : float
         Tasa de dropout
-    deterministic : bool
-        Indica si está en modo evaluación (no aplicar dropout)
+    deterministic : bool, opcional
+        Indica si está en modo evaluación (no aplicar dropout) (default: False)
     
     Retorna:
     --------
@@ -150,8 +173,24 @@ class AttentionModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
-        cgm_input, other_input = inputs
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Ejecuta el modelo de atención sobre las entradas.
+        
+        Parámetros:
+        -----------
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones del modelo
+        """
         deterministic = not training
         
         # Proyección inicial
@@ -235,21 +274,21 @@ def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     else:
         return nn.relu(x)  # Valor por defecto
 
-def create_attention_model(cgm_shape: tuple, other_features_shape: tuple) -> AttentionModel:
+def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Crea un modelo basado únicamente en mecanismos de atención con JAX/Flax.
+    Crea un modelo basado en mecanismos de atención envuelto en un DLModelWrapper.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    attention_model
-        Modelo Flax inicializado
+    DLModelWrapper
+        Modelo envuelto en DLModelWrapper para compatibilidad con el sistema
     """
     model = AttentionModel(
         config=ATTENTION_CONFIG,
@@ -257,4 +296,17 @@ def create_attention_model(cgm_shape: tuple, other_features_shape: tuple) -> Att
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver en DLModelWrapper para API consistente
+    return DLModelWrapper(lambda **kwargs: model)
+
+# Función creadora de modelo que será usada por el sistema
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo de atención compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_attention_model

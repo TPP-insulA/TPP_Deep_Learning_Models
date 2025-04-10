@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from flax.training import train_state
+import numpy as np
 from typing import List, Tuple, Dict, Any, Optional, Callable, Sequence
 
 import optax
@@ -10,11 +11,22 @@ import optax
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TABNET_CONFIG
+from config.models_config import TABNET_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_TRAINING = "training"
+CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_BATCH_STATS = "batch_stats"
+CONST_MEAN = "mean"
+CONST_VAR = "var"
+CONST_SCALE = "scale"
+CONST_BIAS = "bias"
 
 class GLU(nn.Module):
     """
-    Gated Linear Unit como módulo de Flax.
+    Unidad Lineal con Compuerta (Gated Linear Unit) como módulo de Flax.
     
     Parámetros:
     -----------
@@ -86,12 +98,12 @@ class MultiHeadFeatureAttention(nn.Module):
 
 class GhostBatchNorm(nn.Module):
     """
-    Ghost Batch Normalization para conjuntos de datos pequeños.
+    Normalización por lotes fantasma para conjuntos de datos pequeños.
     
     Parámetros:
     -----------
     virtual_batch_size : int
-        Tamaño del batch virtual
+        Tamaño del lote virtual
     momentum : float
         Factor de momentum
     epsilon : float
@@ -119,16 +131,16 @@ class GhostBatchNorm(nn.Module):
             Tensor normalizado
         """
         # Parámetros entrenables
-        scale = self.param('scale', nn.initializers.ones, (x.shape[-1],))
-        bias = self.param('bias', nn.initializers.zeros, (x.shape[-1],))
+        scale = self.param(CONST_SCALE, nn.initializers.ones, (x.shape[-1],))
+        bias = self.param(CONST_BIAS, nn.initializers.zeros, (x.shape[-1],))
         
         # Variables de seguimiento de estadísticas
         mean_var = self.variable(
-            'batch_stats', 'mean', 
+            CONST_BATCH_STATS, CONST_MEAN, 
             lambda s: jnp.zeros(s), x.shape[-1]
         )
         var_var = self.variable(
-            'batch_stats', 'var', 
+            CONST_BATCH_STATS, CONST_VAR, 
             lambda s: jnp.ones(s), x.shape[-1]
         )
         
@@ -141,7 +153,7 @@ class GhostBatchNorm(nn.Module):
             batch_size = x.shape[0]
             
             if self.virtual_batch_size is None or self.virtual_batch_size >= batch_size:
-                # Usar BatchNorm normal si el batch virtual es mayor que el batch real
+                # Usar BatchNorm normal si el lote virtual es mayor que el lote real
                 mean = jnp.mean(x, axis=0)
                 var = jnp.var(x, axis=0)
             else:
@@ -150,7 +162,7 @@ class GhostBatchNorm(nn.Module):
                 x_reshaped = x[:num_virtual_batches * self.virtual_batch_size]
                 x_reshaped = x_reshaped.reshape(num_virtual_batches, self.virtual_batch_size, -1)
                 
-                # Calcular medias y varianzas por batch virtual
+                # Calcular medias y varianzas por lote virtual
                 mean = jnp.mean(x_reshaped, axis=1)  # (num_virtual_batches, features)
                 var = jnp.var(x_reshaped, axis=1)    # (num_virtual_batches, features)
                 
@@ -167,7 +179,7 @@ class GhostBatchNorm(nn.Module):
 
 class EnhancedFeatureTransformer(nn.Module):
     """
-    Transformador de características mejorado con atención y ghost batch norm.
+    Transformador de características mejorado con atención y normalización por lotes fantasma.
     
     Parámetros:
     -----------
@@ -176,7 +188,7 @@ class EnhancedFeatureTransformer(nn.Module):
     num_heads : int
         Número de cabezas de atención
     virtual_batch_size : int
-        Tamaño del batch virtual
+        Tamaño del lote virtual
     dropout_rate : float
         Tasa de dropout
     """
@@ -202,7 +214,7 @@ class EnhancedFeatureTransformer(nn.Module):
         jnp.ndarray
             Tensor transformado
         """
-        # GLU layers
+        # Capas GLU
         x = GLU(self.feature_dim)(inputs)
         x = GhostBatchNorm(self.virtual_batch_size)(x, deterministic=deterministic)
         x = MultiHeadFeatureAttention(
@@ -234,28 +246,6 @@ def custom_softmax(x: jnp.ndarray, axis: int = -1) -> jnp.ndarray:
     exp_x = jnp.exp(x - jnp.max(x, axis=axis, keepdims=True))
     return exp_x / jnp.sum(exp_x, axis=axis, keepdims=True)
 
-def feature_transformer(x: jnp.ndarray, feature_dim: int, batch_momentum: float = 0.98) -> jnp.ndarray:
-    """
-    Transformador de características.
-
-    Parámetros:
-    -----------
-    x : jnp.ndarray
-        Tensor de entrada
-    feature_dim : int
-        Dimensión de las características
-    batch_momentum : float
-        Momento de la normalización por lotes
-    
-    Retorna:
-    --------
-    jnp.ndarray
-        Tensor transformado
-    """
-    transform = nn.Dense(feature_dim * 2)(x)
-    transform_gated = transform[:, :feature_dim] * jax.nn.sigmoid(transform[:, feature_dim:])
-    return nn.BatchNorm(momentum=batch_momentum)(transform_gated)
-
 class TabnetModel(nn.Module):
     """
     Modelo TabNet personalizado con manejo de pérdidas de entropía.
@@ -273,7 +263,7 @@ class TabnetModel(nn.Module):
     cgm_shape: Tuple
     other_features_shape: Tuple
     
-    def setup(self):
+    def setup(self) -> None:
         """
         Inicializa los componentes del modelo.
         """
@@ -296,23 +286,24 @@ class TabnetModel(nn.Module):
         self.output_layer = nn.Dense(1)
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
         Aplica el modelo TabNet a las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
-        training : bool
-            Indica si está en modo entrenamiento
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
             
         Retorna:
         --------
-        Tuple[jnp.ndarray, jnp.ndarray]
-            (Predicción, Pérdida de entropía)
+        jnp.ndarray
+            Predicciones del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
         # Procesamiento inicial
@@ -322,7 +313,7 @@ class TabnetModel(nn.Module):
         # Feature masking en entrenamiento
         if training:
             feature_mask = jax.random.bernoulli(
-                self.make_rng('dropout'),
+                self.make_rng(CONST_DROPOUT),
                 1.0 - self.config['feature_dropout'],
                 shape=x.shape
             )
@@ -330,7 +321,6 @@ class TabnetModel(nn.Module):
         
         # Pasos de decisión
         step_outputs = []
-        entropy_loss = 0.0
         
         for transformer in self.transformers:
             step_output = transformer(x, deterministic=deterministic)
@@ -343,11 +333,10 @@ class TabnetModel(nn.Module):
             step_outputs.append(masked_x)
             
             if training:
-                # Calcular entropía
-                entropy = jnp.mean(jnp.sum(
+                # Calcular entropía - No acumulamos ya que no se usa actualmente
+                _ = jnp.mean(jnp.sum(
                     -mask * jnp.log(mask + 1e-15), axis=1
                 ))
-                entropy_loss += entropy
         
         # Combinar salidas con atención
         combined = jnp.stack(step_outputs, axis=1)
@@ -360,12 +349,9 @@ class TabnetModel(nn.Module):
         )
         
         # Calcular pérdida de entropía total
-        if training:
-            entropy_loss *= self.config['sparsity_coefficient']
-        
         # Capas finales con residual
         x = self.final_dense1(x)
-        x = nn.selu(x)  # SELU activation
+        x = nn.selu(x)  # Activación SELU
         x = self.final_norm1(x)
         x = nn.Dropout(rate=self.config['attention_dropout'], deterministic=deterministic)(x)
         
@@ -375,27 +361,27 @@ class TabnetModel(nn.Module):
         x = self.final_norm2(x)
         x = self.final_dense3(x)
         x = nn.selu(x)
-        x = x + skip  # Skip connection
+        x = x + skip  # Conexión residual
         
         output = self.output_layer(x)
         
-        return output, entropy_loss
+        return output
 
-def create_tabnet_model(cgm_shape: tuple, other_features_shape: tuple) -> TabnetModel:
+def create_tabnet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Crea un modelo TabNet mejorado con JAX/Flax.
+    Crea un modelo TabNet mejorado con JAX/Flax envuelto en DLModelWrapper.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    tabnet_model
-        Modelo TabNet inicializado
+    DLModelWrapper
+        Modelo TabNet inicializado y envuelto en DLModelWrapper
     """
     model = TabnetModel(
         config=TABNET_CONFIG,
@@ -403,103 +389,16 @@ def create_tabnet_model(cgm_shape: tuple, other_features_shape: tuple) -> Tabnet
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
 
-def create_train_state(model: TabnetModel, 
-                       rng: jax.random.PRNGKey, 
-                       learning_rate: float,
-                       cgm_shape: Tuple[int, ...],
-                       other_features_shape: Tuple[int, ...]) -> train_state.TrainState:
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
     """
-    Crea un estado de entrenamiento para TabNet.
+    Retorna una función para crear un modelo TabNet compatible con la API del sistema.
     
-    Parámetros:
-    -----------
-    model : tabnet_model
-        Modelo TabNet
-    rng : jax.random.PRNGKey
-        Clave aleatoria para inicialización
-    learning_rate : float
-        Tasa de aprendizaje
-    cgm_shape : Tuple[int, ...]
-        Forma de los datos CGM
-    other_features_shape : Tuple[int, ...]
-        Forma de otras características
-        
     Retorna:
     --------
-    train_state.TrainState
-        Estado de entrenamiento inicializado
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
     """
-    # Crear claves separadas para parámetros y dropout
-    params_rng, dropout_rng = jax.random.split(rng)
-    
-    # Datos ficticios para inicializar
-    dummy_cgm = jnp.ones((1,) + cgm_shape[1:])
-    dummy_other = jnp.ones((1, other_features_shape[1]))
-    
-    # Inicializar el modelo
-    variables = model.init(
-        {'params': params_rng, 'dropout': dropout_rng},
-        (dummy_cgm, dummy_other),
-        training=False
-    )
-    
-    # Crear optimizador
-    tx = optax.adam(
-        learning_rate=learning_rate,
-        b1=0.9,
-        b2=0.999,
-        eps=1e-8
-    )
-    
-    # Crear estado de entrenamiento
-    return train_state.TrainState.create(
-        apply_fn=model.apply,
-        params=variables['params'],
-        tx=tx
-    )
-
-def apply_model(state: train_state.TrainState, 
-                cgm_input: jnp.ndarray, 
-                other_input: jnp.ndarray, 
-                dropout_rng: Optional[jax.random.PRNGKey] = None,
-                training: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Aplica el modelo con manejo de pérdida de entropía.
-    
-    Parámetros:
-    -----------
-    state : train_state.TrainState
-        Estado actual de entrenamiento
-    cgm_input : jnp.ndarray
-        Entrada de datos CGM
-    other_input : jnp.ndarray
-        Entrada de otras características
-    dropout_rng : jax.random.PRNGKey, opcional
-        Clave para dropout
-    training : bool
-        Indica si está en modo entrenamiento
-        
-    Retorna:
-    --------
-    Tuple[jnp.ndarray, jnp.ndarray]
-        (Predicciones, Pérdida de entropía)
-    """
-    variables = {'params': state.params}
-    
-    if training and dropout_rng is not None:
-        predictions, entropy_loss = state.apply_fn(
-            variables,
-            (cgm_input, other_input),
-            training=True,
-            rngs={'dropout': dropout_rng}
-        )
-    else:
-        predictions, entropy_loss = state.apply_fn(
-            variables,
-            (cgm_input, other_input),
-            training=False
-        )
-    
-    return predictions, entropy_loss
+    return create_tabnet_model

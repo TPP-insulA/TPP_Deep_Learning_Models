@@ -11,7 +11,16 @@ from functools import partial
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import POLICY_ITERATION_CONFIG
+from config.models_config import POLICY_ITERATION_CONFIG
+
+# Constantes para rutas de figuras y mensajes recurrentes
+FIGURES_DIR = "figures/reinforcement_learning/policy_iteration"
+CONST_ITERATION_LABEL = "Iteración"
+CONST_REWARD_LABEL = "Recompensa"
+CONST_VALUE_LABEL = "Valor"
+CONST_TIME_LABEL = "Tiempo (segundos)"
+CONST_POLICY_LABEL = "Política"
+CONST_EINSUM_PATTERN = 'san,n->sa'  # Patrón para calcular valores esperados
 
 
 class PolicyIteration:
@@ -22,9 +31,6 @@ class PolicyIteration:
     de valor para la política actual) y Mejora de Política (hacer la política codiciosa
     respecto a la función de valor actual).
     """
-    # Constantes para etiquetas de gráficos y operaciones
-    ITERATION_LABEL = 'Iteración'
-    EINSUM_PATTERN = 'san,n->sa'  # Patrón para calcular valores esperados
     
     def __init__(
         self,
@@ -67,7 +73,7 @@ class PolicyIteration:
         
         # Configurar claves para aleatorización
         self.key = jax.random.key(seed)
-        self.np_rng = np.random.Generator(np.random.PCG64(seed))
+        self.rng = np.random.Generator(np.random.PCG64(seed))
         
         # Inicializar función de valor
         self.v = jnp.zeros(n_states)
@@ -154,7 +160,7 @@ class PolicyIteration:
         # Calcular el valor de cada estado siguiendo la política
         # Para cada estado s, acción a, y estado siguiente s':
         # v_new[s] = sum_a policy[s,a] * (rewards[s,a] + gamma * sum_s' P[s,a,s'] * v[s'] * (not terminal[s,a]))
-        expected_values = rewards + self.gamma * jnp.einsum(self.EINSUM_PATTERN, transition_probs, v)
+        expected_values = rewards + self.gamma * jnp.einsum(CONST_EINSUM_PATTERN, transition_probs, v)
         expected_values = jnp.where(terminals, rewards, expected_values)
         
         # Promediar sobre la política
@@ -609,7 +615,7 @@ class PolicyIteration:
         @jax.jit
         def value_iteration_step(v: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
             # Calcular valores para todas las acciones en todos los estados
-            expected_values = rewards + self.gamma * jnp.einsum(self.EINSUM_PATTERN, transition_probs, v)
+            expected_values = rewards + self.gamma * jnp.einsum(CONST_EINSUM_PATTERN, transition_probs, v)
             expected_values = jnp.where(terminals, rewards, expected_values)
             expected_values = jnp.where(terminals, rewards, expected_values)
             
@@ -634,7 +640,7 @@ class PolicyIteration:
                 break
         
         # Calcular valores para todas las acciones
-        expected_values = rewards + self.gamma * jnp.einsum(self.EINSUM_PATTERN, transition_probs, v)
+        expected_values = rewards + self.gamma * jnp.einsum(CONST_EINSUM_PATTERN, transition_probs, v)
         expected_values = jnp.where(terminals, rewards, expected_values)
         expected_values = jnp.where(terminals, rewards, expected_values)
         
@@ -818,6 +824,8 @@ class PolicyIteration:
         
         ax.set_title(title)
         plt.tight_layout()
+        os.makedirs(FIGURES_DIR, exist_ok=True)
+        plt.savefig(os.path.join(FIGURES_DIR, f"politica_{title.lower().replace(' ', '_')}.png"), dpi=300)
         plt.show()
     
     def visualize_training(self, history: Dict[str, List]) -> None:
@@ -836,7 +844,7 @@ class PolicyIteration:
             x = range(1, len(history['policy_changes']) + 1)
             axs[0, 0].plot(x, history['policy_changes'], marker='o')
             axs[0, 0].set_title('Cambios en la Política')
-            axs[0, 0].set_xlabel(self.ITERATION_LABEL)
+            axs[0, 0].set_xlabel(CONST_ITERATION_LABEL)
             axs[0, 0].set_ylabel('Cambio de Política')
             axs[0, 0].grid(True)
         
@@ -845,7 +853,7 @@ class PolicyIteration:
             x = range(1, len(history['value_changes']) + 1)
             axs[0, 1].plot(x, history['value_changes'], marker='o')
             axs[0, 1].set_title('Cambios en la Función de Valor')
-            axs[0, 1].set_xlabel(self.ITERATION_LABEL)
+            axs[0, 1].set_xlabel(CONST_ITERATION_LABEL)
             axs[0, 1].set_ylabel('Cambio Promedio de Valor')
             axs[0, 1].grid(True)
         
@@ -854,7 +862,7 @@ class PolicyIteration:
             x = range(1, len(history['iteration_times']) + 1)
             axs[1, 0].plot(x, history['iteration_times'], marker='o')
             axs[1, 0].set_title('Tiempos de Iteración')
-            axs[1, 0].set_xlabel(self.ITERATION_LABEL)
+            axs[1, 0].set_xlabel(CONST_ITERATION_LABEL)
             axs[1, 0].set_ylabel('Tiempo (segundos)')
             axs[1, 0].grid(True)
         
@@ -868,6 +876,8 @@ class PolicyIteration:
             axs[1, 1].grid(True)
         
         plt.tight_layout()
+        os.makedirs(FIGURES_DIR, exist_ok=True)
+        plt.savefig(os.path.join(FIGURES_DIR, "entrenamiento_resumen.png"), dpi=300)
         plt.show()
 
 class PolicyIterationWrapper:
@@ -1239,3 +1249,14 @@ def create_policy_iteration_model(cgm_shape: Tuple[int, ...], other_features_sha
     
     # Crear y devolver wrapper
     return PolicyIterationWrapper(pi_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], PolicyIterationWrapper]:
+    """
+    Retorna una función para crear un modelo de Iteración de Política compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], PolicyIterationWrapper]
+        Función para crear un modelo con las formas de entrada especificadas
+    """
+    return create_policy_iteration_model

@@ -11,8 +11,9 @@ from functools import partial
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import QLEARNING_CONFIG
+from config.models_config import QLEARNING_CONFIG
 
+FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "q_learning")
 
 class QTableState(NamedTuple):
     """Estructura para almacenar el estado del agente Q-Learning"""
@@ -554,6 +555,8 @@ class QLearning:
             kernel = np.ones(window_size) / window_size
             return np.convolve(np.array(data), kernel, mode='valid')
         
+        os.makedirs(FIGURES_DIR, exist_ok=True)
+        
         _, axs = plt.subplots(2, 2, figsize=(15, 10))
         
         # 1. Recompensas por episodio
@@ -601,6 +604,7 @@ class QLearning:
         axs[1, 1].legend()
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, "training_history.png"), dpi=300)
         plt.show()
     
     def _setup_grid_visualization(self, ax: plt.Axes, rows: int, cols: int) -> None:
@@ -1197,3 +1201,14 @@ def create_q_learning_model(cgm_shape: Tuple[int, ...], other_features_shape: Tu
     
     # Crear y devolver wrapper
     return QLearningWrapper(q_agent, cgm_shape, other_features_shape)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], QLearningWrapper]:
+    """
+    Retorna una función para crear un modelo Q-Learning compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], QLearningWrapper]
+        Función para crear un modelo Q-Learning con las formas de entrada especificadas
+    """
+    return create_q_learning_model

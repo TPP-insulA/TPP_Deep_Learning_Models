@@ -2,12 +2,21 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from typing import Tuple, Dict, Any, Optional, List
+import numpy as np
+from typing import Tuple, Dict, Any, Optional, List, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import LSTM_CONFIG
+from config.models_config import LSTM_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_SIGMOID = "sigmoid"
+CONST_GELU = "gelu"
+CONST_DROPOUT = "dropout"
 
 def create_lstm_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
                               dropout_rate: float = 0.2, deterministic: bool = False) -> jnp.ndarray:
@@ -46,7 +55,7 @@ def create_lstm_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
     lstm_scan = nn.scan(
         lstm_cell,
         variable_broadcast="params",
-        split_rngs={"params": False, "dropout": True}
+        split_rngs={"params": False, CONST_DROPOUT: True}
     )
     
     # Adaptar dimensiones para scan (time major)
@@ -98,7 +107,7 @@ def create_lstm_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4,
     
     return x
 
-def get_activation_fn(activation_name: str):
+def get_activation_fn(activation_name: str) -> Callable:
     """
     Devuelve la función de activación correspondiente al nombre.
     
@@ -112,13 +121,13 @@ def get_activation_fn(activation_name: str):
     Callable
         Función de activación de JAX
     """
-    if activation_name == 'relu':
+    if activation_name == CONST_RELU:
         return jax.nn.relu
-    elif activation_name == 'tanh':
+    elif activation_name == CONST_TANH:
         return jax.nn.tanh
-    elif activation_name == 'sigmoid':
+    elif activation_name == CONST_SIGMOID:
         return jax.nn.sigmoid
-    elif activation_name == 'gelu':
+    elif activation_name == CONST_GELU:
         return jax.nn.gelu
     else:
         return jax.nn.tanh  # Por defecto
@@ -141,8 +150,24 @@ class LSTMModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
-        cgm_input, other_input = inputs
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Ejecuta el modelo LSTM sobre las entradas.
+        
+        Parámetros:
+        -----------
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones del modelo
+        """
         deterministic = not training
         
         # Proyección inicial
@@ -260,7 +285,7 @@ def create_forward_lstm(x: jnp.ndarray, units: int, dropout_rate: float, recurre
     lstm_scan = nn.scan(
         lstm_cell,
         variable_broadcast="params",
-        split_rngs={"params": False, "dropout": True}
+        split_rngs={"params": False, CONST_DROPOUT: True}
     )
     
     # Adaptar dimensiones para scan (time major)
@@ -284,21 +309,21 @@ def create_forward_lstm(x: jnp.ndarray, units: int, dropout_rate: float, recurre
     
     return outputs
 
-def create_lstm_model(cgm_shape: tuple, other_features_shape: tuple) -> LSTMModel:
+def create_lstm_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
     Crea un modelo LSTM avanzado con self-attention y conexiones residuales con JAX/Flax.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    lstm_model
-        Modelo LSTM inicializado
+    DLModelWrapper
+        Modelo LSTM inicializado y envuelto en DLModelWrapper
     """
     model = LSTMModel(
         config=LSTM_CONFIG,
@@ -306,4 +331,16 @@ def create_lstm_model(cgm_shape: tuple, other_features_shape: tuple) -> LSTMMode
         other_features_shape=other_features_shape
     )
     
-    return model
+    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
+    return DLModelWrapper(lambda **kwargs: model)
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo LSTM compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_lstm_model

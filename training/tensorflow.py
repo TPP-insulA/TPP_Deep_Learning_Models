@@ -7,17 +7,13 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
-
-# Constantes para uso común
-CONST_VAL_LOSS = "val_loss"
-CONST_LOSS = "loss"
-CONST_METRIC_MAE = "mae"
-CONST_METRIC_RMSE = "rmse"
-CONST_METRIC_R2 = "r2"
-CONST_MODELS = "models"
-CONST_BEST_PREFIX = "best_"
-CONST_LOGS_DIR = "logs"
-
+from training.common import (
+    CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
+    CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
+    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES,
+    calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
+    enhance_features, get_model_type, process_training_results
+)
 
 def create_dataset(x_cgm: np.ndarray, 
                   x_other: np.ndarray, 
@@ -46,30 +42,6 @@ def create_dataset(x_cgm: np.ndarray,
         (x_cgm, x_other), y
     ))
     return dataset.cache().shuffle(1000).batch(batch_size).prefetch(tf.data.AUTOTUNE)
-
-
-def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
-    """
-    Calcula métricas de rendimiento para las predicciones del modelo.
-    
-    Parámetros:
-    -----------
-    y_true : np.ndarray
-        Valores objetivo verdaderos
-    y_pred : np.ndarray
-        Valores predichos por el modelo
-        
-    Retorna:
-    --------
-    Dict[str, float]
-        Diccionario con métricas MAE, RMSE y R²
-    """
-    return {
-        CONST_METRIC_MAE: float(mean_absolute_error(y_true, y_pred)),
-        CONST_METRIC_RMSE: float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        CONST_METRIC_R2: float(r2_score(y_true, y_pred))
-    }
-
 
 def train_and_evaluate_model(model: Model, 
                            model_name: str, 
@@ -392,106 +364,6 @@ def cross_validate_model(create_model_fn: Callable,
     }
     
     return mean_scores, std_scores
-
-
-def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray], 
-                             weights: Optional[np.ndarray] = None) -> np.ndarray:
-    """
-    Combina predicciones de múltiples modelos usando promedio ponderado.
-    
-    Parámetros:
-    -----------
-    predictions_dict : Dict[str, np.ndarray]
-        Diccionario con predicciones de cada modelo
-    weights : Optional[np.ndarray], opcional
-        Pesos para cada modelo. Si es None, usa promedio simple (default: None)
-        
-    Retorna:
-    --------
-    np.ndarray
-        Predicciones combinadas del ensemble
-    """
-    all_preds = np.stack(list(predictions_dict.values()))
-    if weights is None:
-        weights = np.ones(len(predictions_dict)) / len(predictions_dict)
-    return np.average(all_preds, axis=0, weights=weights)
-
-
-def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray], 
-                            y_true: np.ndarray) -> np.ndarray:
-    """
-    Optimiza pesos del ensemble usando optimización.
-    
-    Parámetros:
-    -----------
-    predictions_dict : Dict[str, np.ndarray]
-        Diccionario con predicciones de cada modelo
-    y_true : np.ndarray
-        Valores objetivo verdaderos
-        
-    Retorna:
-    --------
-    np.ndarray
-        Pesos optimizados para cada modelo
-    """
-    def objective(weights):
-        # Normalizar pesos
-        weights = weights / np.sum(weights)
-        # Obtener predicción del ensemble
-        ensemble_pred = create_ensemble_prediction(predictions_dict, weights)
-        # Calcular error
-        return mean_squared_error(y_true, ensemble_pred)
-    
-    n_models = len(predictions_dict)
-    initial_weights = np.ones(n_models) / n_models
-    bounds = [(0, 1) for _ in range(n_models)]
-    
-    result = minimize(
-        objective,
-        initial_weights,
-        bounds=bounds,
-        constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    )
-    
-    return result.x / np.sum(result.x)
-
-
-def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Mejora las características de entrada con características derivadas.
-    
-    Parámetros:
-    -----------
-    x_cgm : np.ndarray
-        Datos CGM
-    x_other : np.ndarray
-        Otras características
-        
-    Retorna:
-    --------
-    Tuple[np.ndarray, np.ndarray]
-        (x_cgm_mejorado, x_other)
-    """
-    # Añadir características derivadas para CGM
-    cgm_diff = np.diff(x_cgm.squeeze(), axis=1)
-    cgm_diff = np.pad(cgm_diff, ((0,0), (1,0), (0,0)), mode='edge')
-    
-    # Añadir estadísticas móviles
-    window = 5
-    rolling_mean = np.apply_along_axis(
-        lambda x: np.convolve(x, np.ones(window)/window, mode='same'),
-        1, x_cgm.squeeze()
-    )
-    
-    # Concatenar características mejoradas
-    x_cgm_enhanced = np.concatenate([
-        x_cgm,
-        cgm_diff[..., np.newaxis],
-        rolling_mean[..., np.newaxis]
-    ], axis=-1)
-    
-    return x_cgm_enhanced, x_other
-
 
 def train_multiple_models(model_creators: Dict[str, Callable], 
                          input_shapes: Tuple[Tuple[int, ...], Tuple[int, ...]],

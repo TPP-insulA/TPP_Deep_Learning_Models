@@ -16,7 +16,7 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable, TypeVar
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TRPO_CONFIG
+from config.models_config import TRPO_CONFIG
 
 
 class ActorCriticModel:
