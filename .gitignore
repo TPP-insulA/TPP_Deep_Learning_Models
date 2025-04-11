@@ -17,3 +17,4 @@ Cargo.lock
 *.h5
 __pycache__
 pandas/plots
+.idea/
