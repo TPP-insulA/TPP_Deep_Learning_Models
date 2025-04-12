@@ -1,0 +1,1 @@
+# TODO: poner las constantes acá en vez de tenerlas sueltas por archivo.
