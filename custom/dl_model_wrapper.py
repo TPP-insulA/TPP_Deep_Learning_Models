@@ -356,8 +356,9 @@ class DLModelWrapperJAX(ModelWrapper):
         # Crear índices y dividir en lotes
         num_samples = len(y)
         indices = np.arange(num_samples)
-        np.random.shuffle(indices)
-        
+        # Create a random generator with a seed for reproducibility
+        rng = np.random.Generator(np.random.PCG64(42))
+        rng.shuffle(indices)
         for i in range(0, num_samples, batch_size):
             batch_indices = indices[i:min(i + batch_size, num_samples)]
             batch_cgm = x_cgm_arr[batch_indices]
