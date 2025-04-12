@@ -261,8 +261,8 @@ def train_model_sequential(model_creator: Callable,
     
     # Configuración por defecto
     training_config = {
-        'epochs': 100,
-        'batch_size': 32
+        'epochs': CONST_DEFAULT_EPOCHS,
+        'batch_size': CONST_DEFAULT_BATCH_SIZE
     }
     
     # Entrenar y evaluar modelo
