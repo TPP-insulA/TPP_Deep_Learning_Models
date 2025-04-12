@@ -60,7 +60,7 @@ from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax"
-FRAMEWORK = "jax"
+FRAMEWORK = "tensorflow"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -129,7 +129,7 @@ JAX_MODELS = {
 # Modelos TensorFlow a utilizar
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "tf_attention_only": False,
+    "tf_attention_only": True,
     "tf_cnn": False,
     "tf_fnn": False,
     "tf_gru": False,
