@@ -57,6 +57,9 @@ from models.jax.DeepReinforcementLearning.ppo import model_creator as jax_ppo_cr
 from models.jax.DeepReinforcementLearning.sac import model_creator as jax_sac_creator
 from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_creator
 
+# Modo de Ejecución
+DEBUG = True 
+
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax"
@@ -160,7 +163,7 @@ USE_TF_MODELS = {
 USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
     "jax_attention_only": True,
-    "jax_cnn": False,
+    "jax_cnn": True,
     "jax_fnn": False,
     "jax_gru": False,
     "jax_lstm": False,

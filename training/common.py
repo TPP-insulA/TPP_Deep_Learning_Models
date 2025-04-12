@@ -4,6 +4,7 @@ from typing import Dict, List, Tuple, Callable, Optional, Any, Union
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from scipy.optimize import minimize
 from joblib import Parallel, delayed
+from config.params import DEBUG
 
 # Constantes compartidas
 CONST_VAL_LOSS = "val_loss"
@@ -14,7 +15,7 @@ CONST_METRIC_R2 = "r2"
 CONST_MODELS = "models"
 CONST_BEST_PREFIX = "best_"
 CONST_LOGS_DIR = "logs"
-CONST_DEFAULT_EPOCHS = 100
+CONST_DEFAULT_EPOCHS = 10 if DEBUG else 100
 CONST_DEFAULT_BATCH_SIZE = 32
 CONST_DEFAULT_SEED = 42
 CONST_FIGURES_DIR = "figures"
