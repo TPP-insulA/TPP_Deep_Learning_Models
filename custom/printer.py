@@ -102,3 +102,48 @@ def cprint(text, colour=None, background=None, style=None):
         style (str or list): Estilo del texto. Opciones: 'bold', 'underline', 'reversed'.
     """
     print(coloured(text, colour=colour, background=background, style=style))
+    
+def print_error(text):
+    """
+    Imprime un mensaje de error en rojo.
+    
+    Args:
+        text (str): Mensaje de error a imprimir.
+    """
+    cprint(text, colour='white', style='bold', background='red')
+
+def print_warning(text):
+    """
+    Imprime un mensaje de advertencia en amarillo.
+    
+    Args:
+        text (str): Mensaje de advertencia a imprimir.
+    """
+    cprint(text, colour='black', style='bold', background='yellow')
+
+def print_success(text):
+    """
+    Imprime un mensaje de éxito en verde.
+    
+    Args:
+        text (str): Mensaje de éxito a imprimir.
+    """
+    cprint(text, colour='white', style='bold', background='green')
+
+def print_info(text):
+    """
+    Imprime un mensaje informativo en azul.
+    
+    Args:
+        text (str): Mensaje informativo a imprimir.
+    """
+    cprint(text, colour='white', style='bold', background='blue')
+    
+def print_debug(text):
+    """
+    Imprime un mensaje de depuración en naranja.
+    
+    Args:
+        text (str): Mensaje de depuración a imprimir.
+    """
+    cprint(text, colour='white', style='bold', background='orange')
