@@ -11,7 +11,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
 from custom.dl_model_wrapper import DLModelWrapperJAX
-from models.early_stopping import get_early_stopping
+from models.early_stopping import get_early_stopping_config
 
 # Constantes para uso repetido
 CONST_ATTENTION_BLOCK = "attention_block"
@@ -328,11 +328,12 @@ def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tup
     # Crear wrapper
     wrapper = DLModelWrapperJAX(model_creator)
     
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
     if EARLY_STOPPING_POLICY.get('early_stopping', False):
         wrapper.add_early_stopping(
-             patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
-            min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
-            restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+            patience=es_patience,
+            min_delta=es_min_delta,
+            restore_best_weights=es_restore_best
         )
     
     return wrapper

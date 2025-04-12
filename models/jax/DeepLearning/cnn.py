@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 from typing import Tuple, Dict, Any, Optional, Callable
-from models.early_stopping import get_early_stopping
+from models.early_stopping import get_early_stopping, get_early_stopping_config
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -265,10 +265,11 @@ def create_cnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     model_wrapper = DLModelWrapper(model_creator, 'jax')
     
     # Configurar early stopping
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
     model_wrapper.add_early_stopping(
-        patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
-        min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
-        restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best_weights', True)
+        patience=es_patience,
+        min_delta=es_min_delta,
+        restore_best_weights=es_restore_best
     )
     
     return model_wrapper

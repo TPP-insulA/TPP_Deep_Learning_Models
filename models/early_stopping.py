@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any, Tuple, Union
 from config.models_config import EARLY_STOPPING_POLICY
 
 class EarlyStopping:
@@ -90,3 +90,18 @@ def get_early_stopping() -> Union[EarlyStopping, None]:
             restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
         )
     return None
+
+def get_early_stopping_config() -> Tuple[int, float, bool]:
+    """
+    Retorna la configuración de EarlyStopping.
+    
+    Retorna:
+    --------
+    Tuple[int, float, bool]
+        (patience, min_delta, restore_best_weights)
+    """
+    return (
+        EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
+        EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
+        EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+    )
