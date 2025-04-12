@@ -1,6 +1,15 @@
 """Model configuration parameters"""
 
 ###########################################################
+###                Global Configuration                 ###
+###########################################################
+EARLY_STOPPING_POLICY = {
+    'early_stopping': True,              # Activar/desactivar early stopping
+    'early_stopping_patience': 10,       # Épocas a esperar antes de detener
+    'early_stopping_min_delta': 0.001,   # Mejora mínima considerada significativa
+    'early_stopping_restore_best': True, # Restaurar mejores pesos al finalizar
+}
+###########################################################
 ###                Deep Learning Models                 ###
 ###########################################################
 ATTENTION_CONFIG = {
@@ -10,6 +19,12 @@ ATTENTION_CONFIG = {
     'head_size': 32,              # Tamaño de salida de cada cabeza de atención
     'num_layers': 4,              # Número de capas de atención apiladas
     'ff_dim': 256,                # Dimensión de la capa feed-forward después de la atención
+    'num_blocks': 2,              # Número de bloques de atención
+    'use_bias': True,             # Si incluir términos de sesgo en las capas
+    'use_layer_norm': True,       # Si usar normalización de capa
+    'use_pos_encoding': True,     # Si usar codificación posicional
+    'embed_dim': 128,             # Dimensión de la codificación de entrada
+    'dense_units': [128, 64],     # Unidades en capas densas finales
     
     # Regularización
     'dropout_rate': 0.1,          # Tasa de dropout para regularización

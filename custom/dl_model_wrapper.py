@@ -1,3 +1,8 @@
+import os, sys
+
+PROJECT_ROOT = os.path.abspath(os.getcwd())
+sys.path.append(PROJECT_ROOT) 
+
 from custom.model_wrapper import ModelWrapper
 import flax.linen as nn
 import optax
@@ -9,24 +14,27 @@ from typing import Dict, List, Tuple, Any, Optional, Callable
 
 class DLModelWrapper(ModelWrapper):
     """
-    Implementación de ModelWrapper para modelos de aprendizaje profundo con Flax/JAX.
+    Wrapper para modelos de aprendizaje profundo.
+    
+    ...
     """
     
-    def __init__(self, model_cls: Callable, **model_kwargs):
+    def __init__(self, model_creator: Callable, early_stopping: Optional[Any] = None):
         """
-        Inicializa un wrapper para modelos de aprendizaje profundo.
+        Inicializa el wrapper con un creador de modelos.
         
         Parámetros:
         -----------
-        model_cls : Callable
-            Clase del modelo Flax a instanciar
-        **model_kwargs
-            Argumentos para el constructor del modelo
+        model_creator : Callable
+            Función que crea una instancia del modelo
+        early_stopping : Optional[Any], opcional
+            Instancia de callback de early stopping (default: None)
         """
-        super().__init__()
-        self.model = model_cls(**model_kwargs)
+        self.model_creator = model_creator
+        self.model = None
         self.params = None
         self.state = None
+        self.early_stopping = early_stopping
     
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
                   rng_key: Any = None) -> Any:
@@ -56,7 +64,8 @@ class DLModelWrapper(ModelWrapper):
         x_cgm_shape = (1,) + x_cgm.shape[1:]
         x_other_shape = (1,) + x_other.shape[1:]
         
-        # Inicializar modelo Flax
+        # Crear e inicializar modelo Flax
+        self.model = self.model_creator()
         self.params = self.model.init(rng_key, jnp.ones(x_cgm_shape), jnp.ones(x_other_shape))
         
         # Configurar optimizador
@@ -193,5 +202,11 @@ class DLModelWrapper(ModelWrapper):
         if self.state is None:
             raise ValueError("El modelo debe ser inicializado y entrenado antes de predecir")
         
-        preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other))
+        # Intentar llamar con training=False primero
+        try:
+            preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other), training=False)
+        except TypeError:
+            # Si falla, intentar sin el parámetro training
+            preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other))
+        
         return np.array(preds)

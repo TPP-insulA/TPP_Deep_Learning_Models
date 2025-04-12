@@ -3,11 +3,11 @@ from typing import Dict, Optional
 from custom.printer import cprint
 
 def create_report(model_figures: Dict[str, Dict[str, str]], 
-                       ensemble_metrics: Dict[str, float],
-                       framework: str,
-                       project_root,
-                       figures_dir,
-                       metrics) -> str:
+                  ensemble_metrics: Dict[str, float],
+                  framework: str,
+                  project_root: str,
+                  figures_dir: str,
+                  metrics: Dict[str, Dict[str, float]]) -> str:
     """
     Crea un reporte en formato Typst con los resultados de entrenamiento.
     
@@ -19,6 +19,12 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
         Métricas del modelo ensemble
     framework : str
         Framework utilizado (tensorflow o jax)
+    project_root : str
+        Ruta base del proyecto
+    figures_dir : str
+        Directorio donde se guardan las figuras
+    metrics : Dict[str, Dict[str, float]]
+        Métricas de todos los modelos
         
     Retorna:
     --------
@@ -35,8 +41,6 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
     
     # Inicio del documento Typst
     typst_content = f"""
-#import "@preview/tablex:0.0.5": tablex, cellx, rowspanx, colspanx
-
 #set page(
   margin: 2.5cm,
   numbering: "1",
@@ -58,10 +62,9 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
 == Métricas de Rendimiento
 
 #figure(
-  tablex(
-    columns: (auto, auto, auto, auto),
-    inset: 10pt,
-    align: horizon,
+  table(
+    columns: 4,
+    align: center + horizon,
     [], [*MAE*], [*RMSE*], [*R²*],
 """
 
