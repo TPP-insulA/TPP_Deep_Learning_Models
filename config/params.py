@@ -164,7 +164,7 @@ USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
     "jax_attention_only": True,
     "jax_cnn": True,
-    "jax_fnn": False,
+    "jax_fnn": True,
     "jax_gru": False,
     "jax_lstm": False,
     "jax_rnn": False,

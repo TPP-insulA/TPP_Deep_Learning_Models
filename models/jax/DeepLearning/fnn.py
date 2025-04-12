@@ -1,17 +1,17 @@
-import os, sys
+from flax.training import train_state
+from typing import Tuple, Dict, List, Any, Optional, Callable, Union
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-import optax
-import numpy as np
-from flax.training import train_state
-from typing import Tuple, Dict, List, Any, Optional, Callable, Union
+import os
+import sys
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import FNN_CONFIG
+from config.models_config import FNN_CONFIG, EARLY_STOPPING_POLICY
 from custom.dl_model_wrapper import DLModelWrapper
+from models.early_stopping import get_early_stopping_config
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -60,16 +60,19 @@ def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2,
     # Primera capa densa con normalización y activación
     x = nn.Dense(units)(x)
     if use_layer_norm:
-        x = nn.LayerNorm(epsilon=FNN_CONFIG['epsilon'])(x)
+        x = nn.LayerNorm(epsilon=1e-6)(x)
     else:
         x = nn.BatchNorm(use_running_average=not training)(x)
     x = get_activation(x, activation)
-    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={CONST_DROPOUT: dropout_rng})
+    x = nn.Dropout(
+            rate=dropout_rate,
+            deterministic=not training
+        )(x, rng=dropout_rng)
     
     # Segunda capa densa con normalización
     x = nn.Dense(units)(x)
     if use_layer_norm:
-        x = nn.LayerNorm(epsilon=FNN_CONFIG['epsilon'])(x)
+        x = nn.LayerNorm(epsilon=1e-6)(x)
     else:
         x = nn.BatchNorm(use_running_average=not training)(x)
     
@@ -80,7 +83,10 @@ def create_residual_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.2,
     # Conexión residual
     x = x + skip
     x = get_activation(x, activation)
-    x = nn.Dropout(rate=dropout_rate, deterministic=not training)(x, rngs={CONST_DROPOUT: dropout_rng2})
+    x = nn.Dropout(
+            rate=dropout_rate,
+            deterministic=not training
+        )(x, rng=dropout_rng2)
     
     return x
 
@@ -130,32 +136,31 @@ class FNNModel(nn.Module):
     
     def _process_inputs(self, inputs: Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]) -> jnp.ndarray:
         """
-        Procesa y combina entradas para el modelo.
+        Procesa las entradas para el modelo.
         
         Parámetros:
         -----------
         inputs : Union[jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray]]
-            Entradas del modelo, pueden ser una sola entrada o una tupla
+            Entradas al modelo, puede ser un tensor o una tupla (cgm_input, other_input)
             
         Retorna:
         --------
         jnp.ndarray
-            Entradas procesadas combinadas
+            Tensor de entrada procesado
         """
-        # Manejar entradas múltiples o única
-        if self.other_features_shape is not None:
-            main_input, other_input = inputs
+        if isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_input, other_input = inputs
         else:
-            main_input = inputs
+            cgm_input = inputs
             other_input = None
-        
+            
         # Aplanar si es necesario (para entradas multidimensionales)
         if len(self.input_shape) > 1:
-            x = jnp.reshape(main_input, (main_input.shape[0], -1))
+            x = cgm_input.reshape(cgm_input.shape[0], -1)
         else:
-            x = main_input
-        
-        # Entrada secundaria opcional
+            x = cgm_input
+            
+        # Combinar con otras características si están disponibles
         if other_input is not None:
             x = jnp.concatenate([x, other_input], axis=-1)
             
@@ -229,7 +234,11 @@ class FNNModel(nn.Module):
         x = nn.Dense(self.config['hidden_units'][0])(x)
         x = self._apply_normalization(x, training)
         x = get_activation(x, self.config['activation'])
-        x = nn.Dropout(rate=self.config['dropout_rates'][0], deterministic=not training)(x)
+        x = nn.Dropout(
+                rate=self.config['dropout_rates'][0],
+                deterministic=not training,
+                rng_collection='dropout'
+            )(x)
         
         # Bloques residuales apilados
         for i, units in enumerate(self.config['hidden_units'][1:]):
@@ -252,7 +261,11 @@ class FNNModel(nn.Module):
             x = nn.Dense(units)(x)
             x = get_activation(x, self.config['activation'])
             x = self._apply_normalization(x, training)
-            x = nn.Dropout(rate=self.config['final_dropout_rate'], deterministic=not training)(x)
+            x = nn.Dropout(
+                    rate=self.config['final_dropout_rate'],
+                    deterministic=not training,
+                    rng_collection='dropout'
+                )(x)
         
         return self._build_output_layer(x)
 
@@ -272,14 +285,26 @@ def create_fnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     DLModelWrapper
         Modelo FNN inicializado y envuelto en DLModelWrapper
     """
-    model = FNNModel(
-        config=FNN_CONFIG,
-        input_shape=cgm_shape,
-        other_features_shape=other_features_shape
-    )
+    # Crear función para inicializar el modelo
+    def model_creator(**kwargs):
+        return FNNModel(
+            config=FNN_CONFIG,
+            input_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
     
     # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
-    return DLModelWrapper(lambda **kwargs: model)
+    wrapper = DLModelWrapper(model_creator, 'jax')
+    
+    # Configurar early stopping
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
+    wrapper.add_early_stopping(
+        patience=es_patience,
+        min_delta=es_min_delta,
+        restore_best_weights=es_restore_best
+    )
+    
+    return wrapper
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
     """

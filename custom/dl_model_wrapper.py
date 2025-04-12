@@ -7,6 +7,7 @@ from flax.training import train_state
 import optax
 
 from custom.model_wrapper import ModelWrapper
+from custom.printer import cprint
 
 # Clase para modelos TensorFlow
 class DLModelWrapperTF(ModelWrapper):
@@ -541,7 +542,7 @@ class DLModelWrapperJAX(ModelWrapper):
             
             # Imprimir progreso
             val_str = f" - val_loss: {val_loss:.4f}" if do_validation else ""
-            print(f"Época {epoch+1}/{epochs} - loss: {avg_loss:.4f}{val_str}")
+            cprint(f"Época {epoch+1}/{epochs} - loss: {avg_loss:.4f}{val_str}", background='blue', colour='yellow', style='bold')
             
             # Early stopping
             if self._apply_early_stopping(val_loss, avg_loss, do_validation, epoch, epochs):
