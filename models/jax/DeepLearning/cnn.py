@@ -4,11 +4,12 @@ import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
 from typing import Tuple, Dict, Any, Optional, Callable
+from models.early_stopping import get_early_stopping
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import CNN_CONFIG
+from config.models_config import CNN_CONFIG, EARLY_STOPPING_POLICY
 from custom.dl_model_wrapper import DLModelWrapper
 
 # Constantes para uso repetido
@@ -200,7 +201,13 @@ class CNNModel(nn.Module):
         else:
             dense = nn.BatchNorm(use_running_average=not training)(dense)
             
-        dense = nn.Dropout(rate=self.config['dropout_rate'], deterministic=not training)(dense)
+        # Usar el método `dropout` para permitir a Flax manejar la generación PRNG internamente
+        dense = nn.Dropout(
+            rate=self.config['dropout_rate'], 
+            deterministic=not training,
+            rng_collection='dropout'
+        )(dense)
+        
         dense = nn.Dense(features=256)(dense)
         dense = get_activation(dense, self.config['activation'])
         
@@ -218,7 +225,12 @@ class CNNModel(nn.Module):
         else:
             dense = nn.BatchNorm(use_running_average=not training)(dense)
             
-        dense = nn.Dropout(rate=self.config['dropout_rate'] / 2, deterministic=not training)(dense)
+        # Usar el método `dropout` nuevamente
+        dense = nn.Dropout(
+            rate=self.config['dropout_rate'] / 2, 
+            deterministic=not training,
+            rng_collection='dropout'
+        )(dense)
         
         output = nn.Dense(features=1)(dense)
         
@@ -226,7 +238,7 @@ class CNNModel(nn.Module):
 
 def create_cnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Crea un modelo CNN (Red Neuronal Convolucional) con JAX/Flax envuelto en DLModelWrapper.
+    Crea un modelo CNN (Red Neuronal Convolucional) con JAX/Flax.
     
     Parámetros:
     -----------
@@ -238,16 +250,28 @@ def create_cnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     Retorna:
     --------
     DLModelWrapper
-        Modelo CNN inicializado y envuelto en DLModelWrapper
+        Modelo envuelto en DLModelWrapper para compatibilidad con el sistema
     """
-    model = CNNModel(
-        config=CNN_CONFIG,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
+    
+    # Función de creación del modelo
+    def model_creator():
+        return CNNModel(
+            config=CNN_CONFIG,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
+    
+    # Crear wrapper con framework JAX
+    model_wrapper = DLModelWrapper(model_creator, 'jax')
+    
+    # Configurar early stopping
+    model_wrapper.add_early_stopping(
+        patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
+        min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
+        restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best_weights', True)
     )
     
-    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
-    return DLModelWrapper(lambda **kwargs: model)
+    return model_wrapper
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
     """
