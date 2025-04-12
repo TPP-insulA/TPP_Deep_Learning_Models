@@ -1,6 +1,15 @@
 """Model configuration parameters"""
 
 ###########################################################
+###                Global Configuration                 ###
+###########################################################
+EARLY_STOPPING_POLICY = {
+    'early_stopping': True,              # Activar/desactivar early stopping
+    'early_stopping_patience': 10,       # Épocas a esperar antes de detener
+    'early_stopping_min_delta': 0.001,   # Mejora mínima considerada significativa
+    'early_stopping_restore_best': True, # Restaurar mejores pesos al finalizar
+}
+###########################################################
 ###                Deep Learning Models                 ###
 ###########################################################
 ATTENTION_CONFIG = {

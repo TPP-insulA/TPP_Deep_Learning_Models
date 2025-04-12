@@ -9,8 +9,9 @@ from typing import Tuple, Dict, Any, Optional, Callable, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import ATTENTION_CONFIG
+from config.models_config import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
 from custom.dl_model_wrapper import DLModelWrapper
+from models.early_stopping import EarlyStopping
 
 # Constantes para uso repetido
 CONST_ATTENTION_BLOCK = "attention_block"
@@ -322,8 +323,16 @@ def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tup
         other_features_shape=other_features_shape
     )
     
+    early_stopping = None
+    if EARLY_STOPPING_POLICY.get('early_stopping', False):
+        early_stopping = EarlyStopping(
+            patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
+            min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
+            restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+        )
+    
     # Envolver en DLModelWrapper para API consistente
-    return DLModelWrapper(lambda **kwargs: model)
+    return DLModelWrapper(lambda **kwargs: model, early_stopping=early_stopping)
 
 # Función creadora de modelo que será usada por el sistema
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:

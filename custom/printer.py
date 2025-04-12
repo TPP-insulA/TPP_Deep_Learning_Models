@@ -37,6 +37,7 @@ class BackgroundColours:
     MAGENTA = "\033[45m"
     CYAN = "\033[46m"
     WHITE = "\033[47m"
+    ORANGE = "\033[48;5;208m"
     RESET = "\033[0m"
     
 class Styles:
@@ -110,7 +111,7 @@ def print_error(text):
     Args:
         text (str): Mensaje de error a imprimir.
     """
-    cprint(text, colour='white', style='bold', background='red')
+    print(coloured("ERROR", colour='white', background='red', style='bold') + " " + coloured(text, colour='red', style='bold'))
 
 def print_warning(text):
     """
@@ -119,7 +120,7 @@ def print_warning(text):
     Args:
         text (str): Mensaje de advertencia a imprimir.
     """
-    cprint(text, colour='black', style='bold', background='yellow')
+    print(coloured("WARNING", colour='black', background='yellow', style='bold') + " " + coloured(text, colour='yellow', style='bold'))
 
 def print_success(text):
     """
@@ -128,7 +129,7 @@ def print_success(text):
     Args:
         text (str): Mensaje de éxito a imprimir.
     """
-    cprint(text, colour='white', style='bold', background='green')
+    print(coloured("SUCCESS", colour='white', background='green', style='bold') + " " + coloured(text, colour='green', style='bold'))
 
 def print_info(text):
     """
@@ -137,7 +138,7 @@ def print_info(text):
     Args:
         text (str): Mensaje informativo a imprimir.
     """
-    cprint(text, colour='white', style='bold', background='blue')
+    print(coloured("INFO", colour='yellow', background='blue', style='bold') + " " + coloured(text, colour='blue', style='bold'))
     
 def print_debug(text):
     """
@@ -146,4 +147,13 @@ def print_debug(text):
     Args:
         text (str): Mensaje de depuración a imprimir.
     """
-    cprint(text, colour='white', style='bold', background='orange')
+    print(coloured("DEBUG", colour='black', background='orange', style='bold') + " " + coloured(text, colour='orange', style='bold'))
+
+def print_log(text):
+    """
+    Imprime un mensaje de log en cian.
+    
+    Args:
+        text (str): Mensaje de log a imprimir.
+    """
+    print(coloured("LOG", colour='black', background='cyan', style='bold') + " " + coloured(text, colour='cyan', style='bold'))

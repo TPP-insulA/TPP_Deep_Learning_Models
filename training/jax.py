@@ -14,6 +14,7 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 import orbax.checkpoint as orbax_ckpt
+from custom.printer import print_debug
 from training.common import (
     CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
     CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
@@ -194,6 +195,198 @@ def eval_step(state: train_state.TrainState,
     }
 
 
+def _setup_training(model: nn.Module,
+                   training_config: Dict[str, Any],
+                   x_cgm_train: np.ndarray,
+                   x_other_train: np.ndarray,
+                   models_dir: str) -> Tuple[train_state.TrainState, Dict, jax.random.PRNGKey]:
+    """
+    Prepara el entorno de entrenamiento inicializando el modelo y optimizador.
+    """
+    # Extraer parámetros de configuración
+    learning_rate = training_config.get('learning_rate', 0.001)
+    seed = training_config.get('seed', CONST_DEFAULT_SEED)
+    
+    # Crear directorio para modelos si no existe
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Inicializar generador de números aleatorios
+    rng = random.PRNGKey(seed)
+    rng, init_rng = random.split(rng)
+    
+    # Inicializar modelo
+    x_cgm_shape = (1,) + x_cgm_train.shape[1:]
+    x_other_shape = (1,) + x_other_train.shape[1:]
+    
+    params = model.init(init_rng, jnp.ones(x_cgm_shape), jnp.ones(x_other_shape))
+    
+    # Configurar tasa de aprendizaje con decaimiento
+    schedule_fn = optax.exponential_decay(
+        init_value=learning_rate,
+        transition_steps=1000,
+        decay_rate=0.9
+    )
+    
+    # Configurar optimizador con recorte de gradiente
+    tx = optax.chain(
+        optax.clip_by_global_norm(1.0),  # Recorte de gradiente
+        optax.adam(learning_rate=schedule_fn)
+    )
+    
+    # Crear estado de entrenamiento
+    state = train_state.TrainState.create(
+        apply_fn=model.apply,
+        params=params,
+        tx=tx
+    )
+    
+    return state, params, rng
+
+def _prepare_data(x_cgm_train: np.ndarray, 
+                x_other_train: np.ndarray, 
+                y_train: np.ndarray,
+                x_cgm_val: np.ndarray,
+                x_other_val: np.ndarray,
+                y_val: np.ndarray,
+                batch_size: int,
+                rng: jax.random.PRNGKey) -> Tuple[List, int, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Prepara los datos para entrenamiento y validación.
+    """
+    # Crear conjuntos de datos en batches
+    train_batches, n_train_batches = create_batched_dataset(
+        x_cgm_train, x_other_train, y_train, batch_size=batch_size, shuffle=True, rng=rng
+    )
+    
+    # Convertir datos de validación para evaluación
+    x_cgm_val_array = jnp.array(x_cgm_val)
+    x_other_val_array = jnp.array(x_other_val)
+    y_val_array = jnp.array(y_val)
+    
+    return train_batches, n_train_batches, x_cgm_val_array, x_other_val_array, y_val_array
+
+def _train_epoch(state: train_state.TrainState,
+               train_batches: List,
+               n_train_batches: int,
+               x_cgm_val_array: jnp.ndarray,
+               x_other_val_array: jnp.ndarray,
+               y_val_array: jnp.ndarray) -> Tuple[float, Dict, train_state.TrainState]:
+    """
+    Entrena una época completa y evalúa en validación.
+    """
+    # Variables para métricas de época
+    epoch_loss = 0.0
+    
+    # Bucle sobre batches
+    for batch in train_batches:
+        # Desempaquetar batch
+        (x_cgm_batch, x_other_batch), y_batch = batch
+        
+        # Convertir a arrays de JAX
+        x_cgm_batch = jnp.array(x_cgm_batch)
+        x_other_batch = jnp.array(x_other_batch)
+        y_batch = jnp.array(y_batch)
+        
+        # Ejecutar paso de entrenamiento
+        state, metrics = train_step(state, x_cgm_batch, x_other_batch, y_batch)
+        
+        # Actualizar pérdida de época
+        epoch_loss += float(metrics[CONST_LOSS]) / n_train_batches
+    
+    # Evaluar en validación
+    val_metrics = eval_step(state, x_cgm_val_array, x_other_val_array, y_val_array)
+    
+    return epoch_loss, val_metrics, state
+
+def _update_history(history: Dict[str, List[float]],
+                  epoch_loss: float,
+                  val_metrics: Dict[str, jnp.ndarray]) -> Dict[str, List[float]]:
+    """
+    Actualiza el historial de métricas.
+    """
+    # Actualizar históricos
+    history[CONST_LOSS].append(epoch_loss)
+    history[CONST_VAL_LOSS].append(float(val_metrics[CONST_LOSS]))
+    history[CONST_METRIC_MAE].append(float(val_metrics[CONST_METRIC_MAE]))
+    history[f"val_{CONST_METRIC_MAE}"].append(float(val_metrics[CONST_METRIC_MAE]))
+    history[CONST_METRIC_RMSE].append(float(val_metrics[CONST_METRIC_RMSE]))
+    history[f"val_{CONST_METRIC_RMSE}"].append(float(val_metrics[CONST_METRIC_RMSE]))
+    
+    return history
+
+def _extract_and_organize_data(data: Dict[str, Dict[str, np.ndarray]]) -> Dict[str, Any]:
+    """
+    Extrae y organiza los datos de entrenamiento, validación y prueba.
+    """
+    return {
+        'train': {
+            'x_cgm': data['train']['x_cgm'],
+            'x_other': data['train']['x_other'],
+            'y': data['train']['y']
+        },
+        'val': {
+            'x_cgm': data['val']['x_cgm'],
+            'x_other': data['val']['x_other'],
+            'y': data['val']['y']
+        },
+        'test': {
+            'x_cgm': data['test']['x_cgm'],
+            'x_other': data['test']['x_other'],
+            'y': data['test']['y']
+        }
+    }
+
+def _init_training_config() -> Dict[str, Any]:
+    """
+    Inicializa la configuración de entrenamiento por defecto.
+    """
+    return {
+        'epochs': CONST_DEFAULT_EPOCHS,
+        'batch_size': CONST_DEFAULT_BATCH_SIZE,
+        'learning_rate': 0.001,
+        'patience': 10,
+        'seed': CONST_DEFAULT_SEED
+    }
+
+def _initialize_history() -> Dict[str, List[float]]:
+    """
+    Inicializa el diccionario de historial de métricas.
+    """
+    return {
+        CONST_LOSS: [],
+        CONST_VAL_LOSS: [],
+        CONST_METRIC_MAE: [],
+        f"val_{CONST_METRIC_MAE}": [],
+        CONST_METRIC_RMSE: [],
+        f"val_{CONST_METRIC_RMSE}": []
+    }
+
+def _handle_early_stopping(model, epoch, val_loss, state_params, best_params):
+    """
+    Maneja la lógica de early stopping personalizada.
+    """
+    if hasattr(model, 'early_stopping') and model.early_stopping is not None:
+        if model.early_stopping(epoch, val_loss, state_params):
+            print(f"\nEarly stopping activado en época {epoch+1}")
+            if model.early_stopping.restore_best_weights:
+                return model.early_stopping.get_best_params(), True
+    return best_params, False
+
+def _predict_and_evaluate(best_state, test_data):
+    """
+    Realiza predicciones con el mejor modelo y evalúa métricas.
+    """
+    x_cgm_test_array = jnp.array(test_data['x_cgm'])
+    x_other_test_array = jnp.array(test_data['x_other'])
+    y_test = test_data['y']
+    
+    y_pred_array = best_state.apply_fn(best_state.params, x_cgm_test_array, x_other_test_array)
+    y_pred = np.array(y_pred_array).flatten()
+    
+    metrics = calculate_metrics(y_test, y_pred)
+    
+    return y_pred, metrics
+
 def train_and_evaluate_model(model: nn.Module, 
                             model_name: str, 
                             data: Dict[str, Dict[str, np.ndarray]],
@@ -233,101 +426,40 @@ def train_and_evaluate_model(model: nn.Module,
     Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float]]
         (historial, predicciones, métricas)
     """
-    # Configuración por defecto
+    # Inicializar configuración
     if training_config is None:
-        training_config = {
-            'epochs': CONST_DEFAULT_EPOCHS,
-            'batch_size': CONST_DEFAULT_BATCH_SIZE,
-            'learning_rate': 0.001,
-            'patience': 10,
-            'seed': CONST_DEFAULT_SEED
-        }
+        training_config = _init_training_config()
     
     # Extraer datos
-    x_cgm_train = data['train']['x_cgm']
-    x_other_train = data['train']['x_other']
-    y_train = data['train']['y']
-    
-    x_cgm_val = data['val']['x_cgm']
-    x_other_val = data['val']['x_other'] 
-    y_val = data['val']['y']
-    
-    x_cgm_test = data['test']['x_cgm']
-    x_other_test = data['test']['x_other']
-    y_test = data['test']['y']
+    extracted_data = _extract_and_organize_data(data)
+    x_cgm_train = extracted_data['train']['x_cgm']
+    x_other_train = extracted_data['train']['x_other']
+    y_train = extracted_data['train']['y']
     
     # Extraer parámetros de configuración
     epochs = training_config.get('epochs', CONST_DEFAULT_EPOCHS)
     batch_size = training_config.get('batch_size', CONST_DEFAULT_BATCH_SIZE)
-    learning_rate = training_config.get('learning_rate', 0.001)
     patience = training_config.get('patience', 10)
-    seed = training_config.get('seed', CONST_DEFAULT_SEED)
     
-    # Crear directorio para modelos si no existe
-    os.makedirs(models_dir, exist_ok=True)
+    # Configurar entrenamiento
+    state, _, rng = _setup_training(model, training_config, x_cgm_train, x_other_train, models_dir)
     
-    # Inicializar generador de números aleatorios
-    rng = random.PRNGKey(seed)
-    rng, init_rng = random.split(rng)
-    
-    # Inicializar modelo
-    x_cgm_shape = (1,) + x_cgm_train.shape[1:]
-    x_other_shape = (1,) + x_other_train.shape[1:]
-    
-    params = model.init(init_rng, jnp.ones(x_cgm_shape), jnp.ones(x_other_shape))
-    
-    # Configurar tasa de aprendizaje con decaimiento
-    schedule_fn = optax.exponential_decay(
-        init_value=learning_rate,
-        transition_steps=1000,
-        decay_rate=0.9
+    # Preparar datos
+    train_batches, n_train_batches, x_cgm_val_array, x_other_val_array, y_val_array = _prepare_data(
+        x_cgm_train, x_other_train, y_train, 
+        extracted_data['val']['x_cgm'], extracted_data['val']['x_other'], extracted_data['val']['y'], 
+        batch_size, rng
     )
     
-    # Configurar optimizador con recorte de gradiente
-    tx = optax.chain(
-        optax.clip_by_global_norm(1.0),  # Recorte de gradiente
-        optax.adam(learning_rate=schedule_fn)
-    )
+    # Inicializar históricos y variables para early stopping
+    history = _initialize_history()
+    wait, best_val_loss = 0, float('inf')
+    best_state, best_params = state, state.params
     
-    # Crear estado de entrenamiento
-    state = train_state.TrainState.create(
-        apply_fn=model.apply,
-        params=params,
-        tx=tx
-    )
-    
-    # Crear conjuntos de datos en batches
-    train_batches, n_train_batches = create_batched_dataset(
-        x_cgm_train, x_other_train, y_train, batch_size=batch_size, shuffle=True, rng=rng
-    )
-    
-    # Convertir datos de validación para evaluación
-    x_cgm_val_array = jnp.array(x_cgm_val)
-    x_other_val_array = jnp.array(x_other_val)
-    y_val_array = jnp.array(y_val)
-    
-    # Inicializar históricos
-    history = {
-        CONST_LOSS: [],
-        CONST_VAL_LOSS: [],
-        CONST_METRIC_MAE: [],
-        f"val_{CONST_METRIC_MAE}": [],
-        CONST_METRIC_RMSE: [],
-        f"val_{CONST_METRIC_RMSE}": []
-    }
-    
-    # Variables para early stopping
-    wait = 0
-    best_val_loss = float('inf')
-    best_state = state
-    
-    # Bucle de entrenamiento
+    # Bucle de entrenamiento con early stopping
     print(f"\nEntrenando modelo {model_name}...")
     
-    # Bucle de épocas con tqdm
     for epoch in tqdm(range(epochs), desc="Entrenando"):
-        time.time()
-        
         # Mezclar datos para esta época
         rng, shuffle_rng = random.split(rng)
         train_batches, _ = create_batched_dataset(
@@ -335,46 +467,21 @@ def train_and_evaluate_model(model: nn.Module,
             batch_size=batch_size, shuffle=True, rng=shuffle_rng
         )
         
-        # Variables para métricas de época
-        epoch_loss = 0.0
+        # Entrenar una época y actualizar históricos
+        epoch_loss, val_metrics, state = _train_epoch(
+            state, train_batches, n_train_batches, 
+            x_cgm_val_array, x_other_val_array, y_val_array
+        )
+        history = _update_history(history, epoch_loss, val_metrics)
         
-        # Bucle sobre batches
-        for batch in train_batches:
-            # Desempaquetar batch
-            (x_cgm_batch, x_other_batch), y_batch = batch
-            
-            # Convertir a arrays de JAX
-            x_cgm_batch = jnp.array(x_cgm_batch)
-            x_other_batch = jnp.array(x_other_batch)
-            y_batch = jnp.array(y_batch)
-            
-            # Ejecutar paso de entrenamiento
-            state, metrics = train_step(state, x_cgm_batch, x_other_batch, y_batch)
-            
-            # Actualizar pérdida de época
-            epoch_loss += float(metrics[CONST_LOSS]) / n_train_batches
+        # Imprimir métricas
+        print(f"Época {epoch+1}/{epochs} - loss: {epoch_loss:.4f} - val_loss: {float(val_metrics[CONST_LOSS]):.4f}")
         
-        # Evaluar en validación
-        val_metrics = eval_step(state, x_cgm_val_array, x_other_val_array, y_val_array)
-        
-        # Actualizar históricos
-        history[CONST_LOSS].append(epoch_loss)
-        history[CONST_VAL_LOSS].append(float(val_metrics[CONST_LOSS]))
-        history[CONST_METRIC_MAE].append(float(val_metrics[CONST_METRIC_MAE]))
-        history[f"val_{CONST_METRIC_MAE}"].append(float(val_metrics[CONST_METRIC_MAE]))
-        history[CONST_METRIC_RMSE].append(float(val_metrics[CONST_METRIC_RMSE]))
-        history[f"val_{CONST_METRIC_RMSE}"].append(float(val_metrics[CONST_METRIC_RMSE]))
-        
-        # Mostrar progreso cada 10 épocas
-        if epoch % 10 == 0 or epoch == epochs - 1:
-            print(f"Época {epoch+1}/{epochs} - "
-                  f"loss: {epoch_loss:.4f} - "
-                  f"val_loss: {float(val_metrics[CONST_LOSS]):.4f}")
-        
-        # Early stopping
+        # Manejo de early stopping
         val_loss = float(val_metrics[CONST_LOSS])
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            best_params = state.params
             best_state = state
             wait = 0
             
@@ -389,34 +496,18 @@ def train_and_evaluate_model(model: nn.Module,
             if wait >= patience:
                 print(f"Early stopping en época {epoch+1}")
                 break
+        
+        # Custom early stopping
+        best_params, should_stop = _handle_early_stopping(model, epoch, val_loss, state.params, best_params)
+        if should_stop:
+            break
     
-    # Guardar modelo final
-    save_checkpoint(
-        os.path.join(models_dir, model_name),
-        state,
-        step=epoch
-    )
+    # Restaurar los mejores parámetros y guardar modelo final
+    state = state.replace(params=best_params)
+    save_checkpoint(os.path.join(models_dir, model_name), state, step=epoch)
     
-    @jax.jit
-    def eval_step(params, x_cgm, x_other, y):
-        # Verificar si el modelo acepta un parámetro 'training'
-        try:
-            # Intentar llamar al modelo con el parámetro training=False
-            preds = model.apply(params, x_cgm, x_other, training=False)
-        except TypeError:
-            # Si falla, llamar sin el parámetro training
-            preds = model.apply(params, x_cgm, x_other)
-        loss = jnp.mean((preds - y) ** 2)
-        return loss, preds
-    
-    # Hacer predicciones con el mejor modelo
-    x_cgm_test_array = jnp.array(x_cgm_test)
-    x_other_test_array = jnp.array(x_other_test)
-    y_pred_array = best_state.apply_fn(best_state.params, x_cgm_test_array, x_other_test_array)
-    y_pred = np.array(y_pred_array).flatten()
-    
-    # Calcular métricas finales
-    metrics = calculate_metrics(y_test, y_pred)
+    # Hacer predicciones y calcular métricas
+    y_pred, metrics = _predict_and_evaluate(best_state, extracted_data['test'])
     
     return history, y_pred, metrics
 
@@ -739,6 +830,10 @@ def train_multiple_models(model_creators: Dict[str, Callable],
                 np.array(result['predictions'])
             ) for result in model_results
         )
+    
+    # metric_results = process_training_results(model_results=model_results, y_test=y_test)
+    print_debug("metric_results:")
+    print_debug(metric_results)
     
     # Almacenar resultados
     histories = {}
