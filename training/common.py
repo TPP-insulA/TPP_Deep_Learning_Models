@@ -1,4 +1,4 @@
-import os
+import os, sys
 import numpy as np
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -193,15 +193,27 @@ def process_training_results(model_results: List[Dict],
     Tuple[Dict[str, Dict], Dict[str, np.ndarray], Dict[str, Dict]]
         (historiales, predicciones, métricas) diccionarios
     """
-    # Procesar resultados en paralelo
-    print("\nCalculando métricas en paralelo...")
-    with Parallel(n_jobs=-1, verbose=1) as parallel:
-        metric_results = parallel(
-            delayed(calculate_metrics)(
+    from config.params import FRAMEWORK
+    
+    # Procesar resultados secuencialmente cuando se usa JAX para evitar deadlocks
+    if FRAMEWORK == "jax":
+        print("\nCalculando métricas secuencialmente (compatible con JAX)...")
+        metric_results = [
+            calculate_metrics(
                 y_test, 
                 np.array(result['predictions'])
             ) for result in model_results
-        )
+        ]
+    else:
+        # Para TensorFlow u otros frameworks, mantener el paralelismo
+        print("\nCalculando métricas en paralelo...")
+        with Parallel(n_jobs=-1, verbose=1) as parallel:
+            metric_results = parallel(
+                delayed(calculate_metrics)(
+                    y_test, 
+                    np.array(result['predictions'])
+                ) for result in model_results
+            )
     
     # Almacenar resultados
     histories = {}

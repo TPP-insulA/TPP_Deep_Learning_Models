@@ -21,6 +21,7 @@ from training.common import (
     calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
     enhance_features, get_model_type, process_training_results
 )
+from tqdm.auto import tqdm
 
 def create_batched_dataset(x_cgm: np.ndarray, 
                           x_other: np.ndarray, 
@@ -322,7 +323,11 @@ def train_and_evaluate_model(model: nn.Module,
     
     # Bucle de entrenamiento
     print(f"\nEntrenando modelo {model_name}...")
-    for epoch in range(epochs):
+    
+    # Bucle de épocas con tqdm
+    for epoch in tqdm(range(epochs), desc="Entrenando"):
+        time.time()
+        
         # Mezclar datos para esta época
         rng, shuffle_rng = random.split(rng)
         train_batches, _ = create_batched_dataset(

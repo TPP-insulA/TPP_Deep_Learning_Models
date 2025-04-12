@@ -326,10 +326,12 @@ plt.figure(figsize=(12, 6))
 for model_name, history in histories.items():
     plt.plot(history['loss'], label=f'{model_name} (Train)')
     plt.plot(history['val_loss'], label=f'{model_name} (Val)')
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Comparación de Pérdida Durante Entrenamiento')
 plt.xlabel('Época')
 plt.ylabel('Pérdida (MSE)')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'loss_comparison.png'), dpi=300)
@@ -340,10 +342,12 @@ for model_name, history in histories.items():
     if 'mae' in history:
         plt.plot(history['mae'], label=f'{model_name} (Train)')
         plt.plot(history['val_mae'], label=f'{model_name} (Val)')
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Comparación de MAE Durante Entrenamiento')
 plt.xlabel('Época')
 plt.ylabel('MAE')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'mae_comparison.png'), dpi=300)
@@ -358,11 +362,12 @@ plt.plot(indices, y_test[:sample_size], 'o-', label='Real', color='black', alpha
 for model_name, pred in predictions.items():
     plt.plot(indices, pred[:sample_size], 'o-', label=model_name, alpha=0.5)
 plt.plot(indices, ensemble_pred[:sample_size], 'o-', label='Ensemble', linewidth=2)
-
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Predicciones vs Valores Reales')
 plt.xlabel('Índice de Muestra')
 plt.ylabel('Dosis de Insulina')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'predictions_comparison.png'), dpi=300)
@@ -418,25 +423,25 @@ cprint(f"Visualizaciones guardadas en: {FIGURES_DIR}", 'green')
 cprint("\n==== GENERANDO REPORTE EN TYPST ====", 'cyan', 'bold')
 
 # Crear reporte Typst
-typst_report_path = create_report(
-    model_figures=model_figures,
-    ensemble_metrics=ensemble_metrics,
-    framework=FRAMEWORK,
-    project_root=PROJECT_ROOT,
-    figures_dir=FIGURES_DIR,
-    metrics=metrics
+report_path = create_report(
+    model_figures=model_figures,            # Diccionario con rutas a figuras por modelo
+    ensemble_metrics=ensemble_metrics,      # Métricas del modelo ensemble
+    framework=FRAMEWORK,                    # 'tensorflow' o 'jax'
+    project_root=PROJECT_ROOT,              # Ruta base del proyecto
+    figures_dir=FIGURES_DIR,                # Directorio de figuras (constante definida)
+    metrics=metrics                         # Métricas de todos los modelos
 )
 
-cprint(f"Reporte Typst generado: {typst_report_path}", 'green')
+cprint(f"Reporte Typst generado: {report_path}", 'green')
 
 # Intentar renderizar el PDF
-pdf_path = render_to_pdf(typst_report_path)
+pdf_path = render_to_pdf(report_path)
 if pdf_path:
     cprint(f"PDF generado: {pdf_path}", 'green')
 
 cprint("\n==== PROCESO COMPLETADO ====", 'cyan', 'bold')
 cprint(f"Resultados guardados en: {RESULTS_SAVE_DIR}", 'green')
 cprint(f"Visualizaciones guardadas en: {FIGURES_DIR}", 'green')
-cprint(f"Reporte guardado en: {typst_report_path}", 'green')
+cprint(f"Reporte guardado en: {report_path}", 'green')
 if pdf_path:
     cprint(f"PDF guardado en: {pdf_path}", 'green')

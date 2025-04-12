@@ -1,3 +1,8 @@
+import os, sys
+
+PROJECT_ROOT = os.path.abspath(os.getcwd())
+sys.path.append(PROJECT_ROOT) 
+
 from custom.model_wrapper import ModelWrapper
 import flax.linen as nn
 import optax
@@ -193,5 +198,11 @@ class DLModelWrapper(ModelWrapper):
         if self.state is None:
             raise ValueError("El modelo debe ser inicializado y entrenado antes de predecir")
         
-        preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other))
+        # Intentar llamar con training=False primero
+        try:
+            preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other), training=False)
+        except TypeError:
+            # Si falla, intentar sin el parámetro training
+            preds = self.model.apply(self.state.params, jnp.array(x_cgm), jnp.array(x_other))
+        
         return np.array(preds)
