@@ -133,7 +133,7 @@ JAX_MODELS = {
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
     "tf_attention_only": True,
-    "tf_cnn": False,
+    "tf_cnn": True,
     "tf_fnn": False,
     "tf_gru": False,
     "tf_lstm": False,

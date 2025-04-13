@@ -2,17 +2,25 @@ import os, sys
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
-    Input, Conv1D, Dense, Dropout, BatchNormalization, LayerNormalization,
-    MaxPooling1D, GlobalAveragePooling1D, GlobalMaxPooling1D, Concatenate,
-    Activation, Add
+    Input, Conv1D, Dense, Dropout, BatchNormalization, 
+    LayerNormalization, Concatenate, Add, Activation, 
+    GlobalAveragePooling1D, GlobalMaxPooling1D, SeparableConv1D
 )
 from keras.saving import register_keras_serializable
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Tuple, Any, Optional, Callable, Union, List
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import CNN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper, DLModelWrapperTF
+
+# Constantes para cadenas repetidas
+CONST_EPSILON = 1e-6
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_SWISH = "swish"
+CONST_SILU = "silu"
 
 @register_keras_serializable()
 class SqueezeExcitationBlock(tf.keras.layers.Layer):
@@ -41,7 +49,22 @@ class SqueezeExcitationBlock(tf.keras.layers.Layer):
         self.dense1 = Dense(filters // se_ratio, activation='gelu')
         self.dense2 = Dense(filters, activation='sigmoid')
     
-    def call(self, inputs: tf.Tensor) -> tf.Tensor:
+    def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
+        """
+        Aplica el mecanismo de Squeeze-and-Excitation a los inputs.
+        
+        Parámetros:
+        -----------
+        inputs : tf.Tensor
+            Tensor de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento
+            
+        Retorna:
+        --------
+        tf.Tensor
+            Tensor procesado con atención de canal
+        """
         # Squeeze
         x = self.gap(inputs)
         
@@ -49,13 +72,20 @@ class SqueezeExcitationBlock(tf.keras.layers.Layer):
         x = self.dense1(x)
         x = self.dense2(x)
         
-        # Reshape para broadcasting
+        # Scale - reshape para broadcasting con inputs
         x = tf.expand_dims(x, axis=1)
         
-        # Scale
         return inputs * x
     
     def get_config(self) -> Dict:
+        """
+        Obtiene la configuración de la capa para serialización.
+        
+        Retorna:
+        --------
+        Dict
+            Diccionario con la configuración de la capa
+        """
         config = super().get_config()
         config.update({
             "filters": self.filters,
@@ -63,126 +93,308 @@ class SqueezeExcitationBlock(tf.keras.layers.Layer):
         })
         return config
 
-def get_activation(activation_name: str) -> Any:
+@register_keras_serializable()
+class ActivationLayer(tf.keras.layers.Layer):
     """
-    Obtiene la función de activación por su nombre.
+    Capa personalizada para funciones de activación.
     
     Parámetros:
     -----------
+    activation_name : str
+        Nombre de la función de activación a aplicar
+    """
+    
+    def __init__(self, activation_name: str, **kwargs):
+        super().__init__(**kwargs)
+        self.activation_name = activation_name
+    
+    def call(self, inputs: tf.Tensor) -> tf.Tensor:
+        """
+        Aplica la función de activación especificada al tensor de entrada.
+        
+        Parámetros:
+        -----------
+        inputs : tf.Tensor
+            Tensor de entrada
+            
+        Retorna:
+        --------
+        tf.Tensor
+            Tensor con la activación aplicada
+        """
+        return get_activation(inputs, self.activation_name)
+    
+    def get_config(self) -> Dict:
+        """
+        Obtiene la configuración de la capa para serialización.
+        
+        Retorna:
+        --------
+        Dict
+            Diccionario con la configuración de la capa
+        """
+        config = super().get_config()
+        config.update({"activation_name": self.activation_name})
+        return config
+
+def get_activation(x: tf.Tensor, activation_name: str) -> tf.Tensor:
+    """
+    Aplica la función de activación según su nombre.
+    
+    Parámetros:
+    -----------
+    x : tf.Tensor
+        Tensor al que aplicar la activación
     activation_name : str
         Nombre de la función de activación
         
     Retorna:
     --------
-    Any
-        Función de activación correspondiente
+    tf.Tensor
+        Tensor con la activación aplicada
     """
-    if activation_name == 'relu':
-        return 'relu'
-    elif activation_name == 'gelu':
-        return 'gelu'
-    elif activation_name == 'swish':
-        return tf.keras.activations.swish
-    elif activation_name == 'silu':
-        return tf.nn.silu
+    if activation_name == CONST_RELU:
+        return tf.nn.relu(x)
+    elif activation_name == CONST_GELU:
+        return tf.nn.gelu(x)
+    elif activation_name == CONST_SWISH:
+        return tf.nn.swish(x)
+    elif activation_name == CONST_SILU:
+        return tf.nn.silu(x)
     else:
-        return 'relu'  # Valor por defecto
+        return tf.nn.relu(x)  # Valor por defecto
 
-def create_residual_block(x: tf.Tensor, filters: int, dilation_rate: int = 1) -> tf.Tensor:
+def create_residual_block(x: tf.Tensor, filters: int, 
+                        kernel_size: int, dilation_rate: int = 1, 
+                        dropout_rate: float = 0.1,
+                        use_se_block: bool = True, 
+                        se_ratio: int = 16) -> tf.Tensor:
     """
-    Crea un bloque residual mejorado con dilated convolutions y SE.
+    Crea un bloque residual con convoluciones dilatadas y SE.
     
     Parámetros:
     -----------
     x : tf.Tensor
         Tensor de entrada
     filters : int
-        Número de filtros
-    dilation_rate : int
-        Tasa de dilatación para las convoluciones
+        Número de filtros para la convolución
+    kernel_size : int
+        Tamaño del kernel para la convolución
+    dilation_rate : int, opcional
+        Tasa de dilatación para las convoluciones (default: 1)
+    dropout_rate : float, opcional
+        Tasa de dropout a aplicar (default: 0.1)
+    use_se_block : bool, opcional
+        Si se debe usar un bloque Squeeze-and-Excitation (default: True)
+    se_ratio : int, opcional
+        Factor de reducción para el bloque SE (default: 16)
         
     Retorna:
     --------
     tf.Tensor
-        Tensor procesado
+        Tensor procesado con conexión residual
     """
+    # Guardar entrada para la conexión residual
     skip = x
     
-    # Camino convolucional
+    # Primera convolución con dilatación
     x = Conv1D(
         filters=filters,
-        kernel_size=CNN_CONFIG['kernel_size'],
+        kernel_size=kernel_size,
         padding='same',
-        dilation_rate=dilation_rate,
-        kernel_initializer='glorot_uniform'
+        dilation_rate=dilation_rate
     )(x)
-    x = LayerNormalization()(x)
-    x = Activation(get_activation(CNN_CONFIG['activation']))(x)
     
-    # Squeeze-and-Excitation
-    if CNN_CONFIG['use_se_block']:
-        x = SqueezeExcitationBlock(filters, CNN_CONFIG['se_ratio'])(x)
+    # Normalización y activación
+    if CNN_CONFIG['use_layer_norm']:
+        x = LayerNormalization(epsilon=CONST_EPSILON)(x)
+    else:
+        x = BatchNormalization()(x)
     
-    # Proyección del residual si es necesario
+    x = Activation(CNN_CONFIG['activation'])(x)
+    
+    # Segunda convolución separable para reducir parámetros
+    x = SeparableConv1D(
+        filters=filters,
+        kernel_size=kernel_size,
+        padding='same'
+    )(x)
+    
+    # Normalización
+    if CNN_CONFIG['use_layer_norm']:
+        x = LayerNormalization(epsilon=CONST_EPSILON)(x)
+    else:
+        x = BatchNormalization()(x)
+    
+    # Squeeze-and-Excitation si está habilitado
+    if use_se_block:
+        x = SqueezeExcitationBlock(filters, se_ratio)(x)
+    
+    # Dropout
+    x = Dropout(dropout_rate)(x)
+    
+    # Conexión residual con proyección si es necesario
     if skip.shape[-1] != filters:
-        skip = Conv1D(filters, 1, padding='same', kernel_initializer='glorot_uniform')(skip)
+        skip = Conv1D(filters, 1, padding='same')(skip)
+        
+        if CNN_CONFIG['use_layer_norm']:
+            skip = LayerNormalization(epsilon=CONST_EPSILON)(skip)
+        else:
+            skip = BatchNormalization()(skip)
     
-    return Add()([x, skip])
+    # Sumar con la conexión residual
+    x = Add()([x, skip])
+    
+    # Activación final
+    x = Activation(CNN_CONFIG['activation'])(x)
+    
+    return x
 
-def create_cnn_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
+def apply_normalization(x: tf.Tensor) -> tf.Tensor:
+    """Aplica normalización según la configuración"""
+    if CNN_CONFIG['use_layer_norm']:
+        return LayerNormalization(epsilon=CONST_EPSILON)(x)
+    else:
+        return BatchNormalization()(x)
+
+def apply_conv_block(x: tf.Tensor, filters: int, kernel_size: int, strides: int = 1) -> tf.Tensor:
+    """Aplica un bloque de convolución con normalización y activación"""
+    x = Conv1D(filters=filters, kernel_size=kernel_size, strides=strides, padding='same')(x)
+    x = apply_normalization(x)
+    x = Activation(CNN_CONFIG['activation'])(x)
+    return x
+
+def apply_residual_blocks(x: tf.Tensor) -> tf.Tensor:
+    """Aplica bloques residuales con diferentes tasas de dilatación y filtros"""
+    for i, filters in enumerate(CNN_CONFIG['filters']):
+        # Aplicar bloques residuales con diferentes tasas de dilatación
+        for dilation_rate in CNN_CONFIG['dilation_rates']:
+            x = create_residual_block(
+                x, filters=filters, kernel_size=CNN_CONFIG['kernel_size'],
+                dilation_rate=dilation_rate, dropout_rate=CNN_CONFIG['dropout_rate'],
+                use_se_block=CNN_CONFIG['use_se_block'], se_ratio=CNN_CONFIG['se_ratio']
+            )
+        
+        # Reducción opcional entre bloques de filtros (excepto el último)
+        if i < len(CNN_CONFIG['filters']) - 1:
+            x = apply_conv_block(
+                x, filters=CNN_CONFIG['filters'][i+1], 
+                kernel_size=CNN_CONFIG['pool_size'], 
+                strides=CNN_CONFIG['pool_size']
+            )
+    
+    return x
+
+def create_mlp_head(x: tf.Tensor) -> tf.Tensor:
+    """Crea la cabeza MLP para la clasificación final"""
+    skip = x
+    
+    # Primera capa densa
+    x = Dense(256)(x)
+    x = ActivationLayer(activation_name=CNN_CONFIG['activation'])(x)
+    x = apply_normalization(x)
+    x = Dropout(CNN_CONFIG['dropout_rate'])(x)
+    
+    # Segunda capa densa
+    x = Dense(256)(x)
+    x = ActivationLayer(activation_name=CNN_CONFIG['activation'])(x)
+    
+    # Conexión residual si las dimensiones coinciden
+    if skip.shape[-1] == 256:
+        x = Add()([x, skip])
+    
+    # Capa final de proyección
+    x = Dense(128)(x)
+    x = ActivationLayer(activation_name=CNN_CONFIG['activation'])(x)
+    x = apply_normalization(x)
+    x = Dropout(CNN_CONFIG['dropout_rate'] / 2)(x)
+    
+    return Dense(1)(x)
+
+def create_cnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
     """
-    Crea un modelo CNN (Red Neuronal Convolucional) con entrada dual para datos CGM y otras características.
+    Crea un modelo CNN avanzado con características modernas como bloques residuales,
+    convoluciones dilatadas y Squeeze-and-Excitation.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características) sin incluir el batch
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características) sin incluir el batch
         
     Retorna:
     --------
     Model
-        Modelo CNN compilado
+        Modelo CNN avanzado compilado
     """
-    # Entrada CGM
-    cgm_input = Input(shape=cgm_shape[1:], name='cgm_input')
+    # Validar la forma de entrada
+    if len(cgm_shape) < 2:
+        raise ValueError(f"La entrada CGM debe tener al menos 2 dimensiones: (timesteps, features). Recibido: {cgm_shape}")
+    
+    # Crear entradas
+    cgm_input = Input(shape=cgm_shape)
+    other_input = Input(shape=other_features_shape)
     
     # Proyección inicial
-    x = Conv1D(CNN_CONFIG['filters'][0], 1, padding='same', kernel_initializer='glorot_uniform')(cgm_input)
-    x = LayerNormalization()(x) if CNN_CONFIG['use_layer_norm'] else BatchNormalization()(x)
+    x = apply_conv_block(cgm_input, filters=CNN_CONFIG['filters'][0], kernel_size=1)
     
-    # Bloques residuales con diferentes tasas de dilatación
-    for filters in CNN_CONFIG['filters']:
-        for dilation_rate in CNN_CONFIG['dilation_rates']:
-            x = create_residual_block(x, filters, dilation_rate)
-        x = MaxPooling1D(pool_size=CNN_CONFIG['pool_size'])(x)
+    # Bloques residuales
+    x = apply_residual_blocks(x)
     
-    # Pooling global con concat de max y average
+    # Pooling global
     avg_pool = GlobalAveragePooling1D()(x)
     max_pool = GlobalMaxPooling1D()(x)
-    x = Concatenate()([avg_pool, max_pool])
+    x = Concatenate()([avg_pool, max_pool, other_input])
     
-    # Entrada de otras características
-    other_input = Input(shape=(other_features_shape[1],), name='other_input')
-    
-    # Combinar características
-    combined = Concatenate()([x, other_input])
-    
-    # Capas densas con conexiones residuales
-    skip = combined
-    dense = Dense(256, activation=get_activation(CNN_CONFIG['activation']), kernel_initializer='glorot_uniform')(combined)
-    dense = LayerNormalization()(dense) if CNN_CONFIG['use_layer_norm'] else BatchNormalization()(dense)
-    dense = Dropout(CNN_CONFIG['dropout_rate'])(dense)
-    dense = Dense(256, activation=get_activation(CNN_CONFIG['activation']), kernel_initializer='glorot_uniform')(dense)
-    if skip.shape[-1] == 256:
-        dense = Add()([dense, skip])
-    
-    # Capas finales
-    dense = Dense(128, activation=get_activation(CNN_CONFIG['activation']), kernel_initializer='glorot_uniform')(dense)
-    dense = LayerNormalization()(dense) if CNN_CONFIG['use_layer_norm'] else BatchNormalization()(dense)
-    dense = Dropout(CNN_CONFIG['dropout_rate'] / 2)(dense)
-    
-    output = Dense(1, kernel_initializer='glorot_uniform')(dense)
+    # MLP final
+    output = create_mlp_head(x)
     
     return Model(inputs=[cgm_input, other_input], outputs=output)
+
+def create_model_creator(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Callable[[], Model]:
+    """
+    Crea una función creadora de modelos compatible con DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    Callable[[], Model]
+        Función que crea un modelo CNN sin argumentos
+    """
+    def model_creator() -> Model:
+        """
+        Crea un modelo CNN sin argumentos.
+        
+        Retorna:
+        --------
+        Model
+            Modelo CNN compilado
+        """
+        return create_cnn_model(cgm_shape, other_features_shape)
+    
+    return model_creator
+
+def create_cnn_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+    """
+    Crea un modelo CNN avanzado envuelto en DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    DLModelWrapper
+        Modelo CNN avanzado envuelto en DLModelWrapper
+    """
+    return DLModelWrapper(create_model_creator(cgm_shape, other_features_shape), 'tensorflow')
