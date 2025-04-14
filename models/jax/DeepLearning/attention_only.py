@@ -153,8 +153,8 @@ class AttentionBlock(nn.Module):
             # Usar implementación estándar sin posición relativa
             attention_output = nn.MultiHeadAttention(
                 num_heads=self.num_heads,
-                key_size=self.key_dim,
-                dropout_rate=0.0
+                qkv_features=self.key_dim,
+                dropout_rate=ATTENTION_CONFIG['dropout_rate'],
             )(x, x)
         
         # Mecanismo de gating
