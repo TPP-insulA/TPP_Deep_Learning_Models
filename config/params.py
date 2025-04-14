@@ -165,7 +165,7 @@ USE_JAX_MODELS = {
     "jax_attention_only": True,
     "jax_cnn": True,
     "jax_fnn": True,
-    "jax_gru": False,
+    "jax_gru": True,
     "jax_lstm": False,
     "jax_rnn": True,
     "jax_tabnet": False,
