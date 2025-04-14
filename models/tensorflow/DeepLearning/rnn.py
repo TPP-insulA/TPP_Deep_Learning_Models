@@ -12,6 +12,10 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import RNN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper, DLModelWrapperTF
+
+# Constantes para cadenas repetidas
+CONST_EPSILON = 1e-6
 
 def get_activation_fn(activation_name: str) -> Callable:
     """
@@ -38,16 +42,16 @@ def get_activation_fn(activation_name: str) -> Callable:
     else:
         return tf.nn.relu  # Por defecto
 
-def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
+def create_rnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
     """
     Crea un modelo RNN optimizado para velocidad con procesamiento temporal distribuido.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (samples, timesteps, features)
-    other_features_shape : tuple
-        Forma de otras características (samples, features)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (timesteps, features)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (features,)
         
     Retorna:
     --------
@@ -55,8 +59,8 @@ def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
         Modelo RNN compilado
     """
     # Entradas
-    cgm_input = Input(shape=cgm_shape[1:])
-    other_input = Input(shape=(other_features_shape[1],))
+    cgm_input = Input(shape=cgm_shape)
+    other_input = Input(shape=other_features_shape)
     
     # Procesamiento temporal distribuido inicial
     if RNN_CONFIG['use_time_distributed']:
@@ -117,3 +121,50 @@ def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
     output = Dense(1)(x)
     
     return Model(inputs=[cgm_input, other_input], outputs=output)
+
+def create_model_creator(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Callable[[], Model]:
+    """
+    Crea una función creadora de modelos compatible con DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    Callable[[], Model]
+        Función que crea un modelo RNN sin argumentos
+    """
+    def model_creator() -> Model:
+        """
+        Crea un modelo RNN sin argumentos.
+        
+        Retorna:
+        --------
+        Model
+            Modelo RNN de TensorFlow
+        """
+        return create_rnn_model(cgm_shape, other_features_shape)
+    
+    return model_creator
+
+def create_rnn_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+    """
+    Crea un modelo RNN envuelto en DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    DLModelWrapper
+        Modelo RNN envuelto en DLModelWrapper
+    """
+    return DLModelWrapper(create_model_creator(cgm_shape, other_features_shape), 'tensorflow')
