@@ -132,12 +132,12 @@ JAX_MODELS = {
 # Modelos TensorFlow a utilizar
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "tf_attention_only": False,
-    "tf_cnn": False,
-    "tf_fnn": False,
-    "tf_gru": False,
+    "tf_attention_only": True,
+    "tf_cnn": True,
+    "tf_fnn": True,
+    "tf_gru": True,
     "tf_lstm": True,
-    "tf_rnn": False,
+    "tf_rnn": True,
     "tf_tabnet": False,
     "tf_tcn": False,
     "tf_transformer": False,
