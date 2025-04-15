@@ -168,7 +168,7 @@ USE_JAX_MODELS = {
     "jax_gru": True,
     "jax_lstm": True,
     "jax_rnn": True,
-    "jax_tabnet": False,
+    "jax_tabnet": True,
     "jax_tcn": False,
     "jax_transformer": False,
     "jax_wavenet": False,

@@ -1,9 +1,11 @@
+import time
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
 import numpy as np
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from flax.training import train_state
+from flax.core.frozen_dict import FrozenDict
 import optax
 
 from custom.model_wrapper import ModelWrapper
@@ -213,6 +215,7 @@ class DLModelWrapperJAX(ModelWrapper):
         self.state = None
         self.early_stopping = None
         self.history = {"loss": [], "val_loss": []}
+        self.batch_stats = None
     
     def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
         """
@@ -261,8 +264,12 @@ class DLModelWrapperJAX(ModelWrapper):
         cgm_sample = jnp.array(x_cgm[0:1])
         other_sample = jnp.array(x_other[0:1])
         
-        # Inicializar variables del modelo
+        # Inicializar variables del modelo con colecciones mutables
         variables = model.init(rng_key, cgm_sample, other_sample, training=True)
+        
+        # Separar params y batch_stats
+        params = variables['params']
+        batch_stats = variables.get('batch_stats', {})
         
         # Crear estado de entrenamiento
         learning_rate = 0.001
@@ -270,7 +277,7 @@ class DLModelWrapperJAX(ModelWrapper):
         
         state = train_state.TrainState.create(
             apply_fn=model.apply,
-            params=variables['params'],
+            params=params,
             tx=tx
         )
         
@@ -278,6 +285,7 @@ class DLModelWrapperJAX(ModelWrapper):
         self.state = state
         self.params = variables
         self.model_instance = model
+        self.batch_stats = batch_stats  # Guardar batch_stats separadamente
     
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              rng_key: Any = None) -> Any:
@@ -309,6 +317,125 @@ class DLModelWrapperJAX(ModelWrapper):
         
         return self.params
     
+    def _prepare_model_variables(self, params: Union[Dict, FrozenDict], training: bool) -> Tuple[Dict, Union[bool, List[str]]]:
+        """
+        Prepara las variables del modelo y configuración de mutabilidad.
+        
+        Parámetros:
+        -----------
+        params : Union[Dict, FrozenDict]
+            Parámetros del modelo.
+        training : bool
+            Indica si es fase de entrenamiento.
+            
+        Retorna:
+        --------
+        Tuple[Dict, Union[bool, List[str]]]
+            - Variables del modelo.
+            - Configuración de mutabilidad.
+        """
+        variables = {'params': params}
+        mutable_collections: List[str] = []
+        
+        if training:
+            mutable_collections.append('batch_stats')
+            mutable_collections.append('losses')
+            
+        if hasattr(self, 'batch_stats') and self.batch_stats:
+            variables['batch_stats'] = self.batch_stats
+            
+        mutable: Union[bool, List[str]] = mutable_collections if mutable_collections else False
+        
+        return variables, mutable
+    
+    def _process_model_outputs(self, outputs: Union[jnp.ndarray, Tuple[jnp.ndarray, Any]], training: bool) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Procesa las salidas del modelo y extrae predicciones y pérdida de entropía.
+        
+        Parámetros:
+        -----------
+        outputs : Union[jnp.ndarray, Tuple[jnp.ndarray, Any]]
+            Salidas del modelo.
+        training : bool
+            Indica si es fase de entrenamiento.
+            
+        Retorna:
+        --------
+        Tuple[jnp.ndarray, jnp.ndarray]
+            - Predicciones.
+            - Pérdida de entropía.
+        """
+        entropy_loss: jnp.ndarray = jnp.array(0.0)
+        
+        if isinstance(outputs, tuple) and len(outputs) == 2 and training:
+            predictions, updated_state = outputs
+            entropy_loss = self._extract_entropy_loss(updated_state)
+        elif isinstance(outputs, jax.Array):
+            predictions = outputs
+        else:
+            raise ValueError(f"Salida inesperada del modelo.apply: {type(outputs)}")
+            
+        return predictions, entropy_loss
+    
+    def _extract_entropy_loss(self, updated_state: Any) -> jnp.ndarray:
+        """
+        Extrae la pérdida de entropía del estado actualizado.
+        
+        Parámetros:
+        -----------
+        updated_state : Any
+            Estado actualizado del modelo.
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Pérdida de entropía extraída.
+        """
+        if not updated_state or 'losses' not in updated_state:
+            return jnp.array(0.0)
+            
+        collected_losses = updated_state.get('losses', {})
+        sown_entropy_values = collected_losses.get('entropy_loss', None)
+        
+        # Caso 1: Lista o tupla de valores
+        if sown_entropy_values and isinstance(sown_entropy_values, (tuple, list)) and len(sown_entropy_values) > 0:
+            potential_loss = sown_entropy_values[0]
+            
+            if isinstance(potential_loss, jax.Array):
+                return potential_loss
+                
+            try:
+                return jnp.array(potential_loss)
+            except TypeError:
+                cprint(f"Advertencia: No se pudo convertir el valor sembrado '{potential_loss}' a jnp.array.", 'yellow')
+                return jnp.array(0.0)
+                
+        # Caso 2: Valor escalar
+        elif sown_entropy_values is not None and jnp.isscalar(sown_entropy_values):
+            return jnp.array(sown_entropy_values)
+            
+        return jnp.array(0.0)
+    
+    def _calculate_primary_loss(self, predictions: jnp.ndarray, batch_targets: jnp.ndarray) -> jnp.ndarray:
+        """
+        Calcula la pérdida primaria (MSE).
+        
+        Parámetros:
+        -----------
+        predictions : jnp.ndarray
+            Predicciones del modelo.
+        batch_targets : jnp.ndarray
+            Valores objetivo.
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Pérdida primaria calculada.
+        """
+        predictions_flat = predictions.squeeze()
+        batch_targets_flat = batch_targets.squeeze()
+        return jnp.mean(jnp.square(predictions_flat - batch_targets_flat))
+    
     def _create_loss_fn(self) -> Callable:
         """
         Crea una función de pérdida para el entrenamiento.
@@ -318,15 +445,37 @@ class DLModelWrapperJAX(ModelWrapper):
         Callable
             Función de pérdida
         """
-        def loss_fn(params, batch_cgm, batch_other, batch_targets, rng, training=True):
-            predictions = self.model_instance.apply(
-                {'params': params},
+        def loss_fn(params: Union[Dict, FrozenDict],
+                    batch_cgm: jnp.ndarray,
+                    batch_other: jnp.ndarray,
+                    batch_targets: jnp.ndarray,
+                    rng: jax.random.PRNGKey,
+                    training: bool = True) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            """
+            Calcula la pérdida total (primaria + regularización) y las predicciones.
+            """
+            # Preparar variables del modelo
+            variables, mutable = self._prepare_model_variables(params, training)
+            
+            # Aplicar el modelo
+            outputs = self.model_instance.apply(
+                variables,
                 batch_cgm, batch_other, training=training,
-                rngs={'dropout': rng}
+                rngs={'dropout': rng} if training else None,
+                mutable=mutable
             )
-            loss = jnp.mean((predictions - batch_targets) ** 2)
-            return loss, predictions
-        
+            
+            # Procesar salidas
+            predictions, entropy_loss = self._process_model_outputs(outputs, training)
+            
+            # Calcular pérdida primaria
+            primary_loss = self._calculate_primary_loss(predictions, batch_targets)
+            
+            # Calcular pérdida total
+            total_loss = primary_loss + entropy_loss
+            
+            return total_loss, predictions
+
         return loss_fn
     
     def _get_batches(self, x_cgm, x_other, y, batch_size):
@@ -395,11 +544,17 @@ class DLModelWrapperJAX(ModelWrapper):
         batch_losses = []
         
         for batch_idx, (batch_cgm, batch_other, batch_y) in enumerate(self._get_batches(x_cgm_arr, x_other_arr, y_arr, batch_size)):
+            # Generar clave RNG para este lote
             batch_rng = jax.random.fold_in(epoch_rng, batch_idx)
+            
+            # Ejecutar paso de entrenamiento con batch_stats
             loss, self.state = train_step(self.state, batch_cgm, batch_other, batch_y, batch_rng)
             batch_losses.append(loss)
         
-        return float(np.mean(batch_losses)), self.state
+        # Calcular pérdida promedio
+        avg_loss = sum(batch_losses) / len(batch_losses) if batch_losses else 0.0
+        
+        return avg_loss, self.state
     
     def _apply_early_stopping(self, val_loss, avg_loss, do_validation, epoch, epochs):
         """
@@ -450,6 +605,249 @@ class DLModelWrapperJAX(ModelWrapper):
         
         return False
     
+    def _prepare_validation_data(self, validation_data):
+        """
+        Prepara los datos de validación.
+        
+        Parámetros:
+        -----------
+        validation_data : Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]]
+            Datos de validación
+            
+        Retorna:
+        --------
+        Tuple[bool, Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], 
+              Optional[jnp.ndarray], Optional[jnp.ndarray], Optional[jnp.ndarray]]
+            Tupla con información de validación
+        """
+        do_validation = validation_data is not None
+        x_cgm_val = x_other_val = y_val = None
+        x_cgm_val_arr = x_other_val_arr = y_val_arr = None
+        
+        if do_validation:
+            (x_cgm_val, x_other_val), y_val = validation_data
+            x_cgm_val_arr = jnp.array(x_cgm_val)
+            x_other_val_arr = jnp.array(x_other_val)
+            y_val_arr = jnp.array(y_val)
+            
+        return do_validation, x_cgm_val, x_other_val, y_val, x_cgm_val_arr, x_other_val_arr, y_val_arr
+    
+    def _compute_validation_metrics(self, val_preds, y_val_arr, do_validation):
+        """
+        Calcula métricas de validación.
+        
+        Parámetros:
+        -----------
+        val_preds : jnp.ndarray
+            Predicciones de validación
+        y_val_arr : jnp.ndarray
+            Valores reales de validación
+        do_validation : bool
+            Si se realiza validación
+            
+        Retorna:
+        --------
+        Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]
+            Tupla con métricas de validación (val_loss, mae, rmse, r2)
+        """
+        if not do_validation:
+            return None, None, None, None
+            
+        val_loss = float(jnp.mean((val_preds - y_val_arr) ** 2))
+        mae = float(np.mean(np.abs(val_preds - y_val_arr)))
+        rmse = float(np.sqrt(np.mean((val_preds - y_val_arr) ** 2)))
+        
+        # R²
+        ss_res = np.sum((y_val_arr - val_preds) ** 2)
+        ss_tot = np.sum((y_val_arr - np.mean(y_val_arr)) ** 2)
+        r2 = float(1 - (ss_res / (ss_tot + 1e-8)))
+        
+        return val_loss, mae, rmse, r2
+    
+    def _define_train_step(self, loss_fn):
+        """
+        Define el paso de entrenamiento JIT-compilado.
+        
+        Parámetros:
+        -----------
+        loss_fn : Callable
+            Función de pérdida
+            
+        Retorna:
+        --------
+        Callable
+            Función de paso de entrenamiento JIT-compilada
+        """
+        @jax.jit
+        def train_step(state: train_state.TrainState,
+                      batch_cgm: jnp.ndarray,
+                      batch_other: jnp.ndarray,
+                      batch_targets: jnp.ndarray,
+                      rng: jax.random.PRNGKey) -> Tuple[jnp.ndarray, train_state.TrainState]:
+            """
+            Ejecuta un paso de entrenamiento JIT-compilado.
+            """
+            # Wrapper para la función de pérdida que devuelve (loss, aux_data)
+            def loss_wrapper(params: Union[Dict, FrozenDict]) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                loss_val, predictions = loss_fn(params, batch_cgm, batch_other, batch_targets, rng, training=True)
+                return loss_val, predictions
+
+            # Calcular gradientes
+            grad_fn = jax.value_and_grad(loss_wrapper, has_aux=True)
+            (loss, _), grads = grad_fn(state.params)
+
+            # Aplicar gradientes
+            new_state = state.apply_gradients(grads=grads)
+
+            return loss, new_state
+        
+        return train_step
+    
+    def _run_epoch(self, train_step, x_cgm_arr, x_other_arr, y_arr, batch_size, epoch_rng):
+        """
+        Ejecuta una época de entrenamiento.
+        
+        Parámetros:
+        -----------
+        train_step : Callable
+            Función de paso de entrenamiento
+        x_cgm_arr : jnp.ndarray
+            Datos CGM de entrenamiento
+        x_other_arr : jnp.ndarray
+            Otras características de entrenamiento
+        y_arr : jnp.ndarray
+            Valores objetivo
+        batch_size : int
+            Tamaño de lote
+        epoch_rng : jax.random.PRNGKey
+            Clave RNG para la época
+            
+        Retorna:
+        --------
+        Tuple[float, float]
+            Pérdida promedio y duración de la época
+        """
+        batch_losses = []
+        epoch_start_time = time.time()
+        
+        for batch_idx, (batch_cgm, batch_other, batch_y) in enumerate(
+                self._get_batches(x_cgm_arr, x_other_arr, y_arr, batch_size)):
+            # Generar clave RNG para este lote
+            batch_rng = jax.random.fold_in(epoch_rng, batch_idx)
+            
+            # Ejecutar paso de entrenamiento
+            loss_value, new_train_state = train_step(
+                self.state, batch_cgm, batch_other, batch_y, batch_rng
+            )
+            
+            # Actualizar estado
+            self.state = new_train_state
+            if hasattr(new_train_state, 'batch_stats'):
+                self.batch_stats = new_train_state.batch_stats
+                
+            batch_losses.append(float(loss_value))
+            
+        # Calcular pérdida y duración
+        avg_loss = np.mean(batch_losses) if batch_losses else 0.0
+        epoch_duration = time.time() - epoch_start_time
+        
+        return avg_loss, epoch_duration
+    
+    def _perform_validation(self, x_cgm_val_arr, x_other_val_arr, y_val_arr, do_validation):
+        """
+        Realiza la validación del modelo.
+        
+        Parámetros:
+        -----------
+        x_cgm_val_arr : Optional[jnp.ndarray]
+            Datos CGM de validación
+        x_other_val_arr : Optional[jnp.ndarray]
+            Otras características de validación
+        y_val_arr : Optional[jnp.ndarray]
+            Valores objetivo de validación
+        do_validation : bool
+            Indica si se debe realizar validación
+            
+        Retorna:
+        --------
+        Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]
+            Métricas de validación (val_loss, mae, rmse, r2)
+        """
+        if not (do_validation and x_cgm_val_arr is not None and x_other_val_arr is not None):
+            return None, None, None, None
+            
+        # Preparar variables para la predicción
+        eval_variables = {'params': self.state.params}
+        if hasattr(self, 'batch_stats') and self.batch_stats:
+            eval_variables['batch_stats'] = self.batch_stats
+            
+        # Realizar predicción en modo evaluación
+        val_preds_jax = self.model_instance.apply(
+            eval_variables,
+            x_cgm_val_arr, x_other_val_arr, training=False
+        )
+        
+        # Convertir a NumPy
+        val_preds_np = np.array(val_preds_jax)
+        
+        # Calcular métricas
+        return self._compute_validation_metrics(
+            val_preds_np, np.array(y_val_arr), do_validation
+        )
+    
+    def _update_history(self, avg_loss, val_metrics, do_validation):
+        """
+        Actualiza el historial de entrenamiento.
+        
+        Parámetros:
+        -----------
+        avg_loss : float
+            Pérdida promedio de entrenamiento
+        val_metrics : Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]
+            Métricas de validación (val_loss, mae, rmse, r2)
+        do_validation : bool
+            Indica si se realizó validación
+        """
+        val_loss, mae, rmse, r2 = val_metrics
+        
+        self.history["loss"].append(avg_loss)
+        if do_validation:
+            self.history["val_loss"].append(val_loss)
+            self.history["val_mae"].append(mae)
+            self.history["val_rmse"].append(rmse)
+            self.history["val_r2"].append(r2)
+    
+    def _format_progress_message(self, epoch, epochs, avg_loss, epoch_duration, val_metrics):
+        """
+        Formatea el mensaje de progreso del entrenamiento.
+        
+        Parámetros:
+        -----------
+        epoch : int
+            Época actual
+        epochs : int
+            Total de épocas
+        avg_loss : float
+            Pérdida promedio
+        epoch_duration : float
+            Duración de la época
+        val_metrics : Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]
+            Métricas de validación
+            
+        Retorna:
+        --------
+        str
+            Mensaje formateado
+        """
+        val_loss, mae, rmse, r2 = val_metrics
+        
+        val_loss_str = f" | val_loss: {val_loss:.4f}" if val_loss is not None else ""
+        metrics_str = ""
+        if mae is not None and rmse is not None and r2 is not None:
+            metrics_str = f" | MAE: {mae:.4f} | RMSE: {rmse:.4f} | R²: {r2:.4f}"
+            
+        return f"Época {epoch+1}/{epochs} >> Loss: {avg_loss:.4f}{val_loss_str}{metrics_str} (t: {epoch_duration:.2f}s)"
+    
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
              epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
@@ -480,74 +878,49 @@ class DLModelWrapperJAX(ModelWrapper):
         if self.state is None:
             self.start(x_cgm, x_other, y)
         
-        # Datos de validación
-        do_validation = validation_data is not None
-        x_cgm_val = x_other_val = y_val = None
-        
-        if do_validation:
-            (x_cgm_val, x_other_val), y_val = validation_data
+        # Preparar datos
+        validation_info = self._prepare_validation_data(validation_data)
+        do_validation, _, _, _, x_cgm_val_arr, x_other_val_arr, y_val_arr = validation_info
         
         # Convertir a arrays de JAX
         x_cgm_arr = jnp.array(x_cgm)
         x_other_arr = jnp.array(x_other)
         y_arr = jnp.array(y)
         
-        if do_validation:
-            x_cgm_val_arr = jnp.array(x_cgm_val)
-            x_other_val_arr = jnp.array(x_other_val)
-            y_val_arr = jnp.array(y_val)
-        
-        # Crear función de pérdida y paso de entrenamiento
+        # Configurar entrenamiento
         loss_fn = self._create_loss_fn()
-        
-        @jax.jit
-        def train_step(state, batch_cgm, batch_other, batch_targets, rng):
-            """Función para un paso de entrenamiento"""
-            def loss_wrapper(params):
-                loss, _ = loss_fn(params, batch_cgm, batch_other, batch_targets, rng)
-                return loss
-            
-            # Calcular gradientes y actualizar parámetros
-            grad_fn = jax.value_and_grad(loss_wrapper)
-            loss, grads = grad_fn(state.params)
-            new_state = state.apply_gradients(grads=grads)
-            
-            return loss, new_state
-        
-        # Entrenar por épocas
+        train_step = self._define_train_step(loss_fn)
         master_rng = jax.random.PRNGKey(0)
+        self.history = {"loss": [], "val_loss": [], "val_mae": [], "val_rmse": [], "val_r2": []}
         
+        # Bucle de entrenamiento
         for epoch in range(epochs):
-            # Clave PRNG para la época
+            # Generar clave RNG para esta época
             epoch_rng = jax.random.fold_in(master_rng, epoch)
             
-            # Entrenamiento
-            avg_loss, self.state = self._run_training_epoch(
+            # Ejecutar época de entrenamiento
+            avg_loss, epoch_duration = self._run_epoch(
                 train_step, x_cgm_arr, x_other_arr, y_arr, batch_size, epoch_rng
             )
             
-            # Validación
-            val_loss = None
-            if do_validation:
-                val_preds = self.model_instance.apply(
-                    {'params': self.state.params},
-                    x_cgm_val_arr, x_other_val_arr, training=False
-                )
-                val_loss = float(jnp.mean((val_preds - y_val_arr) ** 2))
+            # Realizar validación
+            val_metrics = self._perform_validation(
+                x_cgm_val_arr, x_other_val_arr, y_val_arr, do_validation
+            )
             
             # Actualizar historial
-            self.history["loss"].append(avg_loss)
-            if do_validation:
-                self.history["val_loss"].append(val_loss)
+            self._update_history(avg_loss, val_metrics, do_validation)
             
             # Imprimir progreso
-            val_str = f" - val_loss: {val_loss:.4f}" if do_validation else ""
-            cprint(f"Época {epoch+1}/{epochs} - loss: {avg_loss:.4f}{val_str}", background='blue', colour='yellow', style='bold')
+            progress_msg = self._format_progress_message(
+                epoch, epochs, avg_loss, epoch_duration, val_metrics
+            )
+            cprint(progress_msg, colour='yellow', background='blue', style='bold')
             
             # Early stopping
-            if self._apply_early_stopping(val_loss, avg_loss, do_validation, epoch, epochs):
+            if self._apply_early_stopping(val_metrics[0], avg_loss, do_validation, epoch, epochs):
                 break
-        
+                
         return self.history
     
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
@@ -567,13 +940,19 @@ class DLModelWrapperJAX(ModelWrapper):
             Predicciones del modelo
         """
         if self.state is None:
-            raise ValueError("El modelo debe ser entrenado antes de predecir")
+            raise ValueError("El modelo no ha sido inicializado. Llama a start() primero.")
         
         x_cgm_arr = jnp.array(x_cgm)
         x_other_arr = jnp.array(x_other)
         
+        # Preparar variables incluyendo batch_stats
+        variables = {'params': self.state.params}
+        if hasattr(self, 'batch_stats') and self.batch_stats:
+            variables['batch_stats'] = self.batch_stats
+        
+        # Aplicar el modelo
         predictions = self.model_instance.apply(
-            {'params': self.state.params},
+            variables,
             x_cgm_arr, x_other_arr, training=False
         )
         
