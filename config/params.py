@@ -138,7 +138,7 @@ USE_TF_MODELS = {
     "tf_gru": True,
     "tf_lstm": True,
     "tf_rnn": True,
-    "tf_tabnet": False,
+    "tf_tabnet": True,
     "tf_tcn": False,
     "tf_transformer": False,
     "tf_wavenet": False,
