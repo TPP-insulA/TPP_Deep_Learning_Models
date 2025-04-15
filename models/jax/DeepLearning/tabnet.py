@@ -386,7 +386,7 @@ class TabNetModel(nn.Module):
         self.final_dense = nn.Dense(1, name="final_output_dense") # Salida de regresión (1 valor)
 
     @nn.compact
-    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool, return_mask: bool = False) -> jnp.ndarray:
         """
         Aplica el modelo TabNet a las entradas.
 
@@ -398,6 +398,8 @@ class TabNetModel(nn.Module):
             Otras características de entrada (batch, other_features).
         training : bool
             Indica si el modelo está en modo entrenamiento.
+        return_mask : bool
+            Indica si se debe devolver la máscara de atención agregada.
 
         Retorna:
         --------
@@ -476,15 +478,21 @@ class TabNetModel(nn.Module):
         # 4. Capa final de salida
         output = self.final_dense(final_features)
 
-        # (Opcional) Añadir la pérdida de entropía a las pérdidas del modelo
+        # Añadir la pérdida de entropía a las pérdidas del modelo
         # Esto requiere que el framework de entrenamiento lo recoja.
         if self.sparsity_coefficient > 0 and training:
             # Dividir por el número de pasos para obtener la pérdida promedio por paso
             avg_entropy_loss = total_entropy_loss / self.num_decision_steps
+            # Multiplicar por el coeficiente de esparcidad
+            calculated_entropy_loss = avg_entropy_loss * self.sparsity_coefficient
+            # Registrar la pérdida de entropía en el estado del modelo
+            entropy_loss_value_to_return = calculated_entropy_loss
             # Registrar la pérdida para que pueda ser añadida a la pérdida principal externamente
-            self.sow('losses', 'entropy_loss', avg_entropy_loss * self.sparsity_coefficient)
+            self.sow('losses', 'entropy_loss', calculated_entropy_loss)
 
-        return output.squeeze(-1) # Asegurar forma (batch_size,)
+        final_output = output.squeeze(-1) # Asegurar forma (batch_size,)
+        
+        return final_output, aggregated_mask, entropy_loss_value_to_return if return_mask else final_output
 
 def create_tabnet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
