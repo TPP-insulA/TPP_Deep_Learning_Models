@@ -169,8 +169,8 @@ USE_JAX_MODELS = {
     "jax_lstm": False,
     "jax_rnn": False,
     "jax_tabnet": False,
-    "jax_tcn": True,
-    "jax_transformer": False,
+    "jax_tcn": False,
+    "jax_transformer": True,
     "jax_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "jax_monte_carlo": False,
