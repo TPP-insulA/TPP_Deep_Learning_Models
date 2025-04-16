@@ -6,12 +6,13 @@ from tensorflow.keras.layers import (
     MultiHeadAttention, Add, GlobalAveragePooling1D, GlobalMaxPooling1D,
     BatchNormalization, Bidirectional
 )
-from typing import Tuple, Dict, Any, Optional, List, Union
+from typing import Tuple, Dict, Any, Optional, List, Union, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import LSTM_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
 
 def get_activation_fn(activation_name: str) -> Any:
     """
@@ -94,15 +95,84 @@ def create_lstm_attention_block(x: tf.Tensor, units: int, num_heads: int = 4,
     
     return x
 
-def create_lstm_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
+def _process_input_shapes(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Tuple[Tuple, Tuple]:
+    """
+    Procesa y normaliza las formas de entrada para el modelo LSTM.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características
+        
+    Retorna:
+    --------
+    Tuple[Tuple, Tuple]
+        Tupla con las formas normalizadas (cgm_input_shape, other_input_shape)
+    """
+    # Ensure shapes are properly handled
+    if len(cgm_shape) < 3:
+        # Add batch dimension if not present
+        cgm_input_shape = cgm_shape if len(cgm_shape) >= 2 else (None, cgm_shape[0], 1)
+    else:
+        cgm_input_shape = cgm_shape[1:]
+    
+    # Safely handle other_features_shape
+    if isinstance(other_features_shape, tuple) and len(other_features_shape) > 1:
+        other_input_shape = (other_features_shape[1],)
+    else:
+        # If other_features_shape is not a proper tuple or doesn't have enough elements
+        # Create a sensible default or extract from what's available
+        other_input_shape = (other_features_shape[0],) if isinstance(other_features_shape, tuple) and len(other_features_shape) > 0 else (1,)
+    
+    return cgm_input_shape, other_input_shape
+
+def _build_dense_layers(x: tf.Tensor, skip: tf.Tensor) -> tf.Tensor:
+    """
+    Construye las capas densas finales del modelo.
+    
+    Parámetros:
+    -----------
+    x : tf.Tensor
+        Tensor de entrada
+    skip : tf.Tensor
+        Tensor para conexión residual
+        
+    Retorna:
+    --------
+    tf.Tensor
+        Salida procesada
+    """
+    # Usar get_activation_fn para tener consistencia con la versión JAX
+    activation_fn = get_activation_fn(LSTM_CONFIG['dense_activation'])
+    
+    x = Dense(LSTM_CONFIG['dense_units'][0])(x)
+    x = tf.keras.layers.Activation(activation_fn)(x)
+    x = LayerNormalization(epsilon=LSTM_CONFIG['epsilon'])(x)
+    x = Dropout(LSTM_CONFIG['dropout_rate'])(x)
+    
+    # Segunda capa densa con residual
+    x = Dense(LSTM_CONFIG['dense_units'][1])(x)
+    x = tf.keras.layers.Activation(activation_fn)(x)
+    
+    if skip.shape[-1] == LSTM_CONFIG['dense_units'][1]:
+        x = Add()([x, skip])  # Skip connection si las dimensiones coinciden
+        
+    x = LayerNormalization(epsilon=LSTM_CONFIG['epsilon'])(x)
+    x = Dropout(LSTM_CONFIG['dropout_rate'] * 0.5)(x)  # Menor dropout en capas finales
+    
+    return x
+
+def create_lstm_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
     """
     Crea un modelo LSTM avanzado con self-attention y conexiones residuales.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
+    cgm_shape : Tuple[int, ...]
         Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
+    other_features_shape : Tuple[int, ...]
         Forma de otras características (muestras, características)
         
     Retorna:
@@ -110,9 +180,12 @@ def create_lstm_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
     Model
         Modelo LSTM compilado
     """
+    # Procesar las formas de entrada
+    cgm_input_shape, other_input_shape = _process_input_shapes(cgm_shape, other_features_shape)
+    
     # Entradas
-    cgm_input = Input(shape=cgm_shape[1:], name='cgm_input')
-    other_input = Input(shape=(other_features_shape[1],), name='other_input')
+    cgm_input = Input(shape=cgm_input_shape, name='cgm_input')
+    other_input = Input(shape=other_input_shape, name='other_input')
     
     # Proyección inicial
     x = Dense(LSTM_CONFIG['hidden_units'][0])(cgm_input)
@@ -151,26 +224,63 @@ def create_lstm_model(cgm_shape: tuple, other_features_shape: tuple) -> Model:
     
     # Red densa final con skip connections
     skip = x
-    
-    # Usar get_activation_fn para tener consistencia con la versión JAX
-    activation_fn = get_activation_fn(LSTM_CONFIG['dense_activation'])
-    
-    x = Dense(LSTM_CONFIG['dense_units'][0])(x)
-    x = tf.keras.layers.Activation(activation_fn)(x)
-    x = LayerNormalization(epsilon=LSTM_CONFIG['epsilon'])(x)
-    x = Dropout(LSTM_CONFIG['dropout_rate'])(x)
-    
-    # Segunda capa densa con residual
-    x = Dense(LSTM_CONFIG['dense_units'][1])(x)
-    x = tf.keras.layers.Activation(activation_fn)(x)
-    
-    if skip.shape[-1] == LSTM_CONFIG['dense_units'][1]:
-        x = Add()([x, skip])  # Skip connection si las dimensiones coinciden
-        
-    x = LayerNormalization(epsilon=LSTM_CONFIG['epsilon'])(x)
-    x = Dropout(LSTM_CONFIG['dropout_rate'] * 0.5)(x)  # Menor dropout en capas finales
+    x = _build_dense_layers(x, skip)
     
     # Capa de salida
     output = Dense(1)(x)
     
-    return Model(inputs=[cgm_input, other_input], outputs=output)
+    # Create and return the complete model
+    model = Model(inputs=[cgm_input, other_input], outputs=output)
+    
+    return model
+
+def create_model_creator(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Callable[[], Model]:
+    """
+    Crea una función creadora de modelos compatible con DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    Callable[[], Model]
+        Función que crea un modelo LSTM sin argumentos
+    """
+    def model_creator() -> Model:
+        """
+        Crea un modelo LSTM sin argumentos.
+        
+        Retorna:
+        --------
+        Model
+            Modelo LSTM de TensorFlow
+        """
+        return create_lstm_model(cgm_shape, other_features_shape)
+    
+    return model_creator
+
+def create_lstm_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+    """
+    Crea un modelo LSTM envuelto en DLModelWrapperTF.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (muestras, pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (muestras, características)
+        
+    Retorna:
+    --------
+    DLModelWrapper
+        Modelo LSTM envuelto en DLModelWrapper
+    """
+    # Ensure we're creating a valid model creator function for the wrapper
+    model_creator_fn = create_model_creator(cgm_shape, other_features_shape)
+    
+    # Create and return the wrapper with the model creator and 'tensorflow' as the framework
+    return DLModelWrapper(model_creator_fn, 'tensorflow')

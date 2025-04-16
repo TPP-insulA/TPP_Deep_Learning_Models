@@ -20,3 +20,4 @@ figures/various_models/jax
 figures/various_models/tensorflow
 docs/models_results.typ
 *.pkl
+**/logs/**

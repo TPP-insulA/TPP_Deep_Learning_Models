@@ -121,16 +121,10 @@ def train_and_evaluate_model(model: Model,
     train_ds = create_dataset(x_cgm_train, x_other_train, y_train, batch_size=batch_size)
     val_ds = create_dataset(x_cgm_val, x_other_val, y_val, batch_size=batch_size)
     
-    # Configurar tasa de aprendizaje con decaimiento
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        learning_rate,
-        decay_steps=1000,
-        decay_rate=0.9
-    )
-    
-    # Optimizador con recorte de gradiente
+    # Usar una tasa de aprendizaje fija en lugar de un planificador
+    # para permitir que ReduceLROnPlateau funcione correctamente
     optimizer = tf.keras.optimizers.Adam(
-        learning_rate=lr_schedule,
+        learning_rate=learning_rate,
         clipnorm=1.0
     )
     
@@ -261,8 +255,8 @@ def train_model_sequential(model_creator: Callable,
     
     # Configuración por defecto
     training_config = {
-        'epochs': 100,
-        'batch_size': 32
+        'epochs': CONST_DEFAULT_EPOCHS,
+        'batch_size': CONST_DEFAULT_BATCH_SIZE
     }
     
     # Entrenar y evaluar modelo
