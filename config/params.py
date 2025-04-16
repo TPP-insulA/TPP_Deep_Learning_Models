@@ -162,8 +162,8 @@ USE_TF_MODELS = {
 # Modelos JAX a utilizar
 USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "jax_attention_only": True,
-    "jax_cnn": True,
+    "jax_attention_only": False,
+    "jax_cnn": False,
     "jax_fnn": False,
     "jax_gru": False,
     "jax_lstm": False,
@@ -171,7 +171,7 @@ USE_JAX_MODELS = {
     "jax_tabnet": False,
     "jax_tcn": False,
     "jax_transformer": False,
-    "jax_wavenet": False,
+    "jax_wavenet": True,
     ## Modelos de Aprendizaje por Refuerzo
     "jax_monte_carlo": False,
     "jax_policy_iteration": False,

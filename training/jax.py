@@ -137,9 +137,24 @@ def train_step(state: train_state.TrainState,
     Tuple[train_state.TrainState, Dict[str, jnp.ndarray]]
         Nuevo estado de entrenamiento y métricas
     """
+    # Generar clave PRNG para dropout
+    dropout_rng = jax.random.PRNGKey(0)  # O bien usar una clave diferente para cada paso
+    
+    # Definir función de pérdida con manejo de PRNG
+    def loss_fn(params):
+        # Pasar rngs para operaciones estocásticas como dropout
+        y_pred = state.apply_fn(
+            params, 
+            x_cgm, 
+            x_other, 
+            training=True,  # Modo entrenamiento
+            rngs={'dropout': dropout_rng}  # Clave PRNG para dropout
+        ).flatten()
+        return jnp.mean(jnp.square(y_pred - y))
+    
     # Calcular gradiente y pérdida
-    grad_fn = value_and_grad(mse_loss, argnums=0, has_aux=False)
-    loss, grads = grad_fn(state.params, state.apply_fn, x_cgm, x_other, y)
+    grad_fn = value_and_grad(loss_fn, has_aux=False)
+    loss, grads = grad_fn(state.params)
     
     # Aplicar gradientes y actualizar estado
     new_state = state.apply_gradients(grads=grads)
@@ -475,7 +490,7 @@ def train_and_evaluate_model(model: nn.Module,
         history = _update_history(history, epoch_loss, val_metrics)
         
         # Imprimir métricas
-        print(f"Época {epoch+1}/{epochs} - loss: {epoch_loss:.4f} - val_loss: {float(val_metrics[CONST_LOSS]):.4f}")
+        print(f"Época {epoch+1}/{epochs} - loss: {epoch_loss:.4f} - val_loss: {float(val_metrics[CONST_LOSS]):.4f} - MAE: {float(val_metrics[CONST_METRIC_MAE]):.4f} - RMSE: {float(val_metrics[CONST_METRIC_RMSE]):.4f} - R2: {float(val_metrics[CONST_METRIC_R2]):.4f}")
         
         # Manejo de early stopping
         val_loss = float(val_metrics[CONST_LOSS])

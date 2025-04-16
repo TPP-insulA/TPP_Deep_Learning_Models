@@ -1,4 +1,5 @@
-from typing import Any
+from typing import Any, Tuple, Union
+from config.models_config import EARLY_STOPPING_POLICY
 
 class EarlyStopping:
     """
@@ -71,3 +72,36 @@ class EarlyStopping:
             None en caso contrario
         """
         return self.best_params if self.restore_best_weights else None
+
+def get_early_stopping() -> Union[EarlyStopping, None]:
+    """
+    Crea una instancia de EarlyStopping según la configuración.
+    
+    Retorna:
+    --------
+    Union[EarlyStopping, None]
+        Instancia de EarlyStopping si está habilitado en la configuración,
+        None en caso contrario
+    """
+    if EARLY_STOPPING_POLICY.get('early_stopping', False):
+        return EarlyStopping(
+            patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
+            min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
+            restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+        )
+    return None
+
+def get_early_stopping_config() -> Tuple[int, float, bool]:
+    """
+    Retorna la configuración de EarlyStopping.
+    
+    Retorna:
+    --------
+    Tuple[int, float, bool]
+        (patience, min_delta, restore_best_weights)
+    """
+    return (
+        EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
+        EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
+        EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+    )

@@ -3,183 +3,374 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
-from typing import List, Tuple, Dict, Any, Optional, Callable
+from typing import List, Tuple, Dict, Any, Optional, Callable, Union, Sequence
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import GRU_CONFIG
+from config.models_config import GRU_CONFIG, EARLY_STOPPING_POLICY
 from custom.dl_model_wrapper import DLModelWrapper
+from models.early_stopping import get_early_stopping_config
 
 # Constantes para uso repetido
 CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_TRAINING = "training"
 
-def create_gru_attention_block(x: jnp.ndarray, units: int, num_heads: int = 4, 
-                              deterministic: bool = False) -> jnp.ndarray:
+class GRUCell(nn.Module):
     """
-    Crea un bloque GRU con self-attention y conexiones residuales.
+    Implementación de una celda GRU (Gated Recurrent Unit).
     
     Parámetros:
     -----------
-    x : jnp.ndarray
-        Tensor de entrada
-    units : int
-        Número de unidades GRU
-    num_heads : int
-        Número de cabezas de atención
-    deterministic : bool
-        Indica si está en modo de inferencia (no aplicar dropout)
-        
-    Retorna:
-    --------
-    jnp.ndarray
-        Tensor procesado por el bloque GRU con atención
+    features : int
+        Número de unidades ocultas
+    gate_fn : Callable
+        Función de activación para las puertas
+    activation_fn : Callable
+        Función de activación para la salida
     """
-    # GRU con skip connection
-    skip1 = x
-    
-    # Definir y aplicar GRU
-    gru = nn.scan(nn.GRUCell, 
-                  variable_broadcast="params", 
-                  split_rngs={"params": False, CONST_DROPOUT: True})
-    
-    batch_size, _, _ = x.shape
-    x = x.transpose(1, 0, 2)  # Cambiar a [seq_len, batch_size, features] para scan
-    
-    # Crear estado inicial
-    carry = jnp.zeros((batch_size, units))
-    
-    # Aplicar GRU con dropout
-    _, x = gru()(
-        carry, 
-        x,
-        dropout_rate=GRU_CONFIG['dropout_rate'],
-        recurrent_dropout_rate=GRU_CONFIG['recurrent_dropout'],
-        deterministic=deterministic
-    )
-    
-    x = x.transpose(1, 0, 2)  # Volver a [batch_size, seq_len, features]
-    x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(x)
-    
-    # Skip connection si las dimensiones coinciden
-    if skip1.shape[-1] == units:
-        x = x + skip1
-    
-    # Multi-head attention con skip connection
-    skip2 = x
-    attention_output = nn.MultiHeadAttention(
-        num_heads=num_heads,
-        key_size=units // num_heads,
-        dropout_rate=GRU_CONFIG['dropout_rate'],
-        deterministic=deterministic
-    )(x, x)
-    
-    x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(attention_output + skip2)
-    
-    return x
-
-class GRUModel(nn.Module):
-    """
-    Modelo GRU avanzado con self-attention y conexiones residuales.
-    
-    Parámetros:
-    -----------
-    config : Dict
-        Diccionario con configuración del modelo
-    cgm_shape : Tuple
-        Forma de los datos CGM
-    other_features_shape : Tuple
-        Forma de otras características
-    """
-    config: Dict
-    cgm_shape: Tuple
-    other_features_shape: Tuple
+    features: int
+    gate_fn: Callable = nn.sigmoid
+    activation_fn: Callable = nn.tanh
     
     @nn.compact
-    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+    def __call__(self, inputs: jnp.ndarray, carry: jnp.ndarray, deterministic: bool = True) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
-        Ejecuta el modelo GRU sobre las entradas.
+        Ejecuta un paso de procesamiento de la celda GRU.
         
         Parámetros:
         -----------
-        cgm_input : jnp.ndarray
-            Datos de entrada CGM
-        other_input : jnp.ndarray
-            Otras características de entrada
-        training : bool, opcional
-            Indica si está en modo entrenamiento (default: True)
+        inputs : jnp.ndarray
+            Entrada actual
+        carry : jnp.ndarray
+            Estado oculto actual
+        deterministic : bool, opcional
+            Indica si está en modo de inferencia (default: True)
+            
+        Retorna:
+        --------
+        Tuple[jnp.ndarray, jnp.ndarray]
+            (nuevo estado, salida)
+        """
+        h = carry
+        
+        # Capas densas para las compuertas
+        gates = nn.Dense(features=2 * self.features)(inputs)
+        reset, update = jnp.split(self.gate_fn(gates), 2, axis=-1)
+        
+        # Capa densa para el nuevo candidato
+        h_reset = reset * h
+        candidate_x = nn.Dense(features=self.features)(inputs)
+        candidate_h = nn.Dense(features=self.features)(h_reset)
+        candidate = self.activation_fn(candidate_x + candidate_h)
+        
+        # Actualizar estado
+        new_h = update * h + (1.0 - update) * candidate
+        
+        return new_h, new_h
+
+
+class SimplifiedGRULayer(nn.Module):
+    """
+    Capa GRU optimizada para JAX/Flax con implementación simplificada.
+    
+    Parámetros:
+    -----------
+    hidden_size : int
+        Tamaño del estado oculto
+    return_sequences : bool
+        Si devuelve toda la secuencia o solo último estado
+    """
+    hidden_size: int
+    return_sequences: bool = True
+    
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray, deterministic: bool = True) -> jnp.ndarray:
+        """
+        Procesa una secuencia con GRU.
+        
+        Parámetros:
+        -----------
+        inputs : jnp.ndarray
+            Tensor de entrada [batch_size, seq_len, input_dim]
+        deterministic : bool
+            Si está en modo de inferencia
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones del modelo
+            Secuencia procesada
+        """
+        batch_size, seq_len, _ = inputs.shape
+        
+        # Crear estado inicial
+        h = jnp.zeros((batch_size, self.hidden_size))
+        
+        # Crear la celda GRU
+        gru_cell = GRUCell(features=self.hidden_size)
+        
+        # Procesar secuencia manualmente para evitar problemas con scan
+        outputs = []
+        for i in range(seq_len):
+            h, _ = gru_cell(inputs[:, i, :], h, deterministic=deterministic)
+            outputs.append(h)
+        
+        # Apilar salidas
+        outputs = jnp.stack(outputs, axis=1)
+        
+        # Retornar toda la secuencia o solo el último paso
+        if self.return_sequences:
+            return outputs
+        else:
+            return outputs[:, -1, :]
+
+
+def create_attention_block(x: jnp.ndarray, num_heads: int = 4, key_dim: int = 64,
+                          dropout_rate: float = 0.0, deterministic: bool = True) -> jnp.ndarray:
+    """
+    Crea un bloque de atención multi-cabeza con normalización de capa.
+    
+    Parámetros:
+    -----------
+    x : jnp.ndarray
+        Entrada al bloque
+    num_heads : int
+        Número de cabezas de atención
+    key_dim : int
+        Dimensión de claves para cada cabeza
+    dropout_rate : float
+        Tasa de dropout
+    deterministic : bool
+        Si está en modo de inferencia
+        
+    Retorna:
+    --------
+    jnp.ndarray
+        Salida del bloque de atención
+    """
+    # Guardar entrada para conexión residual
+    skip = x
+    
+    # Normalización de capa
+    x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(x)
+    
+    # Aplicar mecanismo de atención
+    attention = nn.MultiHeadAttention(
+        num_heads=num_heads,
+        qkv_features=key_dim,
+        dropout_rate=dropout_rate
+    )(x, x, deterministic=deterministic)
+    
+    # Aplicar dropout si no es determinístico
+    if dropout_rate > 0.0 and not deterministic:
+        attention = nn.Dropout(rate=dropout_rate)(attention, deterministic=deterministic)
+    
+    # Conexión residual
+    x = attention + skip
+    
+    return x
+
+
+def create_gru_block(x: jnp.ndarray, units: int, dropout_rate: float = 0.3,
+                    deterministic: bool = True) -> jnp.ndarray:
+    """
+    Crea un bloque GRU con normalización de capa y conexiones residuales.
+    
+    Parámetros:
+    -----------
+    x : jnp.ndarray
+        Entrada al bloque
+    units : int
+        Número de unidades GRU
+    dropout_rate : float
+        Tasa de dropout
+    deterministic : bool
+        Si está en modo de inferencia
+        
+    Retorna:
+    --------
+    jnp.ndarray
+        Salida del bloque GRU
+    """
+    # Guardar entrada para conexión residual
+    skip = x
+    
+    # Aplicar GRU
+    x = SimplifiedGRULayer(
+        hidden_size=units,
+        return_sequences=True
+    )(x, deterministic=deterministic)
+    
+    # Normalización de capa para estabilidad
+    x = nn.LayerNorm(epsilon=GRU_CONFIG['epsilon'])(x)
+    
+    # Aplicar dropout si no es determinístico
+    if dropout_rate > 0.0 and not deterministic:
+        x = nn.Dropout(rate=dropout_rate)(x, deterministic=deterministic)
+    
+    # Aplicar conexión residual si las dimensiones coinciden
+    if skip.shape[-1] == x.shape[-1]:
+        x = x + skip
+    
+    return x
+
+
+class GRUModel(nn.Module):
+    """
+    Modelo GRU con mecanismo de atención para series temporales.
+    
+    Parámetros:
+    -----------
+    hidden_units : List[int]
+        Lista de unidades ocultas para cada capa GRU
+    attention_heads : int
+        Número de cabezas de atención
+    dropout_rate : float
+        Tasa de dropout
+    epsilon : float
+        Epsilon para normalización de capa
+    """
+    hidden_units: List[int]
+    attention_heads: int
+    dropout_rate: float
+    epsilon: float
+    
+    @nn.compact
+    def __call__(self, x_cgm: jnp.ndarray, x_other: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Procesa datos CGM y otras características para predecir niveles de insulina.
+        
+        Parámetros:
+        -----------
+        x_cgm : jnp.ndarray
+            Datos CGM [batch, seq_len, features]
+        x_other : jnp.ndarray
+            Otras características [batch, features]
+        training : bool
+            Si está en modo de entrenamiento
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones de dosis de insulina
         """
         deterministic = not training
         
         # Proyección inicial
-        x = nn.Dense(self.config['hidden_units'][0])(cgm_input)
-        x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
+        x = nn.Dense(features=self.hidden_units[0])(x_cgm)
+        x = nn.LayerNorm(epsilon=self.epsilon)(x)
         
-        # Bloques GRU con attention
-        for units in self.config['hidden_units']:
-            x = create_gru_attention_block(x, units, deterministic=deterministic)
+        # Bloques GRU con atención
+        for i, units in enumerate(self.hidden_units):
+            # Bloque GRU
+            x = create_gru_block(
+                x=x,
+                units=units,
+                dropout_rate=self.dropout_rate,
+                deterministic=deterministic
+            )
+            
+            # Bloque de atención cada 2 capas GRU
+            if (i + 1) % 2 == 0:
+                x = create_attention_block(
+                    x=x,
+                    num_heads=self.attention_heads,
+                    key_dim=units // self.attention_heads,
+                    dropout_rate=self.dropout_rate,
+                    deterministic=deterministic
+                )
         
-        # Pooling global
-        x = jnp.mean(x, axis=1)  # Equivalente a GlobalAveragePooling1D
+        # Pooling global para reducir la dimensión de secuencia
+        x = jnp.mean(x, axis=1)  # [batch, features]
         
         # Combinar con otras características
-        combined = jnp.concatenate([x, other_input], axis=-1)
+        combined = jnp.concatenate([x, x_other], axis=-1)
         
-        # Red densa final con skip connections
+        # Capas densas finales con skip connections
         for units in [128, 64]:
             skip = combined
-            x = nn.Dense(units)(combined)
-            x = nn.relu(x)
-            x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
-            x = nn.Dropout(rate=self.config['dropout_rate'], deterministic=deterministic)(x)
+            combined = nn.Dense(features=units)(combined)
+            combined = nn.relu(combined)
+            combined = nn.LayerNorm(epsilon=self.epsilon)(combined)
             
+            if not deterministic:
+                combined = nn.Dropout(rate=self.dropout_rate)(combined, deterministic=deterministic)
+                
             if skip.shape[-1] == units:
-                combined = x + skip
-            else:
-                combined = x
+                combined = combined + skip
         
         # Capa de salida
-        output = nn.Dense(1)(combined)
+        outputs = nn.Dense(features=1)(combined)
         
-        return output
+        return outputs.squeeze(-1)
 
-def create_gru_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+
+def create_gru_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> nn.Module:
     """
-    Crea un modelo GRU avanzado con self-attention y conexiones residuales con JAX/Flax.
+    Crea un modelo GRU para predicción.
     
     Parámetros:
     -----------
     cgm_shape : Tuple[int, ...]
-        Forma de los datos CGM (pasos_temporales, características)
+        Forma de los datos CGM
     other_features_shape : Tuple[int, ...]
-        Forma de otras características (características)
+        Forma de otras características
+        
+    Retorna:
+    --------
+    nn.Module
+        Modelo GRU inicializado
+    """
+    return GRUModel(
+        hidden_units=GRU_CONFIG['hidden_units'],
+        attention_heads=GRU_CONFIG['attention_heads'],
+        dropout_rate=GRU_CONFIG['dropout_rate'],
+        epsilon=GRU_CONFIG['epsilon']
+    )
+
+
+def create_gru_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+    """
+    Crea un wrapper para el modelo GRU que implementa la API estándar.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características
         
     Retorna:
     --------
     DLModelWrapper
-        Modelo GRU inicializado y envuelto en DLModelWrapper
+        Wrapper del modelo GRU
     """
-    model = GRUModel(
-        config=GRU_CONFIG,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
+    # Función creadora de modelo para pasar al wrapper
+    def model_fn():
+        return create_gru_model(cgm_shape, other_features_shape)
+    
+    # Crear wrapper
+    wrapper = DLModelWrapper(model_fn, 'jax')
+    
+    # Configurar early stopping
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
+    wrapper.add_early_stopping(
+        patience=es_patience,
+        min_delta=es_min_delta,
+        restore_best_weights=es_restore_best
     )
     
-    # Envolver el modelo en DLModelWrapper para compatibilidad con el sistema
-    return DLModelWrapper(lambda **kwargs: model)
+    return wrapper
+
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
     """
-    Retorna una función para crear un modelo GRU compatible con la API del sistema.
+    Retorna un wrapper del modelo GRU compatible con la API del sistema.
     
     Retorna:
     --------
     Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
-        Función para crear el modelo con las formas de entrada especificadas
+        Función que crea un wrapper para el modelo GRU con las dimensiones especificadas
     """
-    return create_gru_model
+    return create_gru_model_wrapper

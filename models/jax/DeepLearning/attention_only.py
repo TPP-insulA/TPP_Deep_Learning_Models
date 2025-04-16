@@ -10,8 +10,8 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
-from custom.dl_model_wrapper import DLModelWrapper
-from models.early_stopping import EarlyStopping
+from custom.dl_model_wrapper import DLModelWrapperJAX
+from models.early_stopping import get_early_stopping_config
 
 # Constantes para uso repetido
 CONST_ATTENTION_BLOCK = "attention_block"
@@ -153,8 +153,8 @@ class AttentionBlock(nn.Module):
             # Usar implementación estándar sin posición relativa
             attention_output = nn.MultiHeadAttention(
                 num_heads=self.num_heads,
-                key_size=self.key_dim,
-                dropout_rate=0.0
+                qkv_features=self.key_dim,
+                dropout_rate=ATTENTION_CONFIG['dropout_rate'],
             )(x, x)
         
         # Mecanismo de gating
@@ -301,9 +301,9 @@ def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     else:
         return nn.relu(x)  # Valor por defecto
 
-def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
+def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapperJAX:
     """
-    Crea un modelo basado en mecanismos de atención envuelto en un DLModelWrapper.
+    Crea un modelo basado en mecanismos de atención envuelto en un DLModelWrapperJAX.
     
     Parámetros:
     -----------
@@ -314,34 +314,38 @@ def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tup
         
     Retorna:
     --------
-    DLModelWrapper
-        Modelo envuelto en DLModelWrapper para compatibilidad con el sistema
+    DLModelWrapperJAX
+        Modelo envuelto en DLModelWrapperJAX para compatibilidad con el sistema
     """
-    model = AttentionModel(
-        config=ATTENTION_CONFIG,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
-    )
-    
-    early_stopping = None
-    if EARLY_STOPPING_POLICY.get('early_stopping', False):
-        early_stopping = EarlyStopping(
-            patience=EARLY_STOPPING_POLICY.get('early_stopping_patience', 10),
-            min_delta=EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001),
-            restore_best_weights=EARLY_STOPPING_POLICY.get('early_stopping_restore_best', True)
+    # Crear función de creación del modelo
+    def model_creator():
+        return AttentionModel(
+            config=ATTENTION_CONFIG,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
         )
     
-    # Envolver en DLModelWrapper para API consistente
-    return DLModelWrapper(lambda **kwargs: model, early_stopping=early_stopping)
+    # Crear wrapper
+    wrapper = DLModelWrapperJAX(model_creator)
+    
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
+    if EARLY_STOPPING_POLICY.get('early_stopping', False):
+        wrapper.add_early_stopping(
+            patience=es_patience,
+            min_delta=es_min_delta,
+            restore_best_weights=es_restore_best
+        )
+    
+    return wrapper
 
 # Función creadora de modelo que será usada por el sistema
-def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapperJAX]:
     """
     Retorna una función para crear un modelo de atención compatible con la API del sistema.
     
     Retorna:
     --------
-    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapperJAX]
         Función para crear el modelo con las formas de entrada especificadas
     """
     return create_attention_model
