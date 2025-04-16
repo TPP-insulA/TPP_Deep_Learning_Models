@@ -115,7 +115,7 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
         
         # Rellenar con último valor si hay menos de 24 datos
         if cgm_prev.height < PREV_SAMPLES:
-            last_value = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else 100.0  # Valor por defecto si no hay datos
+            last_value = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else 100.0  # TODO: descartar dato? Por ahora valor por defecto si no hay datos
             missing_count = PREV_SAMPLES - cgm_prev.height
             filler = pl.DataFrame({
                 "date": [bolus_date - timedelta(minutes=5 * i) for i in range(missing_count)],
