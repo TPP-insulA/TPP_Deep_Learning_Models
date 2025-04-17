@@ -148,6 +148,9 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
             cgm_post = pl.concat([cgm_post, filler]).sort("date").head(POST_SAMPLES)
         
         # Calcular insulinOnBoard con chequeo adicional
+        #TODO: calculo solo cuando no tengo insulinOnBoard en el df. (Lo calculo para los que tienen hoja de basal)
+        # iob = bolus_row.get("insulinOnBoard", None)
+        # if iob is None:
         iob = calculate_iob(bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
         
         # Asignar targetBloodGlucose (aleatorio si falta)
@@ -160,10 +163,10 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
         if carb_input is None:
             carb_input = 0.0
         insulin_carb_ratio = bolus_row.get("insulinCarbRatio", None)  # Valor típico si falta
-        if insulin_carb_ratio is None:
+        if insulin_carb_ratio is None or insulin_carb_ratio == 0:
             #Obtener algun valor no nulo de la columna
             insulin_carb_ratio = bolus_df.filter(pl.col("insulinCarbRatio").is_not_null() & (pl.col("insulinCarbRatio") != 0)).select("insulinCarbRatio").to_numpy().flatten()[0] if bolus_df.height > 0 else 10.0  # Valor por defecto si no hay datos
-        bg_input = bolus_row.get("bgInput", None)  # Última glucosa o 100
+        bg_input = bolus_row.get("bgInput", None)  # Última glucosa
         if bg_input is None:
             bg_input = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else np.random.choice([60.0, 80.0, 110.0, 130.0, 160.0, 190.0, 220.0, 250.0])  # Valor por defecto si no hay datos
 
@@ -201,7 +204,7 @@ for subject_df in all_data:
 # %% CELL: Split datasets
 train_ratio = 0.7  # Porcentaje de datos para entrenamiento
 val_ratio = 0.15  # Porcentaje de datos para validación
-size_ratio = 1 - train_ratio - val_ratio  # Porcentaje de datos para prueba
+test_ratio = 1 - train_ratio - val_ratio  # Porcentaje de datos para prueba
 
 train_dfs = []
 val_dfs = []
