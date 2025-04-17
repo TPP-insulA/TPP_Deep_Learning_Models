@@ -6,45 +6,8 @@ from pathlib import Path
 import numpy as np
 from datetime import timedelta
 import json
-from config import CONFIG, WINDOW_PREV_HOURS, WINDOW_POST_HOURS, IOB_WINDOW_HOURS, PREV_SAMPLES, POST_SAMPLES
-
-# %% CELL: Calculate IOB Function
-
-def calculate_iob(date_target, basal_df, bolus_df, subject_id):
-    window_start = date_target - timedelta(hours=IOB_WINDOW_HOURS)
-    iob = 0.0
-    
-    # Verificar si basal_df tiene las columnas necesarias
-    if basal_df.height > 0 and "date" in basal_df.columns and "rate" in basal_df.columns and "duration" in basal_df.columns:
-        basal_window = basal_df.filter(
-            (pl.col("date") >= window_start) & (pl.col("date") <= date_target)
-        )
-        # Calcular el promedio de rates no nulos
-        valid_rates = [row["rate"] for row in basal_window.rows(named=True) if row["rate"] is not None]
-        default_rate = np.mean(valid_rates) if valid_rates else 0.0  # Promedio o 0 si no hay valores válidos
-        for row in basal_window.rows(named=True):
-            time_elapsed = (date_target - row["date"]).total_seconds() / 3600  # En horas
-            duration_hr = row["duration"] / 3_600_000  # ms a horas
-            rate = row["rate"] if row["rate"] is not None else default_rate  # Usar promedio si rate es None
-            insulin_delivered = rate * duration_hr
-            fraction_remaining = max(0, 1 - (time_elapsed / IOB_WINDOW_HOURS))  # Curva lineal
-            iob += insulin_delivered * fraction_remaining
-    elif basal_df.height > 0:
-        print(f"Advertencia: {subject_id} - Basal no tiene las columnas esperadas: {basal_df.columns}")
-    
-    # Verificar si bolus_df tiene las columnas necesarias
-    if bolus_df.height > 0 and "date" in bolus_df.columns and "normal" in bolus_df.columns:
-        bolus_window = bolus_df.filter(
-            (pl.col("date") >= window_start) & (pl.col("date") <= date_target)
-        )
-        for row in bolus_window.rows(named=True):
-            time_elapsed = (date_target - row["date"]).total_seconds() / 3600  # En horas
-            fraction_remaining = max(0, 1 - (time_elapsed / IOB_WINDOW_HOURS))  # Curva lineal
-            iob += row["normal"] * fraction_remaining
-    elif bolus_df.height > 0:
-        print(f"Advertencia: {subject_id} - Bolus no tiene las columnas esperadas: {bolus_df.columns}")
-    
-    return iob
+from config import CONFIG, WINDOW_PREV_HOURS, WINDOW_POST_HOURS, IOB_WINDOW_HOURS, PREV_SAMPLES, POST_SAMPLES, MODEL_ID, PREPROCESSSING_ID
+from calculate_iob import calculate_iob
 
 # %% CELL: Load data
 
@@ -151,7 +114,7 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
         #TODO: calculo solo cuando no tengo insulinOnBoard en el df. (Lo calculo para los que tienen hoja de basal)
         # iob = bolus_row.get("insulinOnBoard", None)
         # if iob is None:
-        iob = calculate_iob(bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
+        iob = calculate_iob(0, bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
         
         # Asignar targetBloodGlucose (aleatorio si falta)
         target_bg = bolus_row.get("targetBloodGlucose", None)
@@ -197,7 +160,7 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
 # %% CELL: Save dataset from every subject
 for subject_df in all_data:
     subject_id = subject_df["subject_id"][0]
-    output_path = os.path.join(CONFIG["processed_data_path"], f"{subject_id}_processed.parquet")
+    output_path = os.path.join(CONFIG["processed_data_path"], f"{subject_id}_processed_{PREPROCESSSING_ID}.parquet")
     subject_df.write_parquet(output_path)
     print(f"Guardado: {output_path}")
 
@@ -251,7 +214,7 @@ means = train_combined.select([pl.col(col).mean() for col in state_cols]).to_dic
 stds = train_combined.select([pl.col(col).std() for col in state_cols]).to_dicts()[0]
 
 # Save params for standardization
-with open(os.path.join(CONFIG["params_path"], "state_standardization_params.json"), "w") as f:
+with open(os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json"), "w") as f:
     json.dump({"means": means, "stds": stds}, f)
 
 # %% CELL: Normalize train, val and test data
@@ -266,9 +229,9 @@ train_standardized = standardize_state(train_combined, means, stds)
 val_standardized = standardize_state(val_combined, means, stds)
 test_standardized = standardize_state(test_combined, means, stds)
 
-train_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], "train_all.parquet"))
-val_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], "val_all.parquet"))
-test_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], "test_all.parquet"))
+train_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"train_all_{PREPROCESSSING_ID}.parquet"))
+val_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"val_all_{PREPROCESSSING_ID}.parquet"))
+test_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"test_all{PREPROCESSSING_ID}.parquet"))
 
 # %% CELL: Data about train, test and val
 print("Conjuntos preparados para PPO (estado estandarizado).")

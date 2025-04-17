@@ -7,7 +7,7 @@ import json
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 import os
-from config import CONFIG, PREV_SAMPLES, POST_SAMPLES
+from config import CONFIG, PREV_SAMPLES, POST_SAMPLES, MODEL_ID, PREPROCESSSING_ID
 
 # %% CELL: Custom Gym Environment
 class InsulinEnv(gym.Env):
@@ -122,8 +122,8 @@ class InsulinEnv(gym.Env):
 
 # %% CELL: Train PPO Model
 def train_ppo():
-    data_path = os.path.join(CONFIG["processed_data_path"], "train_all.parquet")
-    params_path = os.path.join(CONFIG["params_path"], "state_standardization_params.json")
+    data_path = os.path.join(CONFIG["processed_data_path"], f"train_all_{PREPROCESSSING_ID}.parquet")
+    params_path = os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json")
     
     try:
         env = InsulinEnv(data_path, params_path)
@@ -150,7 +150,7 @@ def train_ppo():
     model.learn(total_timesteps=500000)  # Aumentado para mejor convergencia
     
     # Descomentar para guardar el modelo
-    # model.save(os.path.join(CONFIG["processed_data_path"], "ppo_insulin_model"))
+    # model.save(os.path.join(CONFIG["processed_data_path"], f"ppo_insulin_model_{PREPROCESSING_ID}_{MODEL_ID}"))
     
     return model, env
 
@@ -185,7 +185,7 @@ def evaluate_model(model, env, dataset_type="val"):
     # Guardar resultados en CSV
     try:
         results_df = pl.DataFrame(results)
-        csv_path = os.path.join(CONFIG["processed_data_path"], f"ppo_predictions_{dataset_type}.csv")
+        csv_path = os.path.join(CONFIG["processed_data_path"], f"ppo_predictions_{dataset_type}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
         results_df.write_csv(csv_path)
         print(f"Predicciones guardadas en: {csv_path}")
     except Exception as e:
@@ -200,8 +200,8 @@ if __name__ == "__main__":
     try:
         model, train_env = train_ppo()
         
-        val_data_path = os.path.join(CONFIG["processed_data_path"], "val_all.parquet")
-        val_env = InsulinEnv(val_data_path, os.path.join(CONFIG["params_path"], "state_standardization_params.json"))
+        val_data_path = os.path.join(CONFIG["processed_data_path"], f"val_all_{PREPROCESSSING_ID}.parquet")
+        val_env = InsulinEnv(val_data_path, os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json"))
         evaluate_model(model, val_env, dataset_type="val")
     except Exception as e:
         print(f"Error en la ejecución principal: {e}")
