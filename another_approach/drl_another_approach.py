@@ -6,13 +6,16 @@ from pathlib import Path
 import numpy as np
 from datetime import timedelta
 import json
-from config import CONFIG, WINDOW_PREV_HOURS, WINDOW_POST_HOURS, IOB_WINDOW_HOURS, PREV_SAMPLES, POST_SAMPLES, MODEL_ID, PREPROCESSSING_ID
+from config import CONFIG, WINDOW_PREV_HOURS, WINDOW_POST_HOURS, PREV_SAMPLES, POST_SAMPLES, PREPROCESSSING_ID
 from calculate_iob import calculate_iob
 
 # %% CELL: Load data
 
 all_data = []
-
+missing_count_prev = 0
+missing_count_post = 0
+rows_with_missing_count_prev = 0
+rows_with_missing_count_post = 0
 # Iterar sobre los archivos .xlsx en el directorio
 for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
     subject_id = file_path.stem  # Nombre del archivo sin extensión
@@ -78,8 +81,14 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
         
         # Rellenar con último valor si hay menos de 24 datos
         if cgm_prev.height < PREV_SAMPLES:
-            last_value = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else 100.0  # TODO: descartar dato? Por ahora valor por defecto si no hay datos
+            last_value = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else None
+            if  last_value is None:
+                continue
             missing_count = PREV_SAMPLES - cgm_prev.height
+            if missing_count == PREV_SAMPLES:
+                continue
+            missing_count_prev += missing_count
+            rows_with_missing_count_prev += 1
             filler = pl.DataFrame({
                 "date": [bolus_date - timedelta(minutes=5 * i) for i in range(missing_count)],
                 "mg/dl": [float(last_value)] * missing_count  # Convertir a float explícitamente
@@ -101,6 +110,10 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
         if cgm_post.height < POST_SAMPLES:
             last_value = cgm_post["mg/dl"][-1] if cgm_post.height > 0 else cgm_prev["mg/dl"][-1]
             missing_count = POST_SAMPLES - cgm_post.height
+            missing_count_post += missing_count
+            rows_with_missing_count_post += 1
+            if missing_count == POST_SAMPLES:
+                continue
             filler = pl.DataFrame({
                 "date": [bolus_date + timedelta(minutes=5 * (i + 1)) for i in range(missing_count)],
                 "mg/dl": [float(last_value)] * missing_count  # Convertir a float explícitamente
@@ -111,10 +124,9 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
             cgm_post = pl.concat([cgm_post, filler]).sort("date").head(POST_SAMPLES)
         
         # Calcular insulinOnBoard con chequeo adicional
-        #TODO: calculo solo cuando no tengo insulinOnBoard en el df. (Lo calculo para los que tienen hoja de basal)
-        # iob = bolus_row.get("insulinOnBoard", None)
-        # if iob is None:
-        iob = calculate_iob(0, bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
+        iob = bolus_row.get("insulinOnBoard", None)
+        if iob is None:
+            iob = calculate_iob(0, bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
         
         # Asignar targetBloodGlucose (aleatorio si falta)
         target_bg = bolus_row.get("targetBloodGlucose", None)
@@ -156,6 +168,10 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
     if subject_rows:
         subject_df = pl.DataFrame(subject_rows)
         all_data.append(subject_df)
+
+#print(f"Missing count prev: {missing_count_prev}, rows with missing count prev: {rows_with_missing_count_prev}")
+#print(f"Missing count post: {missing_count_post}, rows with missing count post: {rows_with_missing_count_post}")
+
 
 # %% CELL: Save dataset from every subject
 for subject_df in all_data:
@@ -231,7 +247,7 @@ test_standardized = standardize_state(test_combined, means, stds)
 
 train_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"train_all_{PREPROCESSSING_ID}.parquet"))
 val_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"val_all_{PREPROCESSSING_ID}.parquet"))
-test_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"test_all{PREPROCESSSING_ID}.parquet"))
+test_standardized.write_parquet(os.path.join(CONFIG["processed_data_path"], f"test_all_{PREPROCESSSING_ID}.parquet"))
 
 # %% CELL: Data about train, test and val
 print("Conjuntos preparados para PPO (estado estandarizado).")

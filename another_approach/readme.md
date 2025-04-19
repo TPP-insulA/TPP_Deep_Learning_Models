@@ -56,7 +56,7 @@ model = PPO(
 
 Pasos:
 
-model.learn(total_timesteps=500000)
+model.learn(total_timesteps=1000000)
 
 Funcion de recompensa:
 
@@ -86,7 +86,7 @@ def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
 
 ## Resultados:
 
-### ID de modelo 0 y ID de preprocesamiento 0:
+### ID de modelo 0 con ID de preprocesamiento 0:
 
 Predicciones para dataset de validacion guardado en ppo_predictions_val_0_0.csv.
 

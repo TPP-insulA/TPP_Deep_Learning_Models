@@ -6,12 +6,15 @@ import polars as pl
 import json
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
+from copy import deepcopy
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
 from config import CONFIG, PREV_SAMPLES, POST_SAMPLES, MODEL_ID, PREPROCESSSING_ID
 
 # %% CELL: Custom Gym Environment
 class InsulinEnv(gym.Env):
-    def __init__(self, data_path, standardization_params_path):
+    def __init__(self, data_path, standardization_params_path, permute_feature=None):
         super(InsulinEnv, self).__init__()
         
         # Verificar que los archivos existen
@@ -22,6 +25,14 @@ class InsulinEnv(gym.Env):
         
         # Cargar datos (ya normalizados)
         self.data = pl.read_parquet(data_path)
+        
+        # Aplicar permutación si se especifica
+        if permute_feature is not None:
+            if permute_feature not in self.data.columns:
+                raise ValueError(f"Feature {permute_feature} not in data columns")
+            # Permutar los valores de la característica especificada
+            permuted_values = np.random.permutation(self.data[permute_feature].to_numpy())
+            self.data = self.data.with_columns(pl.Series(permute_feature, permuted_values))
         
         # Cargar parámetros de estandarización (para referencia)
         with open(standardization_params_path, "r") as f:
@@ -48,7 +59,7 @@ class InsulinEnv(gym.Env):
             low=-np.inf, high=np.inf, shape=(len(self.state_cols),), dtype=np.float32
         )
         self.action_space = spaces.Box(
-            low=0, high=20, shape=(1,), dtype=np.float32  # Restaurado a [0, 20]
+            low=0, high=20, shape=(1,), dtype=np.float32
         )
         
         self.current_step = 0
@@ -60,17 +71,12 @@ class InsulinEnv(gym.Env):
         return self._get_state(), {}
     
     def step(self, action):
-        # Obtener acción predicha (dosis) directamente
-        pred_dose = action[0]  # Sin desnormalización, ya que action_space es [0, 20]
-        
-        # Obtener datos reales
+        pred_dose = action[0]
         real_dose = self.data[self.action_col][self.current_step]
         mgdl_post = self.data[self.post_cols].row(self.current_step)
         
-        # Calcular recompensa
         reward = self._calculate_reward(pred_dose, real_dose, mgdl_post)
         
-        # Construir info antes de incrementar el paso
         info = {
             "pred_dose": float(pred_dose),
             "real_dose": float(real_dose),
@@ -81,7 +87,6 @@ class InsulinEnv(gym.Env):
             "reward": float(reward)
         }
         
-        # Avanzar paso
         self.current_step += 1
         terminated = self.current_step >= self.max_steps
         truncated = False
@@ -90,13 +95,11 @@ class InsulinEnv(gym.Env):
         return next_state, reward, terminated, truncated, info
     
     def _get_state(self):
-        # Obtener estado directamente (ya está normalizado)
         state = self.data[self.state_cols].row(self.current_step)
         return np.array(state, dtype=np.float32)
     
     def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
         avg_mgdl = np.mean(mgdl_post)
-        
         NORMAL_LOW = 70
         NORMAL_HIGH = 180
         DOSE_THRESHOLD = 1.0
@@ -144,18 +147,15 @@ def train_ppo():
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        device="cpu"  # Forzar CPU
+        device="cpu"
     )
     
-    model.learn(total_timesteps=500000)  # Aumentado para mejor convergencia
-    
-    # Descomentar para guardar el modelo
-    # model.save(os.path.join(CONFIG["processed_data_path"], f"ppo_insulin_model_{PREPROCESSING_ID}_{MODEL_ID}"))
+    model.learn(total_timesteps=1000000)
     
     return model, env
 
 # %% CELL: Evaluate Model
-def evaluate_model(model, env, dataset_type="val"):
+def evaluate_model(model, env, dataset_type="val", save_predictions=True):
     obs, _ = env.reset()
     total_reward = 0
     steps = 0
@@ -167,43 +167,141 @@ def evaluate_model(model, env, dataset_type="val"):
         total_reward += reward
         steps += 1
         
-        # Construir fila para el CSV
-        result_row = {
-            "subject_id": info["subject_id"],
-            "bolus_date": info["bolus_date"],
-            "pred_dose": info["pred_dose"],
-            "real_dose": info["real_dose"],
-            **{f"mg/dl_prev_{i+1}": info["mgdl_prev"][i] for i in range(PREV_SAMPLES)},
-            **{f"mg/dl_post_{i+1}": info["mgdl_post"][i] for i in range(POST_SAMPLES)},
-            "reward": info["reward"]
-        }
-        results.append(result_row)
+        if save_predictions:
+            result_row = {
+                "subject_id": info["subject_id"],
+                "bolus_date": info["bolus_date"],
+                "pred_dose": info["pred_dose"],
+                "real_dose": info["real_dose"],
+                **{f"mg/dl_prev_{i+1}": info["mgdl_prev"][i] for i in range(PREV_SAMPLES)},
+                **{f"mg/dl_post_{i+1}": info["mgdl_post"][i] for i in range(POST_SAMPLES)},
+                "reward": info["reward"]
+            }
+            results.append(result_row)
         
         if terminated or truncated:
             break
     
-    # Guardar resultados en CSV
-    try:
-        results_df = pl.DataFrame(results)
-        csv_path = os.path.join(CONFIG["processed_data_path"], f"ppo_predictions_{dataset_type}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
-        results_df.write_csv(csv_path)
-        print(f"Predicciones guardadas en: {csv_path}")
-    except Exception as e:
-        print(f"Error al guardar el CSV: {e}")
-        raise
+    if save_predictions:
+        try:
+            results_df = pl.DataFrame(results)
+            csv_path = os.path.join(CONFIG["processed_data_path"], f"ppo_predictions_{dataset_type}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
+            results_df.write_csv(csv_path)
+            print(f"Predicciones guardadas en: {csv_path}")
+        except Exception as e:
+            print(f"Error al guardar el CSV: {e}")
+            raise
     
     print(f"Evaluación completada ({dataset_type}). Recompensa total: {total_reward}, Pasos: {steps}")
-    return total_reward
+    return total_reward, results
 
-# %% CELL: Run Training and Evaluation
+# %% CELL: Feature Importance
+def permutation_importance(model, env, n_repeats=5, dataset_type="val"):
+    """
+    Calculate feature importance using Permutation Importance for a PPO model.
+    
+    Args:
+        model: Trained PPO model.
+        env: Validation environment (InsulinEnv).
+        n_repeats: Number of repetitions to average results.
+        dataset_type: Dataset type (e.g., "val").
+    
+    Returns:
+        pl.DataFrame: DataFrame with feature names and their importance scores.
+    """
+    state_cols = env.state_cols
+    results = {col: [] for col in state_cols}
+    
+    # Evaluate baseline performance
+    print("Evaluating baseline performance...")
+    base_rewards = []
+    for _ in range(n_repeats):
+        total_reward, _ = evaluate_model(model, deepcopy(env), dataset_type=dataset_type, save_predictions=False)
+        base_rewards.append(total_reward)
+    base_reward_mean = np.mean(base_rewards)
+    print(f"Average baseline reward: {base_reward_mean:.2f}")
+    
+    # Evaluate each feature
+    for col in state_cols:
+        print(f"Evaluating feature: {col}")
+        perm_rewards = []
+        
+        for _ in range(n_repeats):
+            # Create a permuted environment
+            perm_env = InsulinEnv(
+                os.path.join(CONFIG["processed_data_path"], f"{dataset_type}_all_{PREPROCESSSING_ID}.parquet"),
+                os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json"),
+                permute_feature=col
+            )
+            # Evaluate model in permuted environment
+            total_reward, _ = evaluate_model(model, perm_env, dataset_type=dataset_type, save_predictions=False)
+            perm_rewards.append(total_reward)
+        
+        # Calculate importance as the decrease in reward
+        perm_reward_mean = np.mean(perm_rewards)
+        importance = base_reward_mean - perm_reward_mean
+        results[col].append(importance)
+        print(f"Importance of {col}: {importance:.2f} (Permuted reward: {perm_reward_mean:.2f})")
+    
+    # Save results to CSV
+    results_df = pl.DataFrame({
+        "feature": state_cols,
+        "importance": [np.mean(results[col]) for col in state_cols]
+    })
+    csv_path = os.path.join(CONFIG["processed_data_path"], f"feature_importance_{dataset_type}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
+    results_df.write_csv(csv_path)
+    print(f"Feature importance results saved to: {csv_path}")
+    
+    return results_df
+
+# %% CELL: Plot Feature Importance
+def plot_feature_importance(importance_df):
+    """
+    Plot feature importance as a bar chart.
+    
+    Args:
+        importance_df: DataFrame with feature names and importance scores.
+    """
+    plt.figure(figsize=(12, 6))
+    sns.barplot(data=importance_df.to_pandas(), x="feature", y="importance")
+    plt.xticks(rotation=45, ha="right")
+    plt.xlabel("Features")
+    plt.ylabel("Importance (Reward Decrease)")
+    plt.title("Feature Importance (Permutation Importance)")
+    plt.tight_layout()
+    
+    # Save plot
+    plot_path = os.path.join(CONFIG["processed_data_path"], f"feature_importance_plot_{PREPROCESSSING_ID}_{MODEL_ID}.png")
+    plt.savefig(plot_path)
+    print(f"Feature importance plot saved to: {plot_path}")
+    plt.close()
+
+# %% CELL: Run Training, Evaluation, and Feature Importance
 if __name__ == "__main__":
     try:
+        # Train the model
         model, train_env = train_ppo()
         
+        # Create validation environment
         val_data_path = os.path.join(CONFIG["processed_data_path"], f"val_all_{PREPROCESSSING_ID}.parquet")
-        val_env = InsulinEnv(val_data_path, os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json"))
-        evaluate_model(model, val_env, dataset_type="val")
+        params_path = os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json")
+        val_env = InsulinEnv(val_data_path, params_path)
+        
+        # Step 1: Evaluate the model
+        print("Running model evaluation...")
+        total_reward, eval_results = evaluate_model(model, val_env, dataset_type="val", save_predictions=True)
+        
+        # Step 2: Compute feature importance
+        #print("Computing feature importance...")
+        #importance_df = permutation_importance(model, val_env, n_repeats=5, dataset_type="val")
+        
+        # Step 3: Plot feature importance
+        #print("Generating feature importance plot...")
+        #plot_feature_importance(importance_df)
+        
+        #print("Execution completed successfully.")
+        #print(importance_df)
     except Exception as e:
-        print(f"Error en la ejecución principal: {e}")
+        print(f"Error in main execution: {e}")
         raise
 # %%
