@@ -63,7 +63,7 @@ DEBUG = True
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax"
-FRAMEWORK = "tensorflow"
+FRAMEWORK = "jax"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -171,9 +171,9 @@ USE_JAX_MODELS = {
     "jax_tabnet": False,
     "jax_tcn": False,
     "jax_transformer": False,
-    "jax_wavenet": True,
+    "jax_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "jax_monte_carlo": False,
+    "jax_monte_carlo": True,
     "jax_policy_iteration": False,
     "jax_q_learning": False,
     "jax_reinforce_mcpg": False,
