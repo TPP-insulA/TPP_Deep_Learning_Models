@@ -5,7 +5,9 @@ from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 from custom.model_wrapper import ModelWrapper
 from tqdm.auto import tqdm # Para barra de progreso
-import time # Para medir tiempo
+import time
+
+from custom.printer import print_log # Para medir tiempo
 
 # Clase para modelos RL con TensorFlow (sin cambios significativos, añadir docstrings)
 class RLModelWrapperTF(ModelWrapper):
@@ -503,50 +505,112 @@ class RLModelWrapperJAX(ModelWrapper):
         Dict[str, List[float]]
             Historial de entrenamiento.
         """
-        if self.agent is None or self.agent_state is None:
-            raise ValueError("El agente no ha sido inicializado. Llama a 'start' primero.")
-
-        # Preparar datos de validación
-        x_cgm_val, x_other_val, y_val = self._unpack_validation_data(validation_data)
-        do_validation = x_cgm_val is not None
-
-        # Convertir datos a JAX arrays (opcional, depende de la implementación del agente)
-        x_cgm_arr = jnp.array(x_cgm)
-        x_other_arr = jnp.array(x_other)
-        y_arr = jnp.array(y)
-
-        # Bucle de entrenamiento por épocas
+        self._check_agent_initialized()
+        
+        # Preparar datos
+        training_data = self._prepare_training_data(x_cgm, x_other, y)
+        validation_info = self._prepare_validation_data(validation_data)
+        
+        # Entrenar por épocas
         for epoch in tqdm(range(epochs), desc="Entrenando (JAX)"):
-            epoch_rng, self.rng = jax.random.split(self.rng)
-            avg_loss, metrics = self._train_epoch(x_cgm_arr, x_other_arr, y_arr, batch_size, epoch_rng)
-            self.history["loss"].append(avg_loss)
-
-            val_loss_str = ""
-            if do_validation:
-                val_rng, self.rng = jax.random.split(self.rng)
-                val_loss = self._validate(jnp.array(x_cgm_val), jnp.array(x_other_val), jnp.array(y_val), val_rng)
-                self.history["val_loss"].append(val_loss)
-                val_loss_str = f" - Pérdida Val: {val_loss:.4f}"
-
-                # Lógica de Early Stopping
-                if self.early_stopping:
-                    if val_loss < self.early_stopping['best_loss'] - self.early_stopping['min_delta']:
-                        self.early_stopping['best_loss'] = val_loss
-                        self.early_stopping['wait'] = 0
-                        if self.early_stopping['restore_best_weights']:
-                            self.best_agent_state = self.agent_state # Guardar el estado actual como el mejor
-                    else:
-                        self.early_stopping['wait'] += 1
-                        if self.early_stopping['wait'] >= self.early_stopping['patience']:
-                            print(f"\nEarly stopping en época {epoch + 1}")
-                            if self.early_stopping['restore_best_weights'] and self.best_agent_state is not None:
-                                print("Restaurando el mejor estado del agente.")
-                                self.agent_state = self.best_agent_state
-                            break # Salir del bucle de épocas
-
-            print(f"Época {epoch + 1}/{epochs} - Pérdida: {avg_loss:.4f}{val_loss_str}")
+            self._run_training_epoch(epoch, epochs, training_data, validation_info, batch_size)
+            
+            # Verificar early stopping
+            if validation_info['do_validation'] and self._should_stop_early():
+                break
 
         return self.history
+        
+    def _check_agent_initialized(self) -> None:
+        """Verifica que el agente esté inicializado."""
+        if self.agent is None or self.agent_state is None:
+            raise ValueError("El agente no ha sido inicializado. Llama a 'start' primero.")
+            
+    def _prepare_training_data(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray) -> Dict[str, jnp.ndarray]:
+        """Prepara los datos de entrenamiento convirtiéndolos a JAX arrays."""
+        return {
+            'x_cgm': jnp.array(x_cgm),
+            'x_other': jnp.array(x_other),
+            'y': jnp.array(y)
+        }
+        
+    def _prepare_validation_data(self, validation_data: Optional[Tuple]) -> Dict[str, Any]:
+        """Prepara los datos de validación."""
+        x_cgm_val, x_other_val, y_val = self._unpack_validation_data(validation_data)
+        do_validation = x_cgm_val is not None
+        
+        return {
+            'x_cgm': jnp.array(x_cgm_val) if do_validation else None,
+            'x_other': jnp.array(x_other_val) if do_validation else None,
+            'y': jnp.array(y_val) if do_validation else None,
+            'do_validation': do_validation
+        }
+        
+    def _run_training_epoch(self, epoch: int, epochs: int, training_data: Dict[str, jnp.ndarray], 
+                           validation_info: Dict[str, Any], batch_size: int) -> None:
+        """Ejecuta una época de entrenamiento."""
+        # Entrenar época
+        epoch_rng, self.rng = jax.random.split(self.rng)
+        avg_loss, metrics = self._train_epoch(
+            training_data['x_cgm'], 
+            training_data['x_other'], 
+            training_data['y'], 
+            batch_size, 
+            epoch_rng
+        )
+        self.history["loss"].append(avg_loss)
+        
+        # Validar si es necesario
+        val_loss_str = ""
+        if validation_info['do_validation']:
+            val_loss = self._run_validation(validation_info)
+            val_loss_str = f" - Pérdida Val: {val_loss:.4f}"
+            
+        # Mostrar progreso
+        print(f"Época {epoch + 1}/{epochs} - Pérdida: {avg_loss:.4f}{val_loss_str}")
+        print_log(metrics)
+    
+    def _run_validation(self, validation_info: Dict[str, Any]) -> float:
+        """Ejecuta la validación y actualiza el estado del early stopping."""
+        val_rng, self.rng = jax.random.split(self.rng)
+        val_loss = self._validate(
+            validation_info['x_cgm'], 
+            validation_info['x_other'], 
+            validation_info['y'], 
+            val_rng
+        )
+        self.history["val_loss"].append(val_loss)
+        
+        # Actualizar estado del early stopping
+        if self.early_stopping:
+            self._update_early_stopping(val_loss)
+            
+        return val_loss
+        
+    def _update_early_stopping(self, val_loss: float) -> None:
+        """Actualiza el estado del early stopping."""
+        if val_loss < self.early_stopping['best_loss'] - self.early_stopping['min_delta']:
+            # Mejoró la pérdida
+            self.early_stopping['best_loss'] = val_loss
+            self.early_stopping['wait'] = 0
+            if self.early_stopping['restore_best_weights']:
+                self.best_agent_state = self.agent_state
+        else:
+            # No mejoró la pérdida
+            self.early_stopping['wait'] += 1
+            
+    def _should_stop_early(self) -> bool:
+        """Determina si se debe detener el entrenamiento temprano."""
+        if not self.early_stopping:
+            return False
+            
+        if self.early_stopping['wait'] >= self.early_stopping['patience']:
+            print("\nEarly stopping activado")
+            if self.early_stopping['restore_best_weights'] and self.best_agent_state is not None:
+                print("Restaurando el mejor estado del agente.")
+                self.agent_state = self.best_agent_state
+            return True
+        return False
 
     def _unpack_validation_data(self, validation_data: Optional[Tuple]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """Desempaqueta los datos de validación."""
