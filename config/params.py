@@ -174,7 +174,7 @@ USE_JAX_MODELS = {
     "jax_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "jax_monte_carlo": True,
-    "jax_policy_iteration": False,
+    "jax_policy_iteration": True,
     "jax_q_learning": False,
     "jax_reinforce_mcpg": False,
     "jax_sarsa": False,
