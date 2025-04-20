@@ -30,7 +30,6 @@ TRANSITION_PROB = 1.0 # Probabilidad de transición (simplificada)
 # Crear directorio para figuras si no existe
 os.makedirs(FIGURES_DIR, exist_ok=True)
 
-
 class PolicyIteration:
     """
     Implementación del algoritmo de Iteración de Política usando JAX.
@@ -106,7 +105,7 @@ class PolicyIteration:
         self._jit_calculate_state_values = jax.jit(self._calculate_state_values)
         self._jit_policy_improvement = jax.jit(self._policy_improvement)
 
-    def _extract_matrices_from_P_R(
+    def _extract_matrices_from_p_r(
         self,
         P: Dict[int, Dict[int, List[Tuple[float, int, float, bool]]]],
         R: Dict[int, Dict[int, float]]
@@ -132,29 +131,9 @@ class PolicyIteration:
         rewards_np = np.zeros((self.n_states, self.n_actions))
         terminals_np = np.zeros((self.n_states, self.n_actions), dtype=bool)
 
-        # Llenar matrices desde P
-        for s in range(self.n_states):
-            if s in P:
-                for a in range(self.n_actions):
-                    if a in P[s]:
-                        transitions = P[s][a]
-                        if transitions:
-                            # Asumimos una sola transición posible por (s, a) en el MDP simplificado
-                            prob, next_s, _, done = transitions[0]
-                            # Asegurarse que next_s está dentro de los límites
-                            if 0 <= next_s < self.n_states:
-                                transition_probs_np[s, a, next_s] = prob
-                            terminals_np[s, a] = done
-                        # else: Si no hay transiciones, la probabilidad es 0 (ya inicializado)
-            # else: Si un estado no está en P, se asume que no es alcanzable o es terminal.
-
-        # Llenar matriz de recompensas desde R
-        for s in range(self.n_states):
-            if s in R:
-                for a in range(self.n_actions):
-                    if a in R[s]:
-                        rewards_np[s, a] = R[s][a]
-            # else: Si un estado no está en R, la recompensa es 0 (ya inicializado)
+        # Llenar matrices usando funciones auxiliares
+        self._fill_transition_matrices(P, transition_probs_np, terminals_np)
+        self._fill_reward_matrix(R, rewards_np)
 
         # Convertir a JAX arrays
         transition_probs = jnp.array(transition_probs_np)
@@ -162,6 +141,69 @@ class PolicyIteration:
         terminals = jnp.array(terminals_np)
 
         return transition_probs, rewards, terminals
+        
+    def _fill_transition_matrices(
+        self, 
+        P: Dict[int, Dict[int, List[Tuple[float, int, float, bool]]]],
+        transition_probs_np: np.ndarray,
+        terminals_np: np.ndarray
+    ) -> None:
+        """
+        Llena las matrices de probabilidades de transición y estados terminales.
+        
+        Parámetros:
+        -----------
+        P : Dict
+            Diccionario de transiciones
+        transition_probs_np : np.ndarray
+            Matriz de probabilidades a llenar
+        terminals_np : np.ndarray
+            Matriz de estados terminales a llenar
+        """
+        for s in range(self.n_states):
+            if s not in P:
+                continue
+                
+            for a in range(self.n_actions):
+                if a not in P[s]:
+                    continue
+                    
+                transitions = P[s][a]
+                if not transitions:
+                    continue
+                    
+                # Asumimos una sola transición posible por (s, a) en el MDP simplificado
+                prob, next_s, _, done = transitions[0]
+                
+                # Asegurarse que next_s está dentro de los límites
+                if 0 <= next_s < self.n_states:
+                    transition_probs_np[s, a, next_s] = prob
+                terminals_np[s, a] = done
+                
+    def _fill_reward_matrix(
+        self,
+        R: Dict[int, Dict[int, float]],
+        rewards_np: np.ndarray
+    ) -> None:
+        """
+        Llena la matriz de recompensas.
+        
+        Parámetros:
+        -----------
+        R : Dict
+            Diccionario de recompensas
+        rewards_np : np.ndarray
+            Matriz de recompensas a llenar
+        """
+        for s in range(self.n_states):
+            if s not in R:
+                continue
+                
+            for a in range(self.n_actions):
+                if a not in R[s]:
+                    continue
+                    
+                rewards_np[s, a] = R[s][a]
 
     # jit
     def _calculate_state_values(
@@ -305,8 +347,8 @@ class PolicyIteration:
         terminals: jnp.ndarray
             Matriz de indicadores de terminal T(s, a).
 
-        Retorna:
-        --------
+        # Extraer matrices JAX de los diccionarios P y R
+        transition_probs, rewards, terminals = self._extract_matrices_from_p_r(P, R)
         Tuple[jnp.ndarray, bool]
             (Nueva política determinista codiciosa, indicador de estabilidad).
         """
@@ -349,7 +391,7 @@ class PolicyIteration:
         start_time = time.time()
 
         # Extraer matrices JAX de los diccionarios P y R
-        transition_probs, rewards, terminals = self._extract_matrices_from_P_R(P, R)
+        transition_probs, rewards, terminals = self._extract_matrices_from_p_r(P, R)
 
         improve_fn = self._jit_policy_improvement if use_jit else self._policy_improvement
 
@@ -708,6 +750,105 @@ class PolicyIterationWrapper(ModelWrapper):
         action = int(np.argmin(np.abs(self._action_doses - dose)))
         return action
 
+    def _collect_state_action_rewards(
+        self,
+        x_cgm: np.ndarray,
+        x_other: np.ndarray,
+        y: np.ndarray,
+        n_actions: int,
+        verbose: int
+    ) -> Dict[Tuple[int, int], List[float]]:
+        """
+        Recolecta recompensas para pares (estado, acción) a partir de los datos.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM de entrenamiento.
+        x_other : np.ndarray
+            Otras características de entrenamiento.
+        y : np.ndarray
+            Valores objetivo (dosis reales).
+        n_actions : int
+            Número de acciones.
+        verbose : int
+            Nivel de verbosidad.
+            
+        Retorna:
+        --------
+        Dict[Tuple[int, int], List[float]]
+            Diccionario con pares (estado, acción) como claves y listas de recompensas como valores.
+        """
+        from collections import defaultdict
+        n_samples = x_cgm.shape[0]
+        state_action_rewards = defaultdict(list)
+        
+        for i in tqdm(range(n_samples), desc="Discretizando Estados", disable=verbose == 0):
+            current_x_other = x_other[i] if x_other.shape[1] > 0 else None
+            state = self._discretize_state(x_cgm[i], current_x_other)
+            target_dose = y[i, 0] if y.ndim > 1 else y[i]  # Asegurar que y sea escalar
+            
+            # Calcular recompensa para cada acción posible en este estado
+            for action in range(n_actions):
+                predicted_dose = self._convert_action_to_dose(action)
+                reward = -abs(predicted_dose - target_dose)  # Recompensa negativa del error absoluto
+                pair = (state, action)
+                state_action_rewards[pair].append(reward)
+                
+        return state_action_rewards
+        
+    def _build_p_r_from_rewards(
+        self,
+        state_action_rewards: Dict[Tuple[int, int], List[float]],
+        n_states: int,
+        n_actions: int,
+        default_reward: float,
+        verbose: int
+    ) -> Tuple[Dict[int, Dict[int, List[Tuple[float, int, float, bool]]]], Dict[int, Dict[int, float]]]:
+        """
+        Construye los diccionarios P y R a partir de las recompensas recolectadas.
+        
+        Parámetros:
+        -----------
+        state_action_rewards : Dict[Tuple[int, int], List[float]]
+            Diccionario con pares (estado, acción) y sus recompensas.
+        n_states : int
+            Número de estados.
+        n_actions : int
+            Número de acciones.
+        default_reward : float
+            Recompensa por defecto para pares no observados.
+        verbose : int
+            Nivel de verbosidad.
+            
+        Retorna:
+        --------
+        Tuple[Dict, Dict]
+            Tupla (P, R) con los diccionarios del MDP.
+        """
+        from collections import defaultdict
+        P = defaultdict(dict)
+        R = defaultdict(dict)
+        
+        # Iterar sobre los pares (estado, acción) observados
+        observed_pairs = list(state_action_rewards.keys())
+        for s, a in tqdm(observed_pairs, desc="Construyendo MDP", disable=verbose == 0):
+            rewards = state_action_rewards[(s, a)]
+            avg_reward = np.mean(rewards)
+            
+            # En este MDP simplificado, la acción lleva a recompensa inmediata y episodio termina
+            P[s][a] = [(TRANSITION_PROB, s, avg_reward, True)]
+            R[s][a] = avg_reward
+        
+        # Llenar pares (s, a) no observados con recompensa por defecto
+        for s in range(n_states):
+            for a in range(n_actions):
+                if a not in P[s]:  # Si la acción 'a' no fue vista para el estado 's'
+                    P[s][a] = [(TRANSITION_PROB, s, default_reward, True)]
+                    R[s][a] = default_reward
+        
+        return dict(P), dict(R)
+        
     def _build_mdp_model(
         self,
         x_cgm: np.ndarray,
@@ -739,73 +880,28 @@ class PolicyIterationWrapper(ModelWrapper):
         if self.pi_agent is None:
             raise RuntimeError("Agente PolicyIteration no inicializado.")
 
-        n_samples = x_cgm.shape[0]
         n_states = self._n_states
         n_actions = self._n_actions
-
-        # Diccionarios para almacenar recompensas y conteos por (estado, acción)
-        # Usamos defaultdict para simplificar la adición de recompensas
-        from collections import defaultdict
-        state_action_rewards: Dict[Tuple[int, int], List[float]] = defaultdict(list)
 
         if verbose > 0:
             print_info("Discretizando estados y calculando recompensas...")
 
-        # 1. Discretizar estados y calcular recompensas para cada muestra
-        # No necesitamos guardar discretized_states aquí
-        for i in tqdm(range(n_samples), desc="Discretizando Estados", disable=verbose == 0):
-             # Asegurarse de pasar x_other[i] si existe y es necesario
-            current_x_other = x_other[i] if x_other.shape[1] > 0 else None
-            state = self._discretize_state(x_cgm[i], current_x_other)
-            target_dose = y[i, 0] if y.ndim > 1 else y[i] # Asegurar que y sea escalar
-
-            # Calcular recompensa para cada acción posible en este estado
-            for action in range(n_actions):
-                predicted_dose = self._convert_action_to_dose(action)
-                # Recompensa: negativa del error absoluto (más cerca de 0 es mejor)
-                # Podríamos usar otras funciones de recompensa, e.g., cuadrática
-                reward = -abs(predicted_dose - target_dose)
-
-                pair = (state, action)
-                state_action_rewards[pair].append(reward)
-
-        # 2. Calcular recompensas promedio y construir P y R
-        # Usar defaultdict para P y R también simplifica
-        P: Dict[int, Dict[int, List[Tuple[float, int, float, bool]]]] = defaultdict(dict)
-        R: Dict[int, Dict[int, float]] = defaultdict(dict)
+        # Recolectar recompensas para cada par (estado, acción)
+        state_action_rewards = self._collect_state_action_rewards(
+            x_cgm, x_other, y, n_actions, verbose
+        )
 
         if verbose > 0:
             print_info("Calculando recompensas promedio y construyendo P y R...")
 
-        # Recompensa por defecto si un par (s, a) no se observó en los datos
-        # Podría ser la recompensa mínima observada, o una penalización grande
+        # Calcular recompensa por defecto
         all_rewards = [r for rewards_list in state_action_rewards.values() for r in rewards_list]
-        default_reward = min(all_rewards) if all_rewards else -self.max_dose * 2 # Penalización grande si no hay datos
+        default_reward = min(all_rewards) if all_rewards else -self.max_dose * 2  # Penalización grande si no hay datos
 
-        # Iterar sobre los pares (estado, acción) observados
-        observed_pairs = list(state_action_rewards.keys())
-        for s, a in tqdm(observed_pairs, desc="Construyendo MDP", disable=verbose == 0):
-            rewards = state_action_rewards[(s, a)]
-            avg_reward = np.mean(rewards)
-
-            # En este MDP simplificado, la acción lleva a una recompensa inmediata
-            # y el episodio termina (done=True). El estado no cambia realmente (next_s = s).
-            # P[estado][accion] = [(probabilidad, proximo_estado, recompensa, done)]
-            # La recompensa en P no se usa directamente por PI clásico si R se proporciona.
-            P[s][a] = [(TRANSITION_PROB, s, avg_reward, True)]
-            R[s][a] = avg_reward
-
-        # Opcional: Llenar pares (s, a) no observados con recompensa por defecto
-        # Esto asegura que P y R cubran todos los estados/acciones posibles,
-        # aunque puede no ser estrictamente necesario si PI maneja estados/acciones faltantes.
-        # for s in range(n_states):
-        #     for a in range(n_actions):
-        #         if a not in P[s]: # Si la acción 'a' no fue vista para el estado 's'
-        #             P[s][a] = [(TRANSITION_PROB, s, default_reward, True)]
-        #             R[s][a] = default_reward
-
-        # Convertir defaultdicts a dicts normales si es necesario por la interfaz externa
-        return dict(P), dict(R)
+        # Construir diccionarios P y R
+        return self._build_p_r_from_rewards(
+            state_action_rewards, n_states, n_actions, default_reward, verbose
+        )
 
 
     def train(
@@ -855,10 +951,10 @@ class PolicyIterationWrapper(ModelWrapper):
         
         if verbose:
             print_info(f"Modelo MDP construido con {len(P)} estados y {self._n_actions} acciones.")
-            print_info(f"Iniciando entrenamiento de Iteración de Política...")
+            print_info("Iniciando entrenamiento de Iteración de Política...")
         
         # Entrenamiento principal - Iteración de Política
-        policy, values = self.pi_agent.train(P, R)
+        _, _ = self.pi_agent.train(P, R)
         self.is_trained = True
         
         # Evaluar en los datos de entrenamiento
@@ -906,7 +1002,7 @@ class PolicyIterationWrapper(ModelWrapper):
         if not self.is_trained:
             raise RuntimeError("El modelo debe ser entrenado antes de evaluar.")
 
-        predictions = self.predict([x_cgm, x_other])
+        predictions = self.predict(x_cgm, x_other)
         y_true = y.flatten()
         y_pred = predictions.flatten()
 
@@ -1032,7 +1128,7 @@ def create_policy_iteration_model(cgm_shape: Tuple[int, ...], other_features_sha
         Instancia del wrapper de Policy Iteration.
     """
     # Separar kwargs para el wrapper y para PolicyIteration
-    wrapper_args_names = ['bins', 'state_bounds', 'action_bins', 'action_bounds', 'n_states']
+    # wrapper_args_names = ['bins', 'state_bounds', 'action_bins', 'action_bounds', 'n_states']
     pi_args_names = ['gamma', 'theta', 'max_iterations', 'max_iterations_eval', 'seed']
 
     # Crear diccionario con todos los argumentos, priorizando los específicos del wrapper si hay colisión (poco probable)
@@ -1040,7 +1136,7 @@ def create_policy_iteration_model(cgm_shape: Tuple[int, ...], other_features_sha
 
     # Extraer los argumentos específicos del agente PI para logging, pero se pasarán todos a través de **kwargs
     pi_kwargs_for_logging = {k: v for k, v in kwargs.items() if k in pi_args_names}
-    wrapper_kwargs_for_logging = {k: v for k, v in kwargs.items() if k in wrapper_args_names}
+    # wrapper_kwargs_for_logging = {k: v for k, v in kwargs.items() if k in wrapper_args_names}
 
 
     # cgm_shape y other_features_shape no se usan directamente en el __init__ actual,
