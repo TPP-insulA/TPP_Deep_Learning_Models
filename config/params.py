@@ -175,7 +175,7 @@ USE_JAX_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo
     "jax_monte_carlo": True,
     "jax_policy_iteration": True,
-    "jax_q_learning": False,
+    "jax_q_learning": True,
     "jax_reinforce_mcpg": False,
     "jax_sarsa": False,
     "jax_value_iteration": False,
