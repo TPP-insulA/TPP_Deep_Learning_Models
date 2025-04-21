@@ -145,7 +145,7 @@ USE_TF_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo
     "tf_monte_carlo": True,
     "tf_policy_iteration": True,
-    "tf_q_learning": False,
+    "tf_q_learning": True,
     "tf_reinforce_mcpg": False,
     "tf_sarsa": False,
     "tf_value_iteration": False,
