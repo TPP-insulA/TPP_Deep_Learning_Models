@@ -144,7 +144,7 @@ USE_TF_MODELS = {
     "tf_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "tf_monte_carlo": True,
-    "tf_policy_iteration": False,
+    "tf_policy_iteration": True,
     "tf_q_learning": False,
     "tf_reinforce_mcpg": False,
     "tf_sarsa": False,

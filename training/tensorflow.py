@@ -117,64 +117,135 @@ def train_and_evaluate_model(model: Model,
     # Habilitar compilación XLA
     tf.config.optimizer.set_jit(True)
     
-    # Crear datasets optimizados
-    train_ds = create_dataset(x_cgm_train, x_other_train, y_train, batch_size=batch_size)
-    val_ds = create_dataset(x_cgm_val, x_other_val, y_val, batch_size=batch_size)
+    # Identificar el tipo de modelo (RL o DL)
+    is_rl_model = model_name.startswith('tf_policy_iteration') or model_name.startswith('tf_value_iteration') or \
+                  model_name.startswith('tf_monte_carlo') or model_name.startswith('tf_q_learning') or \
+                  model_name.startswith('tf_sarsa') or model_name.startswith('tf_reinforce')
     
-    # Usar una tasa de aprendizaje fija en lugar de un planificador
-    # para permitir que ReduceLROnPlateau funcione correctamente
-    optimizer = tf.keras.optimizers.Adam(
-        learning_rate=learning_rate,
-        clipnorm=1.0
-    )
-    
-    # Habilitar entrenamiento con precisión mixta
-    tf.keras.mixed_precision.set_global_policy('mixed_float16')
-    
-    # Compilar modelo con múltiples métricas
-    model.compile(
-        optimizer=optimizer,
-        loss='mse',
-        metrics=[CONST_METRIC_MAE, tf.keras.metrics.RootMeanSquaredError(name=CONST_METRIC_RMSE)]
-    )
-    
-    # Callbacks para monitoreo y optimización
-    callbacks = [
-        # Early stopping para evitar sobreajuste
-        tf.keras.callbacks.EarlyStopping(
-            monitor=CONST_VAL_LOSS,
-            patience=patience,
-            restore_best_weights=True
-        ),
-        # Reducir tasa de aprendizaje cuando el modelo se estanca
-        tf.keras.callbacks.ReduceLROnPlateau(
-            monitor=CONST_VAL_LOSS,
-            factor=0.5,
-            patience=patience // 2,
-            min_lr=1e-6
-        ),
-        # Guardar mejor modelo
-        tf.keras.callbacks.ModelCheckpoint(
-            os.path.join(models_dir, f'{CONST_BEST_PREFIX}{model_name}.keras'),
-            monitor=CONST_VAL_LOSS,
-            save_best_only=True
-        ),
-        # TensorBoard para visualización
-        tf.keras.callbacks.TensorBoard(
-            log_dir=log_dir,
-            histogram_freq=1
+    if is_rl_model:
+        # Para modelos de RL, usamos una estrategia diferente
+        print(f"Entrenando modelo RL: {model_name}")
+        
+        # Callbacks para monitoreo y optimización
+        callbacks = [
+            # Early stopping para evitar sobreajuste
+            tf.keras.callbacks.EarlyStopping(
+                monitor=CONST_VAL_LOSS,
+                patience=patience,
+                restore_best_weights=True
+            ),
+            # Reducir tasa de aprendizaje cuando el modelo se estanca
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=CONST_VAL_LOSS,
+                factor=0.5,
+                patience=patience // 2,
+                min_lr=1e-6
+            ),
+            # Guardar mejor modelo
+            tf.keras.callbacks.ModelCheckpoint(
+                os.path.join(models_dir, f'{CONST_BEST_PREFIX}{model_name}.keras'),
+                monitor=CONST_VAL_LOSS,
+                save_best_only=True
+            ),
+            # TensorBoard para visualización
+            tf.keras.callbacks.TensorBoard(
+                log_dir=log_dir,
+                histogram_freq=1
+            )
+        ]
+
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rate,
+            clipnorm=1.0
         )
-    ]
-    
-    # Entrenar modelo
-    print(f"\nEntrenando modelo {model_name}...")
-    history = model.fit(
-        train_ds,
-        validation_data=val_ds,
-        epochs=epochs,
-        callbacks=callbacks,
-        verbose=1
-    )
+        # Compilar modelo con múltiples métricas
+        model.compile(
+            optimizer=optimizer,
+            loss='mse',
+            metrics=[CONST_METRIC_MAE, tf.keras.metrics.RootMeanSquaredError(name=CONST_METRIC_RMSE)]
+        )
+        
+        # Para modelos RL, pasamos los datos de forma explícita
+        history = model.fit(
+            x=[x_cgm_train, x_other_train],
+            y=y_train,
+            batch_size=batch_size,
+            epochs=epochs,
+            verbose=1,
+            callbacks=callbacks,
+            validation_data=([x_cgm_val, x_other_val], y_val)
+        )
+        
+        # Historial simulado para compatibilidad
+        history_dict = {
+            'loss': [0.0],
+            'val_loss': [0.0]
+        }
+    else:
+        # Crear datasets optimizados para modelos DL
+        train_ds = create_dataset(x_cgm_train, x_other_train, y_train, batch_size=batch_size)
+        val_ds = create_dataset(x_cgm_val, x_other_val, y_val, batch_size=batch_size)
+        
+        # Usar una tasa de aprendizaje fija en lugar de un planificador
+        # para permitir que ReduceLROnPlateau funcione correctamente
+        optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rate,
+            clipnorm=1.0
+        )
+        
+        # Habilitar entrenamiento con precisión mixta
+        tf.keras.mixed_precision.set_global_policy('mixed_float16')
+        
+        # Compilar modelo con múltiples métricas
+        model.compile(
+            optimizer=optimizer,
+            loss='mse',
+            metrics=[CONST_METRIC_MAE, tf.keras.metrics.RootMeanSquaredError(name=CONST_METRIC_RMSE)]
+        )
+        
+        # Callbacks para monitoreo y optimización
+        callbacks = [
+            # Early stopping para evitar sobreajuste
+            tf.keras.callbacks.EarlyStopping(
+                monitor=CONST_VAL_LOSS,
+                patience=patience,
+                restore_best_weights=True
+            ),
+            # Reducir tasa de aprendizaje cuando el modelo se estanca
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor=CONST_VAL_LOSS,
+                factor=0.5,
+                patience=patience // 2,
+                min_lr=1e-6
+            ),
+            # Guardar mejor modelo
+            tf.keras.callbacks.ModelCheckpoint(
+                os.path.join(models_dir, f'{CONST_BEST_PREFIX}{model_name}.keras'),
+                monitor=CONST_VAL_LOSS,
+                save_best_only=True
+            ),
+            # TensorBoard para visualización
+            tf.keras.callbacks.TensorBoard(
+                log_dir=log_dir,
+                histogram_freq=1
+            )
+        ]
+        
+        # Entrenar modelo
+        print(f"\nEntrenando modelo {model_name}...")
+        history = model.fit(
+            train_ds,
+            validation_data=val_ds,
+            epochs=epochs,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        # Obtener el historial de entrenamiento
+        history_dict = history.history
+        
+        # Restaurar política de precisión predeterminada
+        tf.keras.mixed_precision.set_global_policy('float32')
     
     # Predecir y evaluar
     y_pred = model.predict([x_cgm_test, x_other_test]).flatten()
@@ -185,10 +256,7 @@ def train_and_evaluate_model(model: Model,
     # Guardar modelo final
     model.save(os.path.join(models_dir, f'{model_name}.keras'))
     
-    # Restaurar política de precisión predeterminada
-    tf.keras.mixed_precision.set_global_policy('float32')
-    
-    return history.history, y_pred, metrics
+    return history_dict, y_pred, metrics
 
 
 def train_model_sequential(model_creator: Callable, 

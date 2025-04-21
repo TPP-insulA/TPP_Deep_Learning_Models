@@ -205,7 +205,6 @@ class RLModelWrapperTF(ModelWrapper):
         val_data_keras = None
         if validation_data is not None:
             x_cgm_val, x_other_val, y_val = validation_data
-            # Asumiendo que el modelo espera una lista o tupla de entradas
             val_data_keras = ([x_cgm_val, x_other_val], y_val)
 
         # Asumiendo que el modelo espera una lista o tupla de entradas
@@ -222,11 +221,9 @@ class RLModelWrapperTF(ModelWrapper):
 
         # Copiar historial del modelo Keras
         if hasattr(model_history, 'history'):
-            for key, values in model_history.history.items():
-                history_dict[key] = values
+            history_dict = model_history.history
         elif isinstance(model_history, dict): # Si fit devuelve un dict directamente
-            for key, values in model_history.items():
-                history_dict[key] = values
+            history_dict = model_history
 
         return history_dict
 
