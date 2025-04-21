@@ -176,8 +176,8 @@ USE_JAX_MODELS = {
     "jax_monte_carlo": False,
     "jax_policy_iteration": False,
     "jax_q_learning": False,
-    "jax_reinforce_mcpg": True,
-    "jax_sarsa": False,
+    "jax_reinforce_mcpg": False,
+    "jax_sarsa": True,
     "jax_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "jax_a2c": False,
