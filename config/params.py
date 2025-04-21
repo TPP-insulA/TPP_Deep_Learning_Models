@@ -173,10 +173,10 @@ USE_JAX_MODELS = {
     "jax_transformer": False,
     "jax_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "jax_monte_carlo": True,
-    "jax_policy_iteration": True,
-    "jax_q_learning": True,
-    "jax_reinforce_mcpg": False,
+    "jax_monte_carlo": False,
+    "jax_policy_iteration": False,
+    "jax_q_learning": False,
+    "jax_reinforce_mcpg": True,
     "jax_sarsa": False,
     "jax_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
