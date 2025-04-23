@@ -388,6 +388,13 @@ POLICY_ITERATION_CONFIG = {
     'max_iterations': 100,        # Número máximo de bucles de iteración de política
     'max_iterations_eval': 1000,  # Iteraciones máximas para evaluación de política
     
+    # Discretización
+    'bins': 10,                  # Número de bins por dimensión para discretización
+    'state_bounds': None,        # Límites para cada dimensión del espacio de estados [(min1, max1), (min2, max2), ...]
+    'action_bounds': None,       # Límites para cada dimensión del espacio de acciones [(min1, max1), (min2, max2), ...]
+    'num_actions': None,        # Número de acciones posibles (si no se especifica, se calcula automáticamente)
+    'discretization': 'uniform', # Método de discretización: 'uniform' o 'adaptive'
+    
     # Visualización
     'visualization_interval': 5   # Intervalo de iteraciones para mostrar visualizaciones
 }

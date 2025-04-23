@@ -16,13 +16,18 @@ from scipy.optimize import minimize
 import orbax.checkpoint as orbax_ckpt
 from custom.printer import print_debug
 from training.common import (
-    CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
-    CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
-    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES,
     calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
     enhance_features, get_model_type, process_training_results
 )
+from constants.constants import (
+    CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
+    CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
+    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
+)
 from tqdm.auto import tqdm
+from config.params import DEBUG
+
+CONST_EPOCHS = 10 if DEBUG else CONST_DEFAULT_EPOCHS
 
 def create_batched_dataset(x_cgm: np.ndarray, 
                           x_other: np.ndarray, 
@@ -356,7 +361,7 @@ def _init_training_config() -> Dict[str, Any]:
     Inicializa la configuración de entrenamiento por defecto.
     """
     return {
-        'epochs': CONST_DEFAULT_EPOCHS,
+        'epochs': CONST_EPOCHS,
         'batch_size': CONST_DEFAULT_BATCH_SIZE,
         'learning_rate': 0.001,
         'patience': 10,
@@ -452,7 +457,7 @@ def train_and_evaluate_model(model: nn.Module,
     y_train = extracted_data['train']['y']
     
     # Extraer parámetros de configuración
-    epochs = training_config.get('epochs', CONST_DEFAULT_EPOCHS)
+    epochs = training_config.get('epochs', CONST_EPOCHS)
     batch_size = training_config.get('batch_size', CONST_DEFAULT_BATCH_SIZE)
     patience = training_config.get('patience', 10)
     
@@ -601,7 +606,7 @@ def train_model_sequential(model_creator: Callable,
         history = model_wrapper.train(
             x_cgm_train, x_other_train, y_train,
             validation_data=((x_cgm_val, x_other_val), y_val),
-            epochs=CONST_DEFAULT_EPOCHS, batch_size=CONST_DEFAULT_BATCH_SIZE
+            epochs=CONST_EPOCHS, batch_size=CONST_DEFAULT_BATCH_SIZE
         )
         
         # Predecir
@@ -618,7 +623,7 @@ def train_model_sequential(model_creator: Callable,
         
         # Configuración por defecto
         training_config = {
-            'epochs': CONST_DEFAULT_EPOCHS,
+            'epochs': CONST_EPOCHS,
             'batch_size': CONST_DEFAULT_BATCH_SIZE
         }
         
@@ -670,7 +675,7 @@ def cross_validate_model(create_model_fn: Callable,
     Tuple[Dict[str, float], Dict[str, float]]
         (métricas_promedio, métricas_desviación)
     """
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_DEFAULT_EPOCHS)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_EPOCHS)
     scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(x_cgm)):

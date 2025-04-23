@@ -101,3 +101,25 @@ class ModelWrapper:
         """
         preds = self.predict(x_cgm, x_other)
         return float(np.mean((preds - y) ** 2))
+    
+    def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
+        """
+        Añade early stopping al modelo.
+        
+        Parámetros:
+        -----------
+        patience : int, opcional
+            Número de épocas a esperar para detener el entrenamiento (default: 10)
+        min_delta : float, opcional
+            Cambio mínimo considerado como mejora (default: 0.0)
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar (default: True)
+        """
+        self.early_stopping = {
+            'patience': patience,
+            'min_delta': min_delta,
+            'restore_best_weights': restore_best_weights,
+            'best_loss': float('inf'),
+            'best_params': None,
+            'wait': 0
+        }

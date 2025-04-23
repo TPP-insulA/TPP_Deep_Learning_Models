@@ -1006,6 +1006,24 @@ class DRLModelWrapperJAX(ModelWrapper):
                 
         return epoch_metrics
     
+    def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
+        """
+        Agrega early stopping al modelo.
+
+        Parámetros:
+        -----------
+        patience : int, opcional
+            Número de épocas a esperar para detener el entrenamiento (default: 10)
+        min_delta : float, opcional
+            Mínima mejora requerida para considerar una mejora (default: 0.0)
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar (default: True)
+        """
+        if hasattr(self.wrapper, 'add_early_stopping'):
+            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
+        else:
+            super().add_early_stopping(patience, min_delta, restore_best_weights)
+    
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
              epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
