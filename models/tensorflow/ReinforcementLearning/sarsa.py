@@ -318,7 +318,7 @@ class SARSA:
         episodes = episodes or self.config['episodes']
         max_steps = max_steps or self.config['max_steps']
         
-        start_time = time.time()
+        _ = time.time()
         
         # Reiniciar listas para métricas
         self.episode_rewards = []
@@ -339,7 +339,7 @@ class SARSA:
             # Registrar tiempo de inicio del episodio
             episode_start = time.time()
             
-            for step in range(max_steps):
+            for _ in range(max_steps):
                 # Tomar la acción en el entorno
                 next_state, reward, done, _, _ = self.env.step(action)
                 next_state = np.array(next_state, dtype=np.float32)
@@ -969,7 +969,7 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
         def reset(self):
             return np.zeros(n_states), {}
             
-        def step(self, action):
+        def step(self, _):
             return np.zeros(n_states), 0.0, True, False, {}
     
     dummy_env = DummyEnv()
