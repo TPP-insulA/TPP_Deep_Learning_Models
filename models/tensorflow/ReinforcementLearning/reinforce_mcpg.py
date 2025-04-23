@@ -271,7 +271,7 @@ class REINFORCEValueNetwork:
     def __init__(
         self, 
         state_dim: int, 
-        hidden_sizes: List[int] = [64, 32],
+        hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
         activation: str = 'relu',
         learning_rate: float = 0.001
     ) -> None:
@@ -660,7 +660,7 @@ class REINFORCE:
         
         # Actualizar baseline si se usa
         if self.use_baseline:
-            baseline_loss = self.train_baseline_step(
+            self.train_baseline_step(
                 tf.convert_to_tensor(states),
                 tf.convert_to_tensor(returns)
             )
