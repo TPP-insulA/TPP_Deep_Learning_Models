@@ -219,26 +219,22 @@ class DLModelWrapperJAX(ModelWrapper):
     
     def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
         """
-        Añade early stopping al modelo.
-        
+        Agrega early stopping al modelo.
+
         Parámetros:
         -----------
         patience : int, opcional
             Número de épocas a esperar para detener el entrenamiento (default: 10)
         min_delta : float, opcional
-            Cambio mínimo considerado como mejora (default: 0.0)
+            Mínima mejora requerida para considerar una mejora (default: 0.0)
         restore_best_weights : bool, opcional
             Si restaurar los mejores pesos al finalizar (default: True)
         """
-        self.early_stopping = {
-            'patience': patience,
-            'min_delta': min_delta,
-            'restore_best_weights': restore_best_weights,
-            'best_loss': float('inf'),
-            'best_params': None,
-            'wait': 0
-        }
-    
+        if hasattr(self.wrapper, 'add_early_stopping'):
+            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
+        else:
+            super().add_early_stopping(patience, min_delta, restore_best_weights)
+
     def initialize(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, seed: int = 0) -> None:
         """
         Inicializa el modelo JAX con los datos de entrada.

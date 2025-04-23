@@ -5,25 +5,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from scipy.optimize import minimize
 from joblib import Parallel, delayed
 from config.params import DEBUG
-
-# Constantes compartidas
-CONST_VAL_LOSS = "val_loss"
-CONST_LOSS = "loss"
-CONST_METRIC_MAE = "mae"
-CONST_METRIC_RMSE = "rmse"
-CONST_METRIC_R2 = "r2"
-CONST_MODELS = "models"
-CONST_BEST_PREFIX = "best_"
-CONST_LOGS_DIR = "logs"
-CONST_DEFAULT_EPOCHS = 2 if DEBUG else 100
-CONST_DEFAULT_BATCH_SIZE = 32
-CONST_DEFAULT_SEED = 42
-CONST_FIGURES_DIR = "figures"
-CONST_MODEL_TYPES = {
-    "dl": "deep_learning",
-    "drl": "deep_reinforcement_learning",
-    "rl": "reinforcement_learning"
-}
+from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
 
 def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """
