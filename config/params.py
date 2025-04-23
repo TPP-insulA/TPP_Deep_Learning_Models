@@ -147,8 +147,8 @@ USE_TF_MODELS = {
     "tf_policy_iteration": False,
     "tf_q_learning": False,
     "tf_reinforce_mcpg": False,
-    "tf_sarsa": True,
-    "tf_value_iteration": False,
+    "tf_sarsa": False,
+    "tf_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "tf_a2c": False,
     "tf_a3c": False,
