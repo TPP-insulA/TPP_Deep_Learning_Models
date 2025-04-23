@@ -1,20 +1,28 @@
-import os, sys
-import numpy as np
-import matplotlib.pyplot as plt
-import pickle
-import time
-import gym
 from typing import Dict, List, Tuple, Optional, Union, Any
+import numpy as np
+import time
+import pickle
+import os
+import sys
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Input, Concatenate, GlobalAveragePooling1D
 from keras.saving import register_keras_serializable
+from types import SimpleNamespace
+import matplotlib.pyplot as plt
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SARSA_CONFIG
 
+# Constantes para prevenir duplicación
+CONST_CGM_ENCODER = 'cgm_encoder'
+CONST_OTHER_ENCODER = 'other_encoder'
+CONST_STATE_ENCODER = 'state_encoder'
+CONST_ACTION_DECODER = 'action_decoder'
+CONST_WEIGHTS_FILE_SUFFIX = '_weights.h5'
+CONST_SARSA_AGENT_SUFFIX = '_sarsa_agent'
 
 class SARSA:
     """
@@ -157,7 +165,7 @@ class SARSA:
         for low, high in self.state_bounds:
             self.discrete_states.append(np.linspace(low, high, self.bins_per_dim + 1)[1:-1])
     
-    def discretize_state(self, state: np.ndarray) -> Tuple:
+    def discretize_state(self, state: np.ndarray) -> Union[int, Tuple[int, ...]]:
         """
         Discretiza un estado continuo.
         
@@ -168,12 +176,19 @@ class SARSA:
             
         Retorna:
         --------
-        Tuple
-            Tupla con índices discretizados
+        Union[int, Tuple[int, ...]]
+            Índice discretizado o tupla de índices discretizados
         """
         if self.discrete_state_space:
-            return state
+            # Si el espacio de estados ya es discreto, convertir a entero
+            if isinstance(state, np.ndarray):
+                # Si es un array, tomar el primer elemento como índice
+                if len(state.shape) > 0:
+                    return int(state[0])
+                return int(state)
+            return int(state)
         
+        # Para espacio continuo, discretizar cada dimensión
         discrete_state = []
         for i, val in enumerate(state):
             # Limitar val al rango definido
@@ -239,16 +254,23 @@ class SARSA:
         discrete_state = self.discretize_state(state)
         discrete_next_state = self.discretize_state(next_state)
         
-        # Valor Q actual
-        current_q = self.q_table[discrete_state][action]
-        
-        # Valor Q del siguiente estado-acción
-        next_q = self.q_table[discrete_next_state][next_action]
-        
-        # Actualizar Q usando la regla SARSA
-        # Q(s,a) = Q(s,a) + α[r + γQ(s',a') - Q(s,a)]
-        new_q = current_q + self.alpha * (reward + self.gamma * next_q - current_q)
-        self.q_table[discrete_state][action] = new_q
+        # Verificar el tipo de índice y acceder a la tabla Q de manera adecuada
+        if isinstance(discrete_state, tuple):
+            # Para espacio de estados multidimensional, usamos indexación con tuplas
+            current_q = self.q_table[discrete_state][action]
+            next_q = self.q_table[discrete_next_state][next_action]
+            
+            # Actualizar Q usando la regla SARSA
+            new_q = current_q + self.alpha * (reward + self.gamma * next_q - current_q)
+            self.q_table[discrete_state][action] = new_q
+        else:
+            # Para espacio de estados unidimensional, usamos indexación simple
+            current_q = self.q_table[discrete_state, action]
+            next_q = self.q_table[discrete_next_state, next_action]
+            
+            # Actualizar Q usando la regla SARSA
+            new_q = current_q + self.alpha * (reward + self.gamma * next_q - current_q)
+            self.q_table[discrete_state, action] = new_q
     
     def decay_epsilon(self, episode: Optional[int] = None) -> None:
         """
@@ -304,56 +326,59 @@ class SARSA:
         self.epsilon_history = []
         
         for episode in range(episodes):
+            # Inicializar el episodio
             state, _ = self.env.reset()
-            action = self.get_action(state)  # Seleccionar primera acción
+            state = np.array(state, dtype=np.float32)
+            
+            # Seleccionar acción inicial
+            action = self.get_action(state)
             
             episode_reward = 0
-            episode_steps = 0
+            steps = 0
             
-            # Interactuar con el entorno hasta terminar episodio
-            for _ in range(max_steps):
+            # Registrar tiempo de inicio del episodio
+            episode_start = time.time()
+            
+            for step in range(max_steps):
+                # Tomar la acción en el entorno
+                next_state, reward, done, _, _ = self.env.step(action)
+                next_state = np.array(next_state, dtype=np.float32)
+                
+                # Renderizar si es necesario
                 if render:
                     self.env.render()
                 
-                # Ejecutar acción y observar resultado
-                next_state, reward, terminated, truncated, _ = self.env.step(action)
-                done = terminated or truncated
+                # Seleccionar la siguiente acción (política actual)
+                next_action = self.get_action(next_state)
                 
-                # Acumular recompensa
+                # Actualizar la tabla Q usando la regla SARSA
+                self.update_q_value(state, action, reward, next_state, next_action)
+                
+                # Actualizar para el próximo paso
+                state = next_state
+                action = next_action
+                
+                # Actualizar métricas
                 episode_reward += reward
-                episode_steps += 1
+                steps += 1
                 
                 if done:
-                    # Para estados terminales, el valor Q del siguiente estado es 0
-                    self.update_q_value(state, action, reward, next_state, 0)
                     break
-                else:
-                    # Seleccionar siguiente acción según política actual
-                    next_action = self.get_action(next_state)
-                    
-                    # Actualizar valor Q
-                    self.update_q_value(state, action, reward, next_state, next_action)
-                    
-                    # Actualizar estado y acción para la siguiente iteración
-                    state = next_state
-                    action = next_action
             
-            # Recopilar métricas del episodio
+            # Actualizar métricas del episodio
             self.episode_rewards.append(episode_reward)
-            self.episode_lengths.append(episode_steps)
+            self.episode_lengths.append(steps)
             self.epsilon_history.append(self.epsilon)
             
-            # Actualizar epsilon para el siguiente episodio
+            # Decaer epsilon
             self.decay_epsilon(episode)
             
-            # Mostrar progreso periódicamente
-            if (episode + 1) % self.config['log_interval'] == 0:
-                avg_reward = np.mean(self.episode_rewards[-self.config['log_interval']:])
-                avg_steps = np.mean(self.episode_lengths[-self.config['log_interval']:])
-                elapsed = time.time() - start_time
-                print(f"Episodio {episode+1}/{episodes} - Recompensa: {avg_reward:.2f}, "
-                      f"Pasos: {avg_steps:.2f}, Epsilon: {self.epsilon:.4f}, "
-                      f"Tiempo: {elapsed:.2f}s")
+            # Calcular duración del episodio
+            episode_duration = time.time() - episode_start
+            
+            # Mostrar progreso 
+            if episode % self.config['log_interval'] == 0 or episode == episodes - 1:
+                print(f"Episodio {episode+1}/{episodes} - Recompensa: {episode_reward:.2f}, Pasos: {steps:.2f}, Epsilon: {self.epsilon:.4f}, Tiempo: {episode_duration:.2f}s")
         
         print("Entrenamiento completado!")
         
@@ -392,31 +417,32 @@ class SARSA:
         
         for episode in range(episodes):
             state, _ = self.env.reset()
+            state = np.array(state, dtype=np.float32)
             episode_reward = 0
             episode_steps = 0
-            done = False
             
-            while not done and episode_steps < self.config['max_steps']:
+            done = False
+            while not done:
+                # Seleccionar mejor acción (sin exploración)
+                action = self.get_action(state, explore=False)
+                
+                # Ejecutar acción en el entorno
+                next_state, reward, done, _, _ = self.env.step(action)
+                next_state = np.array(next_state, dtype=np.float32)
+                
                 if render:
                     self.env.render()
                 
-                # Seleccionar acción sin exploración
-                action = self.get_action(state, explore=False)
-                
-                # Ejecutar acción
-                next_state, reward, terminated, truncated, _ = self.env.step(action)
-                done = terminated or truncated
-                
-                # Actualizar contadores
+                # Actualizar estado y métricas
+                state = next_state
                 episode_reward += reward
                 episode_steps += 1
-                state = next_state
             
             rewards.append(episode_reward)
             steps.append(episode_steps)
             
             if verbose:
-                print(f"Episodio {episode+1}: Recompensa = {episode_reward}, Pasos = {episode_steps}")
+                print(f"Episodio de evaluación {episode+1}/{episodes} - Recompensa: {episode_reward:.2f}, Pasos: {episode_steps}")
         
         avg_reward = np.mean(rewards)
         avg_steps = np.mean(steps)
@@ -481,213 +507,8 @@ class SARSA:
         self.epsilon = data.get('epsilon', self.epsilon)
         
         print(f"Modelo cargado desde {filepath}")
-    
-    def visualize_training(
-        self, 
-        training_history: Optional[Dict[str, List[float]]] = None, 
-        smoothing_window: Optional[int] = None
-    ) -> None:
-        """
-        Visualiza las métricas de entrenamiento.
-        
-        Parámetros:
-        -----------
-        training_history : Optional[Dict[str, List[float]]], opcional
-            Historia de entrenamiento (default: None)
-        smoothing_window : Optional[int], opcional
-            Tamaño de ventana para suavizado (default: None)
-        """
-        if training_history is None:
-            # Usar historial almacenado internamente
-            rewards = self.episode_rewards
-            lengths = self.episode_lengths
-            epsilons = self.epsilon_history
-        else:
-            # Usar historial proporcionado
-            rewards = training_history['rewards']
-            lengths = training_history['lengths']
-            epsilons = training_history['epsilons']
-        
-        smoothing_window = smoothing_window or self.config['smoothing_window']
-        
-        # Función para suavizar datos
-        def smooth(data: List[float], window_size: int) -> np.ndarray:
-            """Aplica suavizado con media móvil"""
-            if len(data) < window_size:
-                return np.array(data)
-            kernel = np.ones(window_size) / window_size
-            return np.convolve(np.array(data), kernel, mode='valid')
-        
-        # Crear figura con tres subplots
-        _, axs = plt.subplots(3, 1, figsize=(10, 12))
-        
-        # 1. Gráfico de recompensas
-        axs[0].plot(rewards, alpha=0.3, color='blue', label='Original')
-        if len(rewards) > smoothing_window:
-            smoothed_rewards = smooth(rewards, smoothing_window)
-            axs[0].plot(
-                range(smoothing_window-1, len(rewards)),
-                smoothed_rewards,
-                color='blue',
-                label=f'Suavizado (ventana={smoothing_window})'
-            )
-        axs[0].set_title('Recompensas por Episodio')
-        axs[0].set_xlabel('Episodio')
-        axs[0].set_ylabel('Recompensa')
-        axs[0].legend()
-        axs[0].grid(alpha=0.3)
-        
-        # 2. Gráfico de longitud de episodios
-        axs[1].plot(lengths, alpha=0.3, color='green', label='Original')
-        if len(lengths) > smoothing_window:
-            smoothed_lengths = smooth(lengths, smoothing_window)
-            axs[1].plot(
-                range(smoothing_window-1, len(lengths)),
-                smoothed_lengths,
-                color='green',
-                label=f'Suavizado (ventana={smoothing_window})'
-            )
-        axs[1].set_title('Longitud de Episodios')
-        axs[1].set_xlabel('Episodio')
-        axs[1].set_ylabel('Pasos')
-        axs[1].legend()
-        axs[1].grid(alpha=0.3)
-        
-        # 3. Gráfico de epsilon
-        axs[2].plot(epsilons, color='red')
-        axs[2].set_title('Valor de Epsilon (Exploración)')
-        axs[2].set_xlabel('Episodio')
-        axs[2].set_ylabel('Epsilon')
-        axs[2].grid(alpha=0.3)
-        
-        plt.tight_layout()
-        plt.show()
-    
-    def visualize_policy(
-        self, 
-        state_dims: Tuple[int, int] = (0, 1), 
-        resolution: int = 100
-    ) -> None:
-        """
-        Visualiza la política aprendida para entornos con estados continuos.
-        
-        Parámetros:
-        -----------
-        state_dims : Tuple[int, int], opcional
-            Tupla con las dos dimensiones del estado a visualizar (default: (0, 1))
-        resolution : int, opcional
-            Resolución de la visualización (default: 100)
-        """
-        if self.discrete_state_space:
-            print("Visualización de política no disponible para espacios de estado discretos nativos")
-            return
-        
-        if self.state_dim < 2:
-            print("Visualización requiere al menos 2 dimensiones de estado")
-            return
-        
-        # Crear malla para visualización
-        dim1, dim2 = state_dims
-        x_range = np.linspace(self.state_bounds[dim1][0], self.state_bounds[dim1][1], resolution)
-        y_range = np.linspace(self.state_bounds[dim2][0], self.state_bounds[dim2][1], resolution)
-        X, Y = np.meshgrid(x_range, y_range)
-        
-        # Calcular acciones para cada punto de la malla
-        policy = np.zeros(X.shape, dtype=int)
-        
-        # Estado base (valores medios para dimensiones no visualizadas)
-        base_state = []
-        for i in range(self.state_dim):
-            if i == dim1 or i == dim2:
-                base_state.append(0)  # Placeholder
-            else:
-                # Usar punto medio para dimensiones no visualizadas
-                base_state.append((self.state_bounds[i][0] + self.state_bounds[i][1]) / 2)
-        
-        for i in range(resolution):
-            for j in range(resolution):
-                # Crear estado para este punto
-                state = base_state.copy()
-                state[dim1] = X[i, j]
-                state[dim2] = Y[i, j]
-                
-                # Obtener acción según política actual
-                action = self.get_action(state, explore=False)
-                policy[i, j] = action
-        
-        # Visualizar política
-        plt.figure(figsize=(10, 8))
-        policy_plot = plt.pcolormesh(X, Y, policy, cmap='viridis', alpha=0.7, shading='auto')
-        plt.colorbar(policy_plot, label='Acción')
-        plt.title('Visualización de Política')
-        plt.xlabel(f'Dimensión de Estado {dim1}')
-        plt.ylabel(f'Dimensión de Estado {dim2}')
-        plt.grid(alpha=0.2)
-        plt.show()
-    
-    def visualize_value_function(
-        self, 
-        state_dims: Tuple[int, int] = (0, 1), 
-        resolution: int = 100
-    ) -> None:
-        """
-        Visualiza la función de valor aprendida para entornos con estados continuos.
-        
-        Parámetros:
-        -----------
-        state_dims : Tuple[int, int], opcional
-            Tupla con las dos dimensiones del estado a visualizar (default: (0, 1))
-        resolution : int, opcional
-            Resolución de la visualización (default: 100)
-        """
-        if self.discrete_state_space:
-            print("Visualización de valores no disponible para espacios de estado discretos nativos")
-            return
-        
-        if self.state_dim < 2:
-            print("Visualización requiere al menos 2 dimensiones de estado")
-            return
-        
-        # Crear malla para visualización
-        dim1, dim2 = state_dims
-        x_range = np.linspace(self.state_bounds[dim1][0], self.state_bounds[dim1][1], resolution)
-        y_range = np.linspace(self.state_bounds[dim2][0], self.state_bounds[dim2][1], resolution)
-        X, Y = np.meshgrid(x_range, y_range)
-        
-        # Calcular valores para cada punto de la malla
-        values = np.zeros(X.shape)
-        
-        # Estado base (valores medios para dimensiones no visualizadas)
-        base_state = []
-        for i in range(self.state_dim):
-            if i == dim1 or i == dim2:
-                base_state.append(0)  # Placeholder
-            else:
-                # Usar punto medio para dimensiones no visualizadas
-                base_state.append((self.state_bounds[i][0] + self.state_bounds[i][1]) / 2)
-        
-        for i in range(resolution):
-            for j in range(resolution):
-                # Crear estado para este punto
-                state = base_state.copy()
-                state[dim1] = X[i, j]
-                state[dim2] = Y[i, j]
-                
-                # Obtener valor máximo para este estado
-                discrete_state = self.discretize_state(state)
-                values[i, j] = np.max(self.q_table[discrete_state])
-        
-        # Visualizar valores
-        plt.figure(figsize=(10, 8))
-        value_plot = plt.pcolormesh(X, Y, values, cmap='plasma', alpha=0.7, shading='auto')
-        plt.colorbar(value_plot, label='Valor')
-        plt.title('Visualización de Función de Valor')
-        plt.xlabel(f'Dimensión de Estado {dim1}')
-        plt.ylabel(f'Dimensión de Estado {dim2}')
-        plt.grid(alpha=0.2)
-        plt.show()
 
-@register_keras_serializable
+@register_keras_serializable()
 class SARSAModel(Model):
     """
     Wrapper para el algoritmo SARSA que implementa la interfaz de Model de Keras.
@@ -721,11 +542,11 @@ class SARSAModel(Model):
         self.discretizer = discretizer
         
         # Capas para procesar entrada de CGM
-        self.cgm_encoder = Dense(64, activation='relu', name='cgm_encoder')
+        self.cgm_encoder = Dense(64, activation='relu', name=CONST_CGM_ENCODER)
         self.cgm_pooling = GlobalAveragePooling1D(name='cgm_pooling')
         
         # Capas para procesar otras características
-        self.other_encoder = Dense(32, activation='relu', name='other_encoder')
+        self.other_encoder = Dense(32, activation='relu', name=CONST_OTHER_ENCODER)
         
         # Capa de concatenación
         self.concat = Concatenate(name='concat_layer')
@@ -734,11 +555,11 @@ class SARSAModel(Model):
         self.state_encoder = Dense(
             sarsa_agent.state_space_size if hasattr(sarsa_agent, 'state_space_size') else 1000, 
             activation='softmax', 
-            name='state_encoder'
+            name=CONST_STATE_ENCODER
         )
         
         # Capa para convertir acciones discretas a dosis continuas
-        self.action_decoder = Dense(1, kernel_initializer='glorot_uniform', name='action_decoder')
+        self.action_decoder = Dense(1, kernel_initializer='glorot_uniform', name=CONST_ACTION_DECODER)
         
     def call(self, inputs: List[tf.Tensor], training: bool = False) -> tf.Tensor:
         """
@@ -759,149 +580,50 @@ class SARSAModel(Model):
         # Obtener y procesar entradas
         cgm_input, other_input = inputs
         batch_size = tf.shape(cgm_input)[0]
+
+        # Codificar estados
+        state_encodings = self._encode_states(cgm_input, other_input)
         
-        # Codificar estado a partir de las entradas
-        states = self._encode_states(cgm_input, other_input)
+        # Obtener acciones discretas para cada muestra usando tf.py_function
+        # para encapsular el código Python/NumPy en un op de TensorFlow
+        def get_actions(encodings):
+            # Esta función se ejecutará en modo eager
+            batch_actions = []
+            for i in range(len(encodings)):
+                # Extraer codificación individual
+                encoding = encodings[i]
+                
+                # Discretizar estado
+                discrete_state = self._discretize_state(encoding)
+                
+                # Obtener mejor acción
+                action = np.argmax(self.sarsa_agent.q_table[discrete_state])
+                batch_actions.append(action)
+            
+            return np.array(batch_actions, dtype=np.int32)
         
-        # Inicializar array para acciones
-        actions = tf.TensorArray(tf.float32, size=batch_size)
+        # Convertir el código Python en una operación de TensorFlow
+        actions = tf.py_function(
+            func=get_actions,
+            inp=[state_encodings],
+            Tout=tf.int32
+        )
         
-        # Para cada muestra en el batch, obtener acción correspondiente
-        for i in range(batch_size):
-            # Obtener índice del estado más probable
-            state = tf.argmax(states[i]).numpy()
-            # Usar sarsa para obtener acción (sin exploración en modo predicción)
-            action = self.sarsa_agent.get_action(state, explore=False)
-            actions = actions.write(i, tf.cast(action, tf.float32))
+        # Asegurar forma correcta después de tf.py_function
+        actions = tf.reshape(actions, [batch_size])
         
-        # Convertir a tensor y ajustar forma
-        actions_tensor = tf.reshape(actions.stack(), [batch_size, 1])
+        # Decodificar acciones discretas a dosis continuas
+        actions_float = tf.cast(actions, tf.float32)
+        actions_reshaped = tf.reshape(actions_float, [batch_size, 1])
         
-        # Decodificar acción discreta a valor de dosis
-        dose_predictions = self._decode_actions(actions_tensor)
+        # Mapear acciones discretas a valores continuos usando el decodificador
+        dose_predictions = self.action_decoder(actions_reshaped)
         
         return dose_predictions
     
     def _encode_states(self, cgm_data: tf.Tensor, other_features: tf.Tensor) -> tf.Tensor:
         """
-        Codifica las características en estados discretos.
-        
-        Parámetros:
-        -----------
-        cgm_data : tf.Tensor
-            Datos de monitoreo continuo de glucosa
-        other_features : tf.Tensor
-            Otras características (carbohidratos, insulina a bordo, etc.)
-            
-        Retorna:
-        --------
-        tf.Tensor
-            Distribución suave sobre estados discretos
-        """
-        # Procesar CGM con capas densas
-        cgm_encoded = self.cgm_encoder(cgm_data)
-        cgm_features = self.cgm_pooling(cgm_encoded)
-        
-        # Procesar otras características
-        other_encoded = self.other_encoder(other_features)
-        
-        # Concatenar características
-        combined = self.concat([cgm_features, other_encoded])
-        
-        # Codificar a estados discretos
-        state_distribution = self.state_encoder(combined)
-        
-        return state_distribution
-    
-    def _decode_actions(self, actions: tf.Tensor) -> tf.Tensor:
-        """
-        Decodifica acciones discretas a valores continuos de dosis.
-        
-        Parámetros:
-        -----------
-        actions : tf.Tensor
-            Índices de acciones discretas
-            
-        Retorna:
-        --------
-        tf.Tensor
-            Valores de dosis de insulina
-        """
-        # Convertir índices a one-hot para procesamiento
-        action_one_hot = tf.one_hot(tf.cast(actions, tf.int32), self.sarsa_agent.action_space_size)
-        # Mapear a valores continuos
-        doses = self.action_decoder(action_one_hot)
-        return doses
-    
-    def fit(
-        self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
-        verbose: int = 0,
-        callbacks: Optional[List[Any]] = None,
-        validation_data: Optional[Tuple] = None,
-        **kwargs
-    ) -> Dict:
-        """
-        Simula la interfaz de entrenamiento de Keras para el agente SARSA.
-        
-        Parámetros:
-        -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
-        batch_size : int, opcional
-            Tamaño del lote (default: 32)
-        epochs : int, opcional
-            Número de épocas (default: 1)
-        verbose : int, opcional
-            Nivel de verbosidad (default: 0)
-        callbacks : Optional[List[Any]], opcional
-            Lista de callbacks (default: None)
-        validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
-        **kwargs
-            Argumentos adicionales
-            
-        Retorna:
-        --------
-        Dict
-            Historia simulada de entrenamiento
-        """
-        if verbose > 0:
-            print("Entrenando modelo SARSA...")
-        
-        # Crear entorno personalizado para SARSA
-        _ = self._create_environment(x[0], x[1], y)
-        
-        # Entrenar agente SARSA
-        history = self.sarsa_agent.train(
-            episodes=epochs * batch_size,
-            max_steps=100,
-            render=False
-        )
-        
-        # Calibrar decodificador de acciones
-        self._calibrate_action_decoder(y)
-        
-        if verbose > 0:
-            print(f"Entrenamiento completado en {len(history.get('rewards', []))} episodios")
-        
-        # Crear historia simulada para compatibilidad con Keras
-        keras_history = {
-            'loss': history.get('rewards', [0]),
-            'val_loss': [history.get('rewards', [0])[-1]] if validation_data is not None else None
-        }
-        
-        return {'history': keras_history}
-    
-    def _create_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
-                           target_doses: tf.Tensor) -> Any:
-        """
-        Crea un entorno personalizado para entrenar el agente SARSA.
+        Codifica los datos de entrada en una representación de estado.
         
         Parámetros:
         -----------
@@ -909,126 +631,263 @@ class SARSAModel(Model):
             Datos CGM
         other_features : tf.Tensor
             Otras características
-        target_doses : tf.Tensor
-            Dosis objetivo
+            
+        Retorna:
+        --------
+        tf.Tensor
+            Estados codificados
+        """
+        batch_size = tf.shape(cgm_data)[0]
+        
+        # Procesar datos CGM
+        if len(cgm_data.shape) > 2:  # Si es serie temporal
+            # Aplanar la dimensión temporal
+            cgm_flattened = tf.reshape(cgm_data, [batch_size, -1])
+            cgm_encoded = self.cgm_encoder(cgm_flattened)
+        else:  # Si ya es plano
+            cgm_encoded = self.cgm_encoder(cgm_data)
+        
+        # Procesar otras características
+        other_encoded = self.other_encoder(other_features)
+        
+        # Concatenar las características codificadas
+        combined = self.concat([cgm_encoded, other_encoded])
+        
+        # Codificar a un espacio de estados discreto para SARSA
+        state_encoded = self.state_encoder(combined)
+        
+        return state_encoded
+    
+    def _discretize_state(self, state_encoding: tf.Tensor) -> int:
+        """
+        Discretiza la codificación de estado para consultar la tabla Q.
+        
+        Parámetros:
+        -----------
+        state_encoding : tf.Tensor
+            Codificación de estado
+            
+        Retorna:
+        --------
+        int
+            Índice discretizado para la tabla Q
+        """
+        # Obtener índice del valor máximo como estado discreto
+        discrete_state = tf.argmax(state_encoding).numpy()
+        
+        # Convertir a entero para indexación
+        return int(discrete_state)
+    
+    def fit(
+        self, 
+        x: List[tf.Tensor], 
+        y: np.ndarray, 
+        validation_data: Optional[Tuple] = None, 
+        epochs: int = 1,
+        batch_size: int = 32,
+        callbacks: list = None,
+        verbose: int = 0
+    ) -> Dict:
+        """
+        Entrena el modelo utilizando el agente SARSA subyacente.
+        
+        Parámetros:
+        -----------
+        x : List[tf.Tensor]
+            Lista de tensores de entrada [cgm_data, other_features]
+        y : np.ndarray
+            Valores objetivo (dosis de insulina)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación (default: None)
+        epochs : int, opcional
+            Número de épocas (default: 1)
+        batch_size : int, opcional
+            Tamaño de lote (default: 32)
+        callbacks : list, opcional
+            Lista de callbacks (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 0)
+            
+        Retorna:
+        --------
+        Dict
+            Historia de entrenamiento
+        """
+        # Calibrar el decodificador de acciones para mapear acciones discretas a dosis continuas
+        self._calibrate_action_decoder(y)
+        
+        # Crear entorno de entrenamiento
+        train_env = self._create_training_environment(x[0], x[1], y)
+        
+        # Asignar entorno al agente SARSA
+        self.sarsa_agent.env = train_env
+        
+        # Multiplicar épocas por batch_size para simular épocas completas
+        effective_episodes = epochs * (len(y) // batch_size) if batch_size < len(y) else epochs
+        
+        # Entrenar el agente SARSA
+        history = self.sarsa_agent.train(
+            episodes=effective_episodes,
+            max_steps=1,  # Un paso por episodio es suficiente para este problema
+            render=False
+        )
+        
+        # Preparar datos para validación si están disponibles
+        if validation_data is not None:
+            val_x, val_y = validation_data
+            val_env = self._create_training_environment(val_x[0], val_x[1], val_y)
+            
+            # Guardar el entorno actual
+            original_env = self.sarsa_agent.env
+            
+            # Configurar entorno de validación
+            self.sarsa_agent.env = val_env
+            
+            # Evaluar (sin pasar el entorno como argumento)
+            val_reward = self.sarsa_agent.evaluate(
+                episodes=len(val_y) // batch_size if batch_size < len(val_y) else 1,
+                render=False,
+                verbose=verbose > 0
+            )
+            
+            # Restaurar el entorno original
+            self.sarsa_agent.env = original_env
+            
+            print(f"Recompensa de validación: {val_reward:.4f}")
+            
+            # Añadir métricas de validación al historial
+            history['val_reward'] = val_reward
+        
+        return history
+    
+    def _calibrate_action_decoder(self, y: np.ndarray) -> None:
+        """
+        Calibra la capa de decodificación de acciones para mapear acciones discretas a dosis continuas.
+        
+        Parámetros:
+        -----------
+        y : np.ndarray
+            Valores objetivo (dosis de insulina)
+        """
+        # Obtener rango de dosis
+        min_dose = np.min(y)
+        max_dose = np.max(y)
+        
+        # Determinar espacio de acciones del agente SARSA
+        n_actions = self.sarsa_agent.action_space_size
+        
+        # Calcular pendiente y sesgo para mapeo lineal
+        slope = (max_dose - min_dose) / (n_actions - 1)
+        intercept = min_dose
+        
+        # Asegurar que la capa esté inicializada antes de asignar pesos
+        dummy_input = tf.zeros((1, 1))
+        _ = self.action_decoder(dummy_input)
+        
+        # Crear pesos para la capa action_decoder
+        w = np.array([[slope]], dtype=np.float32)
+        b = np.array([intercept], dtype=np.float32)
+        
+        # Ahora configurar los pesos
+        self.action_decoder.set_weights([w, b])
+    
+    def _create_training_environment(
+        self, 
+        cgm_data: tf.Tensor, 
+        other_features: tf.Tensor, 
+        targets: np.ndarray
+    ) -> Any:
+        """
+        Crea un entorno de entrenamiento compatible con el agente SARSA.
+        
+        Parámetros:
+        -----------
+        cgm_data : tf.Tensor
+            Datos CGM
+        other_features : tf.Tensor
+            Otras características
+        targets : np.ndarray
+            Valores objetivo (dosis de insulina)
             
         Retorna:
         --------
         Any
-            Entorno compatible con OpenAI Gym
+            Entorno compatible con Gym para el agente SARSA
         """
-        # Convertir tensores a numpy arrays
+        # Convertir tensores a numpy para procesamiento
         cgm_np = cgm_data.numpy() if hasattr(cgm_data, 'numpy') else cgm_data
         other_np = other_features.numpy() if hasattr(other_features, 'numpy') else other_features
-        target_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
+        targets_np = targets.flatten()
         
-        # Crear clase de entorno personalizada
+        # Definir clase de entorno
         class InsulinDosingEnv:
-            """Entorno personalizado para dosificación de insulina con SARSA."""
-            
-            def __init__(self, cgm, features, targets, model):
+            def __init__(self, cgm, other, targets, model):
                 self.cgm = cgm
-                self.features = features
+                self.other = other
                 self.targets = targets
                 self.model = model
-                self.rng = np.random.Generator(np.random.PCG64(42))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
+                self.rng = np.random.Generator(np.random.PCG64(42))
                 
-                # Espacios para compatibilidad con Gym
-                self.observation_space = gym.spaces.Discrete(
-                    model.sarsa_agent.state_space_size 
-                    if hasattr(model.sarsa_agent, 'state_space_size') 
-                    else 1000
+                # Definir espacio de acción discreto
+                self.action_space = SimpleNamespace(
+                    n=self.model.sarsa_agent.action_space_size,
+                    sample=lambda: self.rng.integers(0, self.model.sarsa_agent.action_space_size)
                 )
-                self.action_space = gym.spaces.Discrete(model.sarsa_agent.action_space_size)
+                
+                # Definir espacio de observación
+                flat_dim = np.prod(cgm.shape[1:]) + np.prod(other.shape[1:])
+                self.observation_space = SimpleNamespace(
+                    shape=(flat_dim,),
+                    n=self.model.sarsa_agent.state_space_size if hasattr(self.model.sarsa_agent, 'state_space_size') else None
+                )
             
             def reset(self):
-                """Reinicia el entorno a un estado aleatorio."""
+                """Reinicia el entorno, elige un ejemplo aleatorio."""
                 self.current_idx = self.rng.integers(0, self.max_idx)
                 state = self._get_state()
                 return state, {}
             
             def step(self, action):
-                """Ejecuta un paso en el entorno con la acción dada."""
-                # Convertir acción a dosis
-                dose = action / (self.model.sarsa_agent.action_space_size - 1) * 15  # Max 15 U
+                """Ejecuta un paso con la acción dada."""
+                # La acción es un índice discreto, obtener la dosis correspondiente
+                action_tensor = tf.convert_to_tensor([[float(action)]], dtype=tf.float32)
+                dose = float(self.model.action_decoder(action_tensor).numpy()[0, 0])
                 
-                # Calcular recompensa (negativo del error absoluto)
+                # Calcular error y recompensa (negativo del error absoluto)
                 target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                error = abs(dose - target)
+                reward = -error  # Recompensa es negativo del error
                 
-                # Avanzar al siguiente ejemplo
-                self.current_idx = (self.current_idx + 1) % self.max_idx
+                # Avanzar al siguiente ejemplo (o volver al inicio si es el último)
+                self.current_idx = (self.current_idx + 1) % (self.max_idx + 1)
                 
-                # Obtener próximo estado
+                # Obtener siguiente estado
                 next_state = self._get_state()
                 
-                # Episodio siempre termina después de un paso
+                # Para este problema, considerar que un episodio termina después de cada paso
                 done = True
                 truncated = False
+                info = {}
                 
-                return next_state, reward, done, truncated, {}
-                
+                return next_state, reward, done, truncated, info
+            
             def _get_state(self):
-                """Obtiene el estado discreto para el ejemplo actual."""
-                # Obtener datos actuales
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
+                """Obtiene el estado actual codificado."""
+                # Extraer datos actuales
+                current_cgm = self.cgm[self.current_idx:self.current_idx+1]
+                current_other = self.other[self.current_idx:self.current_idx+1]
                 
                 # Codificar estado
-                states = self.model._encode_states(
-                    tf.convert_to_tensor(cgm_batch, dtype=tf.float32),
-                    tf.convert_to_tensor(features_batch, dtype=tf.float32)
+                state_encoding = self.model._encode_states(
+                    tf.convert_to_tensor(current_cgm, dtype=tf.float32),
+                    tf.convert_to_tensor(current_other, dtype=tf.float32)
                 )
                 
-                # Obtener índice del estado más probable
-                state = tf.argmax(states, axis=1)[0].numpy()
-                return int(state)
-                
-        # Actualizar el entorno en el agente SARSA
-        env = InsulinDosingEnv(cgm_np, other_np, target_np, self)
-        self.sarsa_agent.env = env
+                return state_encoding.numpy()[0]
         
-        return env
-    
-    def _calibrate_action_decoder(self, target_doses: tf.Tensor) -> None:
-        """
-        Calibra la capa decodificadora para mapear acciones a dosis apropiadas.
-        
-        Parámetros:
-        -----------
-        target_doses : tf.Tensor
-            Dosis objetivo para calibración
-        """
-        doses_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
-        max_dose = np.max(doses_np)
-        min_dose = np.min(doses_np)
-        
-        # Configurar pesos para mapear del espacio discreto al rango de dosis
-        self.action_decoder.set_weights([
-            np.ones((self.sarsa_agent.action_space_size, 1)) * 
-            (max_dose - min_dose) / self.sarsa_agent.action_space_size,
-            np.array([min_dose])
-        ])
-    
-    def predict(self, x: List[tf.Tensor], **kwargs) -> np.ndarray:
-        """
-        Implementa la interfaz de predicción de Keras.
-        
-        Parámetros:
-        -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        **kwargs
-            Argumentos adicionales
-            
-        Retorna:
-        --------
-        np.ndarray
-            Predicciones de dosis
-        """
-        return self.call(x).numpy()
+        return InsulinDosingEnv(cgm_np, other_np, targets_np, self)
     
     def get_config(self) -> Dict:
         """
@@ -1039,57 +898,46 @@ class SARSAModel(Model):
         Dict
             Configuración del modelo
         """
-        return {
-            "cgm_shape": self.cgm_shape,
-            "other_features_shape": self.other_features_shape
-        }
+        config = super().get_config()
+        config.update({
+            'cgm_shape': self.cgm_shape,
+            'other_features_shape': self.other_features_shape,
+        })
+        return config
     
-    def save(self, filepath: str) -> None:
+    def save_weights(self, filepath: str, **kwargs) -> None:
         """
-        Guarda el modelo SARSA.
+        Guarda los pesos del modelo y el agente SARSA.
         
         Parámetros:
         -----------
         filepath : str
-            Ruta donde guardar el modelo
+            Ruta donde guardar los pesos
+        **kwargs : dict
+            Argumentos adicionales para el método de guardado original
         """
-        # Guardar pesos del modelo
-        super().save_weights(filepath + WEIGHTS_FILE_SUFFIX)
+        # Guardar pesos de las capas del wrapper
+        super().save_weights(filepath + CONST_WEIGHTS_FILE_SUFFIX, **kwargs)
         
-        # Guardar agente SARSA
-        self.sarsa_agent.save(filepath + SARSA_AGENT_SUFFIX)
+        # Guardar el agente SARSA
+        self.sarsa_agent.save(filepath + CONST_SARSA_AGENT_SUFFIX)
         
-    def load_weights(self, filepath: str) -> None:
+    def load_weights(self, filepath: str, **kwargs) -> None:
         """
-        Carga el modelo SARSA.
+        Carga los pesos del modelo y el agente SARSA.
         
         Parámetros:
         -----------
         filepath : str
-            Ruta desde donde cargar el modelo
+            Ruta desde donde cargar los pesos
+        **kwargs : dict
+            Argumentos adicionales para el método de carga original
         """
-        # Determinar ruta correcta según formato de filepath
-        if filepath.endswith(WEIGHTS_FILE_SUFFIX):
-            weights_path = filepath
-            sarsa_path = filepath.replace(WEIGHTS_FILE_SUFFIX, SARSA_AGENT_SUFFIX)
-        else:
-            weights_path = filepath + WEIGHTS_FILE_SUFFIX
-            sarsa_path = filepath + SARSA_AGENT_SUFFIX
+        # Cargar pesos de las capas del wrapper
+        super().load_weights(filepath + CONST_WEIGHTS_FILE_SUFFIX, **kwargs)
         
-        # Cargar pesos del modelo
-        super().load_weights(weights_path)
-        
-        # Cargar agente SARSA
-        self.sarsa_agent.load(sarsa_path)
-
-
-# Constantes para prevenir duplicación
-CGM_ENCODER = 'cgm_encoder'
-OTHER_ENCODER = 'other_encoder'
-STATE_ENCODER = 'state_encoder'
-ACTION_DECODER = 'action_decoder'
-WEIGHTS_FILE_SUFFIX = '_weights.h5'
-SARSA_AGENT_SUFFIX = '_sarsa_agent'
+        # Cargar el agente SARSA
+        self.sarsa_agent.load(filepath + CONST_SARSA_AGENT_SUFFIX)
 
 
 def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
@@ -1115,8 +963,14 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
     # Crear entorno dummy para inicializar SARSA
     class DummyEnv:
         def __init__(self):
-            self.observation_space = gym.spaces.Discrete(n_states)
-            self.action_space = gym.spaces.Discrete(n_actions)
+            self.action_space = SimpleNamespace(n=n_actions)
+            self.observation_space = SimpleNamespace(n=n_states)
+            
+        def reset(self):
+            return np.zeros(n_states), {}
+            
+        def step(self, action):
+            return np.zeros(n_states), 0.0, True, False, {}
     
     dummy_env = DummyEnv()
     
