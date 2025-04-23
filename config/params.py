@@ -42,7 +42,7 @@ from models.jax.DeepLearning.transformer import model_creator as jax_create_tran
 from models.jax.DeepLearning.wavenet import model_creator as jax_create_wavenet_model
 
 ### Modelos de Aprendizaje por Refuerzo
-from models.jax.ReinforcementLearning.monte_carlo_methods import model_creator as jax_monte_carlo_creator
+from models.jax.ReinforcementLearning.monte_carlo_methods import create_monte_carlo_model as jax_monte_carlo_creator
 from models.jax.ReinforcementLearning.policy_iteration import model_creator as jax_policy_iteration_creator
 from models.jax.ReinforcementLearning.q_learning import model_creator as jax_q_learning_creator
 from models.jax.ReinforcementLearning.reinforce_mcgp import model_creator as jax_reinforce_mcgp_creator
@@ -63,7 +63,7 @@ DEBUG = True
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax"
-FRAMEWORK = "jax"
+FRAMEWORK = "tensorflow"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -141,14 +141,14 @@ USE_TF_MODELS = {
     "tf_tabnet": False,
     "tf_tcn": False,
     "tf_transformer": False,
-    "tf_wavenet": True,
+    "tf_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "tf_monte_carlo": False,
     "tf_policy_iteration": False,
     "tf_q_learning": False,
     "tf_reinforce_mcpg": False,
     "tf_sarsa": False,
-    "tf_value_iteration": False,
+    "tf_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "tf_a2c": False,
     "tf_a3c": False,

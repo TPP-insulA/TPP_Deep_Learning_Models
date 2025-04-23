@@ -5,12 +5,12 @@ import time
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 import tensorflow as tf
 from keras.saving import register_keras_serializable
+from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import QLEARNING_CONFIG
-
 
 class QLearning:
     """
@@ -414,9 +414,9 @@ class QLearning:
             Tamaño de ventana para suavizado (default: 10)
         """
         def smooth(data: List[float], window_size: int) -> np.ndarray:
-            """Aplica suavizado con media móvil a los datos"""
+            """Suaviza los datos usando una media móvil."""
             kernel = np.ones(window_size) / window_size
-            return np.convolve(np.array(data), kernel, mode='valid')
+            return np.convolve(data, kernel, mode='valid')
         
         _, axs = plt.subplots(2, 2, figsize=(15, 10))
         
@@ -486,66 +486,70 @@ class QLearning:
         
         # Dibujar líneas de cuadrícula
         for i in range(rows+1):
-            ax.axhline(i, color='black', alpha=0.3)
+            ax.axhline(i, color='black', linewidth=0.5)
+        
         for j in range(cols+1):
-            ax.axvline(j, color='black', alpha=0.3)
+            ax.axvline(j, color='black', linewidth=0.5)
     
     def _draw_policy_arrows(self, ax: plt.Axes, row: int, col: int, state: int, arrows: Dict[int, Tuple[float, float]]) -> None:
         """
-        Dibuja flechas que representan la política para un estado.
+        Dibuja flechas para visualizar la política en una celda específica.
         
         Parámetros:
         -----------
         ax : plt.Axes
             Eje para la visualización
         row : int
-            Fila del estado en la grilla
+            Fila de la celda
         col : int
-            Columna del estado en la grilla
+            Columna de la celda
         state : int
-            Índice del estado
+            Estado correspondiente a la celda
         arrows : Dict[int, Tuple[float, float]]
-            Diccionario que mapea acciones a vectores de dirección
+            Mapeo de acciones a direcciones de flechas
         """
-        if np.all(self.q_table[state] == 0):
-            # Si todas las acciones son iguales, no hay preferencia clara
-            for action in range(self.n_actions):
-                dx, dy = arrows[action]
+        q_values = self.q_table[state]
+        
+        # Verificar si todos los valores Q son iguales (sin preferencia)
+        if np.all(q_values == q_values[0]):
+            # Dibujar todas las acciones con color gris
+            for action, (dx, dy) in arrows.items():
                 ax.arrow(col + 0.5, row + 0.5, dx, dy, head_width=0.1, head_length=0.1, 
                         fc='gray', ec='gray', alpha=0.3)
         else:
             # Dibujar la acción con mayor valor Q
-            best_action = np.argmax(self.q_table[state])
+            best_action = np.argmax(q_values)
             dx, dy = arrows[best_action]
             ax.arrow(col + 0.5, row + 0.5, dx, dy, head_width=0.1, head_length=0.1, 
                     fc='blue', ec='blue')
             
             # Mostrar el valor Q
-            ax.text(col + 0.5, row + 0.7, f"{np.max(self.q_table[state]):.2f}", 
+            ax.text(col + 0.5, row + 0.7, f"{float(q_values.max()):.2f}", 
                    ha='center', va='center', fontsize=8)
     
     def visualize_policy(self, env: Any, grid_size: Optional[Tuple[int, int]] = None) -> None:
         """
-        Visualiza la política aprendida para entornos de tipo grilla.
+        Visualiza la política aprendida en un entorno de cuadrícula.
         
         Parámetros:
         -----------
         env : Any
-            Entorno, preferentemente de tipo grilla
+            Entorno para obtener información sobre el espacio
         grid_size : Optional[Tuple[int, int]], opcional
-            Tamaño de la grilla (filas, columnas) (default: None)
+            Tamaño de la cuadrícula (filas, columnas) (default: None)
         """
+        # Determinar tamaño de la cuadrícula si no se proporciona
         if grid_size is None:
-            try:
-                grid_size = (env.nrow, env.ncol)  # Para FrozenLake
-            except AttributeError:
-                print("El entorno no parece ser una grilla o no se proporcionó grid_size")
-                return
+            # Intentar inferir del entorno
+            if hasattr(env, 'shape'):
+                rows, cols = env.shape
+            else:
+                # Valor por defecto
+                rows = cols = int(np.sqrt(self.n_states))
+        else:
+            rows, cols = grid_size
         
-        rows, cols = grid_size
-        
-        # Crear un mapa de flechas para visualizar la política
-        _, ax = plt.subplots(figsize=(10, 10))
+        _, ax = plt.subplots(figsize=(8, 8))
         self._setup_grid_visualization(ax, rows, cols)
         
         # Mapeo de acciones a flechas: 0=izquierda, 1=abajo, 2=derecha, 3=arriba
@@ -568,25 +572,27 @@ class QLearning:
     
     def visualize_value_function(self, env: Any, grid_size: Optional[Tuple[int, int]] = None) -> None:
         """
-        Visualiza la función de valor aprendida para entornos de tipo grilla.
+        Visualiza la función de valor derivada de la tabla Q.
         
         Parámetros:
         -----------
         env : Any
-            Entorno, preferentemente de tipo grilla
+            Entorno para obtener información sobre el espacio
         grid_size : Optional[Tuple[int, int]], opcional
-            Tamaño de la grilla (filas, columnas) (default: None)
+            Tamaño de la cuadrícula (filas, columnas) (default: None)
         """
+        # Determinar tamaño de la cuadrícula si no se proporciona
         if grid_size is None:
-            try:
-                grid_size = (env.nrow, env.ncol)  # Para FrozenLake
-            except AttributeError:
-                print("El entorno no parece ser una grilla o no se proporcionó grid_size")
-                return
+            # Intentar inferir del entorno
+            if hasattr(env, 'shape'):
+                rows, cols = env.shape
+            else:
+                # Valor por defecto
+                rows = cols = int(np.sqrt(self.n_states))
+        else:
+            rows, cols = grid_size
         
-        rows, cols = grid_size
-        
-        # Calcular la función de valor: V(s) = max_a Q(s,a)
+        # Calcular el valor de cada estado como el máximo valor Q
         value_function = np.max(self.q_table, axis=1).reshape(rows, cols)
         
         _, ax = plt.subplots(figsize=(10, 8))
@@ -610,57 +616,66 @@ class QLearning:
     
     def compare_with_optimal(self, optimal_policy: np.ndarray) -> float:
         """
-        Compara la política aprendida con una política óptima conocida.
+        Compara la política aprendida con una política óptima.
         
         Parámetros:
         -----------
         optimal_policy : np.ndarray
-            Política óptima conocida como array de acciones para cada estado
+            Política óptima como array de acciones para cada estado
             
         Retorna:
         --------
         float
-            Porcentaje de acciones que coinciden con la política óptima
+            Porcentaje de concordancia entre políticas
         """
-        # Obtener la política actual
-        current_policy = np.array([np.argmax(self.q_table[s]) for s in range(self.n_states)])
+        # Determinar la política greedy actual
+        current_policy = np.argmax(self.q_table, axis=1)
         
-        # Calcular coincidencias
+        # Calcular concordancia
         matches = np.sum(current_policy == optimal_policy)
+        match_percentage = matches / len(optimal_policy) * 100
         
-        # Calcular porcentaje de coincidencia
-        match_percentage = matches / self.n_states * 100
-        
-        print(f"Coincidencia con política óptima: {match_percentage:.2f}%")
-        
+        print(f"Concordancia con política óptima: {match_percentage:.2f}%")
         return match_percentage
     
     def get_q_table(self) -> np.ndarray:
         """
-        Devuelve la tabla Q actual.
+        Obtiene la tabla Q actual.
         
         Retorna:
         --------
         np.ndarray
             Tabla Q actual
         """
-        return self.q_table
-    
+        return self.q_table.copy()
+
 # Constantes para archivos
 QTABLE_SUFFIX = "_qtable.npy"
 WRAPPER_WEIGHTS_SUFFIX = "_wrapper_weights.h5"
 
-@register_keras_serializable
+# Constantes para mensajes
+CONST_CREANDO_ENTORNO = "Creando entorno de entrenamiento..."
+CONST_ENTRENANDO_AGENTE = "Entrenando agente Q-Learning..."
+CONST_EVALUANDO = "Evaluando modelo..."
+CONST_TRANSFORMANDO_ESTADO = "Transformando estado discreto..."
+CONST_ERROR_VALOR = "Error: Valor fuera de rango detectado:"
+
+@register_keras_serializable()
 class QLearningModel(tf.keras.models.Model):
     """
     Wrapper para el agente Q-Learning que implementa la interfaz de Keras.Model.
+    
+    Esta clase permite que el algoritmo Q-Learning tabular se comporte
+    como un modelo de Keras, facilitando su uso con la infraestructura
+    existente de entrenamiento.
     """
     
     def __init__(
         self, 
-        q_learning_agent: QLearning,
+        q_learning_agent: 'QLearning',
         cgm_shape: Tuple[int, ...],
-        other_features_shape: Tuple[int, ...]
+        other_features_shape: Tuple[int, ...],
+        **kwargs
     ) -> None:
         """
         Inicializa el modelo wrapper para Q-Learning.
@@ -668,177 +683,195 @@ class QLearningModel(tf.keras.models.Model):
         Parámetros:
         -----------
         q_learning_agent : QLearning
-            Agente Q-Learning a utilizar
+            Agente Q-Learning a encapsular
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
+        **kwargs
+            Argumentos adicionales para el constructor de tf.keras.models.Model
         """
-        super(QLearningModel, self).__init__()
+        super().__init__(**kwargs)
+        
         self.q_learning_agent = q_learning_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
-        # Capas para procesar entrada CGM
-        self.cgm_encoder = tf.keras.layers.Dense(64, activation='relu')
-        self.other_encoder = tf.keras.layers.Dense(32, activation='relu')
-        self.state_encoder = tf.keras.layers.Dense(q_learning_agent.n_states, activation='softmax')
+        # Determinar dimensiones para discretización
+        if len(cgm_shape) > 1:
+            self.cgm_length = cgm_shape[0]
+            self.cgm_features = cgm_shape[1] if len(cgm_shape) > 1 else 1
+        else:
+            self.cgm_length = cgm_shape[0]
+            self.cgm_features = 1
+            
+        self.other_features_length = other_features_shape[0] if len(other_features_shape) > 0 else 0
         
-        # Capa para convertir índices de acción a valores continuos
-        self.action_decoder = tf.keras.layers.Dense(1, kernel_initializer='glorot_uniform')
+        # Definir capas para codificación inicial (no se usarán para cálculo real,
+        # solo para mantener la estructura esperada en Keras)
+        self.cgm_dense = tf.keras.layers.Dense(self.cgm_length, name='cgm_encoder')
+        self.other_dense = tf.keras.layers.Dense(self.other_features_length, name='other_encoder')
+        self.output_dense = tf.keras.layers.Dense(1, name='output_layer')
         
+        # Para mapeo de acciones discretas a dosis continuas
+        self.action_space = q_learning_agent.n_actions
+        self.min_dose = 0.0
+        self.max_dose = 15.0  # Máxima dosis de insulina en unidades
+        self.dose_values = np.linspace(self.min_dose, self.max_dose, self.action_space)
+        
+        # Historial de entrenamiento para compatibilidad con Keras
+        self.history = {'loss': [], 'val_loss': []}
+        
+        # Para discretización de estados
+        self.cgm_bins = 10  # Número de bins para discretizar CGM
+        self.other_bins = 5  # Número de bins para discretizar otras características
+        
+        # Dimensiones de entrada calculadas para evitar errores
+        self._build_inputs()
+    
+    def _build_inputs(self) -> None:
+        """
+        Construye las entradas del modelo para asegurar compatibilidad con Keras.
+        """
+        # Crear entradas simuladas para construir el modelo
+        dummy_cgm = np.zeros((1,) + self.cgm_shape)
+        dummy_other = np.zeros((1,) + self.other_features_shape)
+        
+        # Llamada inicial para construir
+        _ = self([dummy_cgm, dummy_other])
+    
     def call(self, inputs: List[tf.Tensor], training: bool = False) -> tf.Tensor:
         """
-        Implementa la llamada del modelo para predicciones.
+        Realiza una llamada al modelo con las entradas proporcionadas.
         
         Parámetros:
         -----------
         inputs : List[tf.Tensor]
-            Lista de tensores [cgm_data, other_features]
+            Lista conteniendo [cgm_data, other_features]
         training : bool, opcional
-            Indica si está en modo de entrenamiento (default: False)
+            Indica si está en modo entrenamiento (default: False)
             
         Retorna:
         --------
         tf.Tensor
-            Predicciones basadas en la política actual
+            Predicciones del modelo
         """
+        # Extraer inputs
         cgm_data, other_features = inputs
         batch_size = tf.shape(cgm_data)[0]
         
-        # Codificar estados
-        states = self._encode_states(cgm_data, other_features)
+        # Para cada muestra en el lote, obtener la acción óptima según la tabla Q
+        # y mapear a valores de dosis
+        doses = tf.TensorArray(tf.float32, size=batch_size)
         
-        # Convertir a valores discretos
-        discrete_states = tf.argmax(states, axis=1)
-        
-        # Inicializar tensor de acciones
-        actions = tf.TensorArray(tf.float32, size=batch_size)
-        
-        # Usar la tabla Q para determinar acciones
         for i in range(batch_size):
-            state = discrete_states[i]
-            # Usar el modelo Q-Learning para obtener la mejor acción (sin exploración)
-            q_values = tf.convert_to_tensor(self.q_learning_agent.q_table[state])
-            best_action = tf.argmax(q_values)
-            actions = actions.write(i, tf.cast(best_action, tf.float32))
+            # Extraer datos individuales
+            single_cgm = cgm_data[i]
+            single_other = other_features[i]
+            
+            # Convertir a numpy para procesamiento
+            cgm_np = single_cgm.numpy() if hasattr(single_cgm, 'numpy') else single_cgm
+            other_np = single_other.numpy() if hasattr(single_other, 'numpy') else single_other
+            
+            # Discretizar estado
+            state = self._discretize_state(cgm_np, other_np)
+            
+            # Obtener acción óptima
+            action = self.q_learning_agent.get_action(state)
+            
+            # Convertir acción a dosis continua
+            dose = self._convert_action_to_dose(action)
+            
+            # Almacenar en el array
+            doses = doses.write(i, dose)
         
         # Convertir a tensor
-        actions_tensor = tf.reshape(actions.stack(), [batch_size, 1])
-        
-        # Decodificar acción discreta a valores continuos (dosis)
-        action_values = self.action_decoder(tf.one_hot(tf.cast(actions_tensor, tf.int32), 
-                                                       self.q_learning_agent.n_actions))
-        
-        return action_values
+        return doses.stack()
     
-    def _encode_states(self, cgm_data: tf.Tensor, other_features: tf.Tensor) -> tf.Tensor:
+    def _discretize_state(self, cgm_data: np.ndarray, other_features: np.ndarray) -> int:
         """
-        Codifica las características de entrada en estados discretos.
+        Discretiza las entradas continuas a un índice de estado.
         
         Parámetros:
         -----------
-        cgm_data : tf.Tensor
-            Datos de monitoreo continuo de glucosa
-        other_features : tf.Tensor
-            Otras características (carbohidratos, insulina a bordo, etc.)
+        cgm_data : np.ndarray
+            Datos CGM para un ejemplo
+        other_features : np.ndarray
+            Otras características para un ejemplo
             
         Retorna:
         --------
-        tf.Tensor
-            Distribución suave sobre estados discretos
+        int
+            Índice de estado discretizado
         """
-        # Aplanar datos CGM
-        cgm_flat = tf.reshape(cgm_data, [tf.shape(cgm_data)[0], -1])
+        # Aplanar CGM si es necesario
+        cgm_flat = cgm_data.flatten()
         
-        # Encoders separados para CGM y otras características
-        cgm_encoded = self.cgm_encoder(cgm_flat)
-        other_encoded = self.other_encoder(other_features)
+        # Extraer características clave de CGM
+        cgm_mean = np.mean(cgm_flat) if len(cgm_flat) > 0 else 0.0
+        cgm_last = cgm_flat[-1] if len(cgm_flat) > 0 else 0.0
+        cgm_slope = cgm_flat[-1] - cgm_flat[0] if len(cgm_flat) > 1 else 0.0
         
-        # Combinar características
-        combined = tf.concat([cgm_encoded, other_encoded], axis=1)
+        # Normalizar [0,1] y discretizar
+        max_cgm = 300.0  # Valor máximo típico de CGM
+        cgm_mean_bin = min(int(cgm_mean / max_cgm * self.cgm_bins), self.cgm_bins - 1)
+        cgm_last_bin = min(int(cgm_last / max_cgm * self.cgm_bins), self.cgm_bins - 1)
+        cgm_slope_bin = min(int((cgm_slope + 50) / 100.0 * self.cgm_bins), self.cgm_bins - 1)
         
-        # Distribución sobre estados discretos
-        state_distribution = self.state_encoder(combined)
+        # Procesamiento de otras características
+        other_flat = other_features.flatten()
+        other_bins = []
         
-        return state_distribution
+        # Usar solo las primeras características más relevantes
+        n_features = min(3, len(other_flat))
+        for i in range(n_features):
+            if i < len(other_flat):
+                # Normalizar a [0,1] y discretizar
+                normalized_value = min(max(0.0, (other_flat[i] + 1) / 2), 1.0)
+                bin_value = min(int(normalized_value * self.other_bins), self.other_bins - 1)
+                other_bins.append(bin_value)
+            else:
+                other_bins.append(0)
+        
+        # Calcular índice de estado combinado
+        state = cgm_mean_bin
+        state = state * self.cgm_bins + cgm_last_bin
+        state = state * self.cgm_bins + cgm_slope_bin
+        
+        for b in other_bins:
+            state = state * self.other_bins + b
+            
+        return min(state, self.q_learning_agent.n_states - 1)
     
-    def fit(
-        self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
-        verbose: int = 0,
-        callbacks: Optional[List[Any]] = None,
-        validation_data: Optional[Tuple] = None,
-        **kwargs
-    ) -> Dict:
+    def _convert_action_to_dose(self, action: int) -> float:
         """
-        Simula la interfaz de entrenamiento de Keras para Q-Learning.
+        Convierte una acción discreta a un valor de dosis continuo.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
-        batch_size : int, opcional
-            Tamaño del lote (default: 32)
-        epochs : int, opcional
-            Número de épocas (default: 1)
-        verbose : int, opcional
-            Nivel de verbosidad (default: 0)
-        callbacks : Optional[List[Any]], opcional
-            Lista de callbacks (default: None)
-        validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
-        **kwargs
-            Argumentos adicionales
+        action : int
+            Índice de acción discreta
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        float
+            Valor de dosis correspondiente
         """
-        if verbose > 0:
-            print("Entrenando modelo Q-Learning...")
+        if action < 0 or action >= len(self.dose_values):
+            print(f"{CONST_ERROR_VALOR} {action}")
+            return self.min_dose
         
-        # Crear entorno simulado para entrenar el agente
-        env = self._create_environment(x[0], x[1], y)
-        
-        # Entrenar el agente Q-Learning
-        history = self.q_learning_agent.train(
-            env=env,
-            episodes=batch_size * epochs,
-            max_steps=100,
-            render=False,
-            log_interval=max(1, epochs * batch_size // 10)
-        )
-        
-        # Actualizar capa decodificadora con rango de dosis adecuado
-        self._calibrate_action_decoder(y)
-        
-        if verbose > 0:
-            print("Entrenamiento completado.")
-        
-        # Simular historia compatible con Keras
-        keras_history = {
-            'loss': history['avg_rewards'],
-            'val_loss': [history['avg_rewards'][-1] * 1.05] if validation_data is not None else None
-        }
-        
-        return {'history': keras_history}
+        return self.dose_values[action]
     
     def _create_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                            target_doses: tf.Tensor) -> Any:
         """
-        Crea un entorno personalizado para entrenar el agente Q-Learning.
+        Crea un entorno de entrenamiento para el agente de Q-Learning.
         
         Parámetros:
         -----------
         cgm_data : tf.Tensor
-            Datos de CGM
+            Datos CGM
         other_features : tf.Tensor
             Otras características
         target_doses : tf.Tensor
@@ -847,14 +880,15 @@ class QLearningModel(tf.keras.models.Model):
         Retorna:
         --------
         Any
-            Entorno compatible con OpenAI Gym
+            Entorno para entrenamiento
         """
-        # Convertir tensores a numpy arrays para procesamiento
+        print(CONST_CREANDO_ENTORNO)
+        
+        # Convertir tensores a numpy
         cgm_np = cgm_data.numpy() if hasattr(cgm_data, 'numpy') else cgm_data
         other_np = other_features.numpy() if hasattr(other_features, 'numpy') else other_features
-        target_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
+        targets_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
         
-        # Clase de entorno personalizado
         class InsulinDosingEnv:
             """Entorno personalizado para problema de dosificación de insulina."""
             
@@ -863,99 +897,185 @@ class QLearningModel(tf.keras.models.Model):
                 self.features = features
                 self.targets = targets
                 self.model = model
-                self.max_dose = np.max(targets)
+                self.rng = np.random.Generator(np.random.PCG64(42))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                
+                # Para compatibilidad con algoritmos RL
+                self.observation_space = SimpleNamespace(
+                    shape=(1,),
+                    low=0,
+                    high=model.q_learning_agent.n_states - 1
+                )
+                
+                self.action_space = SimpleNamespace(
+                    n=model.q_learning_agent.n_actions,
+                    sample=self._sample_action
+                )
+            
+            def _sample_action(self):
+                """Muestrea una acción aleatoria del espacio discreto."""
+                return self.rng.integers(0, self.model.q_learning_agent.n_actions)
             
             def reset(self):
-                """Reinicia el entorno a un estado aleatorio."""
+                """Reinicia el entorno eligiendo un ejemplo aleatorio."""
                 self.current_idx = self.rng.integers(0, self.max_idx)
-                
-                # Codificar estado
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
-                
-                states = self.model._encode_states(
-                    tf.convert_to_tensor(cgm_batch),
-                    tf.convert_to_tensor(features_batch)
+                state = self.model._discretize_state(
+                    self.cgm[self.current_idx],
+                    self.features[self.current_idx]
                 )
-                state = tf.argmax(states, axis=1)[0].numpy()
-                
                 return state, {}
             
             def step(self, action):
-                """Ejecuta un paso en el entorno con la acción dada."""
-                # Convertir acción discreta a dosis continua
-                dose = action / (self.model.q_learning_agent.n_actions - 1) * self.max_dose
+                """Ejecuta un paso con la acción dada."""
+                # Convertir acción a dosis
+                dose = self.model._convert_action_to_dose(action)
                 
-                # Calcular recompensa (error negativo)
+                # Calcular recompensa como negativo del error absoluto
                 target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                error = abs(dose - target)
+                # Función de recompensa que prioriza precisión
+                if error < 0.5:
+                    reward = 1.0 - error  # Recompensa alta para error bajo
+                else:
+                    reward = -error  # Penalización para errores grandes
                 
                 # Avanzar al siguiente ejemplo
-                next_idx = (self.current_idx + 1) % self.max_idx
-                self.current_idx = next_idx
+                self.current_idx = (self.current_idx + 1) % self.max_idx
                 
-                # Codificar próximo estado
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
-                
-                states = self.model._encode_states(
-                    tf.convert_to_tensor(cgm_batch),
-                    tf.convert_to_tensor(features_batch)
+                # Obtener próximo estado
+                next_state = self.model._discretize_state(
+                    self.cgm[self.current_idx],
+                    self.features[self.current_idx]
                 )
-                next_state = tf.argmax(states, axis=1)[0].numpy()
                 
-                # Episodio siempre termina después de un paso
+                # Terminal después de cada paso
                 done = True
                 
-                return next_state, reward, done, False, {}
+                # Información adicional
+                info = {
+                    'dose': dose,
+                    'target': target,
+                    'error': error
+                }
+                
+                return next_state, reward, done, False, info
         
-        return InsulinDosingEnv(cgm_np, other_np, target_np, self)
+        return InsulinDosingEnv(cgm_np, other_np, targets_np, self)
     
     def _calibrate_action_decoder(self, y: tf.Tensor) -> None:
         """
-        Calibra la capa decodificadora para mapear acciones a dosis adecuadas.
+        Calibra el decodificador de acciones basado en los objetivos.
         
         Parámetros:
         -----------
         y : tf.Tensor
-            Dosis objetivo para calibración
+            Tensor con valores objetivo (dosis)
         """
+        # Convertir a numpy
         y_np = y.numpy() if hasattr(y, 'numpy') else y
-        max_dose = float(np.max(y_np))
-        min_dose = float(np.min(y_np))
         
-        # Configurar pesos para mapear del rango de acciones al rango de dosis
-        action_range = self.q_learning_agent.n_actions - 1
-        dose_range = max_dose - min_dose
-        scale = dose_range / action_range
+        # Determinar rango de dosis
+        min_dose = max(0.0, np.min(y_np) * 0.8)  # 20% menos que el mínimo, pero no negativo
+        max_dose = np.max(y_np) * 1.2  # 20% más que el máximo
         
-        # Actualizar pesos de la capa decodificadora
-        weights = [
-            np.ones((self.q_learning_agent.n_actions, 1)) * scale,
-            np.array([min_dose])
-        ]
-        self.action_decoder.set_weights(weights)
+        # Actualizar valores de dosis
+        self.min_dose = min_dose
+        self.max_dose = max_dose
+        self.dose_values = np.linspace(self.min_dose, self.max_dose, self.action_space)
     
-    def predict(self, x: List[tf.Tensor], **kwargs) -> np.ndarray:
+    def fit(
+        self, 
+        x: List[tf.Tensor], 
+        y: tf.Tensor, 
+        validation_data: Optional[Tuple] = None, 
+        epochs: int = 1,
+        batch_size: int = 32,
+        callbacks: List = None,
+        verbose: int = 0
+    ) -> Dict:
         """
-        Implementa la interfaz de predicción de Keras.
+        Entrena el modelo Q-Learning con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
+            Lista conteniendo [cgm_data, other_features]
+        y : tf.Tensor
+            Tensor con valores objetivo (dosis)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como (x_val, y_val) (default: None)
+        epochs : int, opcional
+            Número de épocas para entrenamiento (default: 1)
+        batch_size : int, opcional
+            Tamaño de lote (default: 32)
+        callbacks : List, opcional
+            Lista de callbacks de Keras (default: None)
+        verbose : int, opcional
+            Nivel de detalle para logs (default: 0)
+            
+        Retorna:
+        --------
+        Dict
+            Historial de entrenamiento
+        """
+        # Extraer datos
+        cgm_data, other_features = x
+        
+        # Calibrar decodificador de acciones
+        self._calibrate_action_decoder(y)
+        
+        # Crear entorno para entrenamiento
+        env = self._create_environment(cgm_data, other_features, y)
+        
+        print(CONST_ENTRENANDO_AGENTE)
+        
+        # Entrenar agente Q-Learning
+        history = self.q_learning_agent.train(
+            env=env,
+            episodes=epochs * (len(y) // batch_size or 1),  # Aproximar al número total de pasos
+            max_steps=1,  # Cada ejemplo es un episodio
+            render=False,
+            log_interval=max(10, (epochs * len(y) // batch_size) // 10)  # 10 logs durante entrenamiento
+        )
+        
+        # Guardar historial para compatibilidad con Keras
+        self.history = {
+            'loss': history['episode_rewards'],
+            'val_loss': []
+        }
+        
+        # Preparar historial en formato Keras
+        keras_history = {
+            'loss': np.mean(history['episode_rewards']),
+            'val_loss': 0.0
+        }
+        
+        return self.history
+    
+    def predict(self, x: List[tf.Tensor], **kwargs) -> np.ndarray:
+        """
+        Realiza predicciones con el modelo entrenado.
+        
+        Parámetros:
+        -----------
+        x : List[tf.Tensor]
+            Lista conteniendo [cgm_data, other_features]
         **kwargs
-            Argumentos adicionales
+            Argumentos adicionales para compatibilidad con Keras
             
         Retorna:
         --------
         np.ndarray
-            Predicciones de dosis
+            Predicciones del modelo
         """
-        return self.call(x).numpy()
+        # Usar el método call para predicción
+        predictions = self.call(x)
+        
+        # Convertir a numpy para consistencia
+        if hasattr(predictions, 'numpy'):
+            return predictions.numpy()
+        return predictions
     
     def get_config(self) -> Dict:
         """
@@ -966,56 +1086,53 @@ class QLearningModel(tf.keras.models.Model):
         Dict
             Configuración del modelo
         """
-        return {
-            "cgm_shape": self.cgm_shape,
-            "other_features_shape": self.other_features_shape,
-            "n_states": self.q_learning_agent.n_states,
-            "n_actions": self.q_learning_agent.n_actions,
-            "gamma": self.q_learning_agent.gamma,
-            "learning_rate": self.q_learning_agent.learning_rate,
-            "epsilon": self.q_learning_agent.epsilon
-        }
+        config = super().get_config()
+        config.update({
+            'cgm_shape': self.cgm_shape,
+            'other_features_shape': self.other_features_shape,
+            'cgm_bins': self.cgm_bins,
+            'other_bins': self.other_bins,
+            'min_dose': self.min_dose,
+            'max_dose': self.max_dose
+        })
+        return config
     
     def save(self, filepath: str, **kwargs) -> None:
         """
-        Guarda el modelo y el agente Q-Learning.
+        Guarda el modelo y la tabla Q.
         
         Parámetros:
         -----------
         filepath : str
             Ruta donde guardar el modelo
         **kwargs
-            Argumentos adicionales
+            Argumentos adicionales para compatibilidad con Keras
         """
-        # Guardar tabla Q
-        self.q_learning_agent.save_qtable(filepath + QTABLE_SUFFIX)
+        # Guardar tabla Q por separado
+        q_table_path = filepath + QTABLE_SUFFIX
+        np.save(q_table_path, self.q_learning_agent.q_table)
         
-        # Guardar configuración y pesos del modelo wrapper
-        super().save_weights(filepath + WRAPPER_WEIGHTS_SUFFIX)
+        # Guardar el modelo wrapper
+        super().save(filepath, **kwargs)
     
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
-        Carga el modelo y el agente Q-Learning.
+        Carga los pesos del modelo y la tabla Q.
         
         Parámetros:
         -----------
         filepath : str
             Ruta desde donde cargar el modelo
         **kwargs
-            Argumentos adicionales
+            Argumentos adicionales para compatibilidad con Keras
         """
         # Cargar tabla Q
-        if filepath.endswith(WRAPPER_WEIGHTS_SUFFIX):
-            qtable_path = filepath.replace(WRAPPER_WEIGHTS_SUFFIX, QTABLE_SUFFIX)
-        else:
-            qtable_path = filepath + QTABLE_SUFFIX
-            
-        self.q_learning_agent.load_qtable(qtable_path)
+        q_table_path = filepath + QTABLE_SUFFIX
+        if os.path.exists(q_table_path):
+            self.q_learning_agent.q_table = np.load(q_table_path)
         
-        # Cargar pesos del wrapper
-        weights_path = filepath if filepath.endswith(WRAPPER_WEIGHTS_SUFFIX) else filepath + WRAPPER_WEIGHTS_SUFFIX
-        super().load_weights(weights_path)
-
+        # Cargar pesos del modelo wrapper
+        super().load_weights(filepath, **kwargs)
 
 def create_q_learning_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> tf.keras.models.Model:
     """
