@@ -443,7 +443,11 @@ REINFORCE_CONFIG = {
     
     # Visualización y registro
     'log_interval': 10,               # Intervalo para mostrar métricas
-    'smoothing_window': 10            # Ventana para suavizado de gráficos
+    'smoothing_window': 10,            # Ventana para suavizado de gráficos
+
+    'policy_lr': 1e-3,               # Tasa de aprendizaje para la política
+    'value_lr': 1e-3,             # Tasa de aprendizaje para la función de valor
+    'continuous': False,             # Si la acción es continua (True) o discreta (False)
 }
 
 SARSA_CONFIG = {

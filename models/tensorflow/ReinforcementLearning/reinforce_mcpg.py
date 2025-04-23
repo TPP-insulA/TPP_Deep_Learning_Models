@@ -3,10 +3,12 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+from types import SimpleNamespace
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
-    Input, Dense, LayerNormalization, Dropout, Activation, GlobalAveragePooling1D
+    Input, Dense, LayerNormalization, Dropout, Activation, GlobalAveragePooling1D,
+    Flatten, Reshape, Conv1D, LSTM, GRU, BatchNormalization, Concatenate
 )
 from tensorflow.keras.optimizers import Adam
 from keras.saving import register_keras_serializable
@@ -16,22 +18,36 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import REINFORCE_CONFIG
 
+# Constantes para mensajes y valores
+CONST_ENTRENANDO = "Entrenando agente REINFORCE..."
+CONST_EPISODIO = "Episodio"
+CONST_RECOMPENSA = "Recompensa"
+CONST_PROMEDIO = "Promedio"
+CONST_POLITICA_LOSS = "Pérdida política"
+CONST_ENTROPIA = "Entropía"
+CONST_EVALUANDO = "Evaluando modelo..."
+CONST_RESULTADOS = "Resultados de evaluación:"
 
-class PolicyNetwork(Model):
+class REINFORCEPolicy:
     """
-    Red neuronal de política para REINFORCE.
+    Implementación de la política para el algoritmo REINFORCE.
     
-    Esta red mapea estados a distribuciones de probabilidad sobre acciones.
+    Esta clase maneja la distribución de probabilidad sobre acciones
+    y proporciona métodos para calcular log-probabilidades y entropía.
     """
+    
     def __init__(
         self, 
         state_dim: int, 
         action_dim: int, 
-        hidden_units: Optional[List[int]] = None, 
-        continuous: bool = False
+        continuous: bool = False,
+        hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
+        activation: str = 'relu',
+        learning_rate: float = 0.001,
+        log_std_init: float = -0.5
     ) -> None:
         """
-        Inicializa la red de política.
+        Inicializa la política REINFORCE.
         
         Parámetros:
         -----------
@@ -39,207 +55,320 @@ class PolicyNetwork(Model):
             Dimensión del espacio de estados
         action_dim : int
             Dimensión del espacio de acciones
-        hidden_units : Optional[List[int]], opcional
-            Lista con unidades en capas ocultas (default: None)
         continuous : bool, opcional
             Si el espacio de acciones es continuo (default: False)
+        hidden_sizes : List[int], opcional
+            Tamaños de las capas ocultas (default: [64, 32])
+        activation : str, opcional
+            Función de activación para capas ocultas (default: 'relu')
+        learning_rate : float, opcional
+            Tasa de aprendizaje (default: 0.001)
+        log_std_init : float, opcional
+            Valor inicial para el logaritmo de la desviación estándar en caso continuo (default: -0.5)
         """
-        super(PolicyNetwork, self).__init__()
-        
-        # Configuración de la red
-        if hidden_units is None:
-            hidden_units = REINFORCE_CONFIG['hidden_units']
-        
-        self.continuous = continuous
+        self.state_dim = state_dim
         self.action_dim = action_dim
+        self.continuous = continuous
+        self.hidden_sizes = hidden_sizes
+        self.activation = activation
+        self.learning_rate = learning_rate
         
-        # Capas ocultas
-        self.hidden_layers = []
-        for i, units in enumerate(hidden_units):
-            self.hidden_layers.append(Dense(units, name=f'hidden_{i}'))
-            self.hidden_layers.append(LayerNormalization(epsilon=REINFORCE_CONFIG['epsilon'], name=f'ln_{i}'))
-            self.hidden_layers.append(Activation('relu', name=f'relu_{i}'))
-            if REINFORCE_CONFIG['dropout_rate'] > 0:
-                self.hidden_layers.append(Dropout(REINFORCE_CONFIG['dropout_rate'], name=f'dropout_{i}'))
+        # Construir modelo
+        self.model = self._build_model()
         
-        # Capa de salida: depende de si el espacio de acciones es continuo o discreto
+        # Para acciones continuas, inicializar log_std
         if continuous:
-            # Para espacios continuos: política gaussiana
-            self.mu = Dense(action_dim, activation='tanh', name='mu')
-            self.log_sigma = Dense(action_dim, activation='linear', name='log_sigma')
-        else:
-            # Para espacios discretos: política categórica
-            self.logits = Dense(action_dim, activation='linear', name='logits')
+            self.log_std = tf.Variable(
+                initial_value=tf.ones(action_dim) * log_std_init,
+                trainable=True,
+                name="log_std"
+            )
     
-    def call(self, inputs: tf.Tensor, training: bool = False) -> Union[tf.Tensor, Tuple[tf.Tensor, tf.Tensor]]:
+    def _build_model(self) -> tf.keras.Model:
         """
-        Ejecuta la red para obtener los parámetros de la distribución de política.
-        
-        Parámetros:
-        -----------
-        inputs : tf.Tensor
-            Tensor de estados de entrada
-        training : bool, opcional
-            Si está en modo entrenamiento (default: False)
+        Construye la red neuronal para la política.
         
         Retorna:
         --------
-        Union[tf.Tensor, Tuple[tf.Tensor, tf.Tensor]]
-            Para espacios discretos: logits
-            Para espacios continuos: (mu, log_sigma)
+        tf.keras.Model
+            Modelo de red neuronal
         """
+        inputs = Input(shape=(self.state_dim,), name="policy_input")
         x = inputs
         
-        # Pasar por capas ocultas
-        for layer in self.hidden_layers:
-            if isinstance(layer, Dropout):
-                x = layer(x, training=training)
-            else:
-                x = layer(x)
+        # Capas ocultas
+        for i, size in enumerate(self.hidden_sizes):
+            x = Dense(
+                size, 
+                activation=self.activation,
+                name=f"policy_hidden_{i}"
+            )(x)
         
-        # Generar salida según el tipo de política
+        # Capa de salida
         if self.continuous:
-            mu = self.mu(x)
-            log_sigma = self.log_sigma(x)
-            # Limitar el rango de log_sigma para estabilidad
-            log_sigma = tf.clip_by_value(log_sigma, -20, 2)
-            return mu, log_sigma
+            # Para acciones continuas, predecir la media
+            outputs = Dense(
+                self.action_dim, 
+                activation=None, 
+                name="policy_mean"
+            )(x)
         else:
-            logits = self.logits(x)
-            return logits
+            # Para acciones discretas, predecir logits
+            outputs = Dense(
+                self.action_dim, 
+                activation=None,
+                name="policy_logits"
+            )(x)
+        
+        return tf.keras.Model(inputs=inputs, outputs=outputs, name="policy_network")
     
-    def get_action(self, state: np.ndarray, deterministic: bool = False) -> Union[np.ndarray, int]:
+    def get_action(self, state: np.ndarray) -> Union[int, np.ndarray]:
         """
-        Obtiene una acción según la política actual.
+        Selecciona una acción basada en el estado actual.
         
         Parámetros:
         -----------
         state : np.ndarray
             Estado actual
-        deterministic : bool, opcional
-            Si se usa la acción determinística o se muestrea (default: False)
-
+            
         Retorna:
         --------
-        Union[np.ndarray, int]
-            La acción seleccionada
+        Union[int, np.ndarray]
+            Acción seleccionada (int para discreto, np.ndarray para continuo)
         """
-        # Convertir a tensor y obtener distribución
-        state_tensor = tf.convert_to_tensor([state], dtype=tf.float32)
+        # Asegurar que el estado tenga la forma correcta
+        if len(state.shape) < 2:
+            state = np.expand_dims(state, axis=0)
+        
+        # Obtener salida del modelo
+        network_output = self.model(state, training=False).numpy()
         
         if self.continuous:
-            mu, log_sigma = self(state_tensor, training=False)
+            # Para acciones continuas, muestrear de distribución normal
+            mean = network_output[0]
+            std = np.exp(self.log_std.numpy())
             
-            if deterministic:
-                return mu[0].numpy()
+            # Generador con semilla fija para reproducibilidad
+            rng = np.random.Generator(np.random.PCG64(int(time.time())))
+            action = mean + rng.normal(size=mean.shape) * std
             
-            # Muestrear de la distribución gaussiana para exploración
-            sigma = tf.exp(log_sigma)
-            normal_dist = tf.random.normal(shape=mu.shape)
-            action = mu + sigma * normal_dist
-            return action[0].numpy()
+            return action
         else:
-            logits = self(state_tensor, training=False)
+            # Para acciones discretas, muestrear categóricamente
+            logits = network_output[0]
             
-            if deterministic:
-                return tf.argmax(logits[0]).numpy()
+            # Convertir logits a probabilidades
+            probs = tf.nn.softmax(logits).numpy()
             
-            # Muestrear de la distribución categórica para exploración
-            probs = tf.nn.softmax(logits)
-            action = tf.random.categorical(tf.math.log(probs), 1)
-            return action[0, 0].numpy()
+            # Muestrear acción
+            rng = np.random.Generator(np.random.PCG64(int(time.time())))
+            return rng.choice(self.action_dim, p=probs)
     
     def get_log_prob(self, states: tf.Tensor, actions: tf.Tensor) -> tf.Tensor:
         """
-        Calcula el logaritmo de la probabilidad de acciones dadas.
+        Calcula log-probabilidades para estados y acciones dados.
         
         Parámetros:
         -----------
         states : tf.Tensor
-            Estados observados
+            Tensor de estados
         actions : tf.Tensor
-            Acciones tomadas
+            Tensor de acciones
             
         Retorna:
         --------
         tf.Tensor
-            Log-probabilidades de las acciones
+            Log-probabilidades
         """
+        # Obtener salida del modelo
+        network_output = self.model(states, training=True)
+        
         if self.continuous:
-            mu, log_sigma = self(states)
-            sigma = tf.exp(log_sigma)
+            # Para acciones continuas, usar distribución normal
+            mean = network_output
+            std = tf.exp(self.log_std)
             
-            # Log-prob para distribución gaussiana
+            # Calcular log probabilidad para distribución normal
             log_probs = -0.5 * (
                 tf.reduce_sum(
-                    tf.square((actions - mu) / sigma) + 
-                    2 * log_sigma + 
-                    tf.math.log(2.0 * np.pi),
-                    axis=1
+                    tf.square((actions - mean) / std) + 
+                    2 * self.log_std + 
+                    tf.math.log(2 * np.pi), 
+                    axis=-1
                 )
             )
-            return log_probs
         else:
-            logits = self(states)
+            # Para acciones discretas, usar distribución categórica
+            logits = network_output
             
-            # Log-prob para distribución categórica
-            action_masks = tf.one_hot(tf.cast(actions, tf.int32), self.action_dim)
+            # One-hot encoding para acciones
+            if len(actions.shape) == 1:
+                actions = tf.one_hot(actions, depth=self.action_dim)
+            
+            # Log probabilidad para distribución categórica
             log_probs = tf.reduce_sum(
-                action_masks * tf.nn.log_softmax(logits),
-                axis=1
+                actions * tf.nn.log_softmax(logits),
+                axis=-1
             )
-            return log_probs
+        
+        return log_probs
     
     def get_entropy(self, states: tf.Tensor) -> tf.Tensor:
         """
-        Calcula la entropía de la política para los estados dados.
+        Calcula la entropía de la política para estados dados.
         
         Parámetros:
         -----------
         states : tf.Tensor
-            Estados para evaluar
+            Tensor de estados
             
         Retorna:
         --------
         tf.Tensor
             Entropía de la política
         """
+        network_output = self.model(states, training=True)
+        
         if self.continuous:
-            _, log_sigma = self(states)
-            # Entropía de distribución gaussiana: 0.5 * log(2*pi*e*sigma^2)
-            entropy = tf.reduce_sum(
-                0.5 * tf.math.log(2.0 * np.pi * np.e * tf.exp(2 * log_sigma)),
-                axis=1
+            # Entropía para distribución normal
+            std = tf.exp(self.log_std)
+            entropy = 0.5 * tf.reduce_sum(
+                tf.math.log(2 * np.pi * std**2) + 1,
+                axis=-1
             )
         else:
-            logits = self(states)
+            # Entropía para distribución categórica
+            logits = network_output
             probs = tf.nn.softmax(logits)
-            # Entropía de distribución categórica: -sum(p * log(p))
-            entropy = -tf.reduce_sum(
-                probs * tf.math.log(probs + 1e-10),
-                axis=1
-            )
+            log_probs = tf.nn.log_softmax(logits)
+            entropy = -tf.reduce_sum(probs * log_probs, axis=-1)
+        
         return entropy
-
-
-class REINFORCE:
-    """
-    Implementación del algoritmo REINFORCE (Monte Carlo Policy Gradient).
     
-    REINFORCE utiliza retornos Monte Carlo completos para actualizar la política,
-    haciéndolo un algoritmo simple pero efectivo para aprendizaje de políticas.
+    @property
+    def trainable_variables(self) -> List[tf.Variable]:
+        """
+        Obtiene las variables entrenables de la política.
+        
+        Retorna:
+        --------
+        List[tf.Variable]
+            Lista de variables entrenables
+        """
+        # Incluir log_std para el caso continuo
+        if self.continuous:
+            return self.model.trainable_variables + [self.log_std]
+        return self.model.trainable_variables
+
+class REINFORCEValueNetwork:
+    """
+    Red de valor (baseline) para REINFORCE.
+    
+    Esta red estima el valor esperado de los estados para reducir
+    la varianza del estimador del gradiente de política.
     """
     
     def __init__(
         self, 
         state_dim: int, 
+        hidden_sizes: List[int] = [64, 32],
+        activation: str = 'relu',
+        learning_rate: float = 0.001
+    ) -> None:
+        """
+        Inicializa la red de valor.
+        
+        Parámetros:
+        -----------
+        state_dim : int
+            Dimensión del espacio de estados
+        hidden_sizes : List[int], opcional
+            Tamaños de las capas ocultas (default: [64, 32])
+        activation : str, opcional
+            Función de activación para capas ocultas (default: 'relu')
+        learning_rate : float, opcional
+            Tasa de aprendizaje (default: 0.001)
+        """
+        self.state_dim = state_dim
+        self.hidden_sizes = hidden_sizes
+        self.activation = activation
+        self.learning_rate = learning_rate
+        
+        # Construir modelo
+        self.model = self._build_model()
+    
+    def _build_model(self) -> tf.keras.Model:
+        """
+        Construye la red neuronal para la función de valor.
+        
+        Retorna:
+        --------
+        tf.keras.Model
+            Modelo de red neuronal
+        """
+        inputs = Input(shape=(self.state_dim,), name="value_input")
+        x = inputs
+        
+        # Capas ocultas
+        for i, size in enumerate(self.hidden_sizes):
+            x = Dense(
+                size, 
+                activation=self.activation,
+                name=f"value_hidden_{i}"
+            )(x)
+        
+        # Capa de salida (valor escalar)
+        outputs = Dense(1, activation=None, name="value_output")(x)
+        
+        return tf.keras.Model(inputs=inputs, outputs=outputs, name="value_network")
+    
+    def __call__(self, states: tf.Tensor) -> tf.Tensor:
+        """
+        Predice valores para estados dados.
+        
+        Parámetros:
+        -----------
+        states : tf.Tensor
+            Tensor de estados
+            
+        Retorna:
+        --------
+        tf.Tensor
+            Valores predichos
+        """
+        return self.model(states, training=True)
+    
+    @property
+    def trainable_variables(self) -> List[tf.Variable]:
+        """
+        Obtiene las variables entrenables de la red de valor.
+        
+        Retorna:
+        --------
+        List[tf.Variable]
+            Lista de variables entrenables
+        """
+        return self.model.trainable_variables
+
+class REINFORCE:
+    """
+    Implementación del algoritmo REINFORCE (Monte Carlo Policy Gradient).
+    
+    Este algoritmo aprende una política parametrizada directamente
+    maximizando el retorno esperado utilizando ascenso por gradiente.
+    """
+    
+    def __init__(
+        self,
+        state_dim: int,
         action_dim: int,
         continuous: bool = False,
-        learning_rate: float = REINFORCE_CONFIG['learning_rate'],
         gamma: float = REINFORCE_CONFIG['gamma'],
-        hidden_units: Optional[List[int]] = None,
-        baseline: bool = REINFORCE_CONFIG['use_baseline'],
+        policy_lr: float = REINFORCE_CONFIG['policy_lr'],
+        value_lr: float = REINFORCE_CONFIG['value_lr'],
+        use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
+        hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
         seed: int = 42
     ) -> None:
         """
@@ -253,76 +382,66 @@ class REINFORCE:
             Dimensión del espacio de acciones
         continuous : bool, opcional
             Si el espacio de acciones es continuo (default: False)
-        learning_rate : float, opcional
-            Tasa de aprendizaje (default: REINFORCE_CONFIG['learning_rate'])
         gamma : float, opcional
             Factor de descuento (default: REINFORCE_CONFIG['gamma'])
-        hidden_units : Optional[List[int]], opcional
-            Lista con unidades en capas ocultas (default: None)
-        baseline : bool, opcional
-            Si usar baseline para reducir varianza (default: REINFORCE_CONFIG['use_baseline'])
+        policy_lr : float, opcional
+            Tasa de aprendizaje para la política (default: REINFORCE_CONFIG['policy_lr'])
+        value_lr : float, opcional
+            Tasa de aprendizaje para la red de valor (default: REINFORCE_CONFIG['value_lr'])
+        use_baseline : bool, opcional
+            Si usar una función de valor como baseline (default: REINFORCE_CONFIG['use_baseline'])
         entropy_coef : float, opcional
-            Coeficiente para regularización por entropía (default: REINFORCE_CONFIG['entropy_coef'])
+            Coeficiente para regularización de entropía (default: REINFORCE_CONFIG['entropy_coef'])
+        hidden_sizes : List[int], opcional
+            Tamaños de las capas ocultas (default: REINFORCE_CONFIG['hidden_units'])
         seed : int, opcional
             Semilla para reproducibilidad (default: 42)
         """
-        # Configurar semillas para reproducibilidad
-        tf.random.set_seed(seed)
-        self.rng = np.random.Generator(np.random.PCG64(seed))
-        
-        # Parámetros básicos
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.continuous = continuous
         self.gamma = gamma
-        self.use_baseline = baseline
+        self.use_baseline = use_baseline
         self.entropy_coef = entropy_coef
         
-        # Valores predeterminados para capas ocultas
-        if hidden_units is None:
-            self.hidden_units = REINFORCE_CONFIG['hidden_units']
-        else:
-            self.hidden_units = hidden_units
+        # Fijar semilla para reproducibilidad
+        tf.random.set_seed(seed)
+        np.random.seed(seed)
         
-        # Crear red de política
-        self.policy = PolicyNetwork(state_dim, action_dim, self.hidden_units, continuous)
-        self.optimizer = Adam(learning_rate=learning_rate)
+        # Crear política
+        self.policy = REINFORCEPolicy(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            continuous=continuous,
+            hidden_sizes=hidden_sizes,
+            learning_rate=policy_lr
+        )
         
-        # Red de valor (baseline) opcional para reducir varianza
-        if self.use_baseline:
-            self.value_network = self._create_value_network()
-            self.value_optimizer = Adam(learning_rate=learning_rate)
+        # Crear red de valor si se usa baseline
+        if use_baseline:
+            self.value_network = REINFORCEValueNetwork(
+                state_dim=state_dim,
+                hidden_sizes=hidden_sizes,
+                learning_rate=value_lr
+            )
+        
+        # Optimizadores
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=policy_lr)
+        if use_baseline:
+            self.value_optimizer = tf.keras.optimizers.Adam(learning_rate=value_lr)
         
         # Métricas
-        self.policy_loss_metric = tf.keras.metrics.Mean('policy_loss')
-        self.entropy_metric = tf.keras.metrics.Mean('entropy')
-        self.baseline_loss_metric = tf.keras.metrics.Mean('baseline_loss')
-        self.returns_metric = tf.keras.metrics.Mean('returns')
-    
-    def _create_value_network(self) -> Model:
-        """
-        Crea una red neuronal para estimar el valor de estado (baseline).
+        self.policy_loss_metric = tf.keras.metrics.Mean(name="policy_loss")
+        self.entropy_metric = tf.keras.metrics.Mean(name="entropy")
+        self.returns_metric = tf.keras.metrics.Mean(name="returns")
+        if use_baseline:
+            self.baseline_loss_metric = tf.keras.metrics.Mean(name="baseline_loss")
         
-        Retorna:
-        --------
-        Model
-            Modelo de red de valor
-        """
-        inputs = Input(shape=(self.state_dim,))
-        x = inputs
-        
-        # Capas ocultas
-        for i, units in enumerate(self.hidden_units):
-            x = Dense(units, activation='relu', name=f'value_hidden_{i}')(x)
-            x = LayerNormalization(epsilon=REINFORCE_CONFIG['epsilon'], name=f'value_ln_{i}')(x)
-            if REINFORCE_CONFIG['dropout_rate'] > 0:
-                x = Dropout(REINFORCE_CONFIG['dropout_rate'], name=f'value_dropout_{i}')(x)
-        
-        # Capa de salida: un solo valor
-        outputs = Dense(1, activation='linear', name='value')(x)
-        
-        model = Model(inputs=inputs, outputs=outputs)
-        return model
+        # Historiales
+        self.episode_rewards = []
+        self.avg_rewards = []
+        self.policy_losses = []
+        self.entropy_values = []
     
     @tf.function
     def train_policy_step(
@@ -349,22 +468,27 @@ class REINFORCE:
             Tupla con (pérdida_política, entropía)
         """
         with tf.GradientTape() as tape:
-            # Calcular log-probabilidades de acciones tomadas
+            # Obtener log probabilities de las acciones tomadas
             log_probs = self.policy.get_log_prob(states, actions)
             
-            # Si se usa baseline, restar el valor predicho de los retornos
+            # Calcular entropía para regularización
+            entropy = self.policy.get_entropy(states)
+            mean_entropy = tf.reduce_mean(entropy)
+            
+            # Si se usa baseline, usar valores como ventaja
             if self.use_baseline:
-                values = tf.squeeze(self.value_network(states))
+                values = self.value_network(states)
+                values = tf.squeeze(values, axis=-1)
+                # Calcular ventaja (returns - valores predichos)
                 advantages = returns - values
             else:
                 advantages = returns
             
-            # Calcular pérdida de política (negativa porque queremos maximizar)
-            policy_loss = -tf.reduce_mean(log_probs * advantages, axis=0)
+            # Calcular pérdida de política (negativo porque queremos maximizar)
+            policy_loss = -tf.reduce_mean(log_probs * advantages)
             
-            # Calcular entropía y añadir regularización
-            entropy = tf.reduce_mean(self.policy.get_entropy(states), axis=0)
-            loss = policy_loss - self.entropy_coef * entropy
+            # Agregar término de entropía para fomentar exploración
+            loss = policy_loss - self.entropy_coef * mean_entropy
         
         # Calcular gradientes y actualizar política
         grads = tape.gradient(loss, self.policy.trainable_variables)
@@ -372,10 +496,10 @@ class REINFORCE:
         
         # Actualizar métricas
         self.policy_loss_metric.update_state(policy_loss)
-        self.entropy_metric.update_state(entropy)
-        self.returns_metric.update_state(tf.reduce_mean(returns, axis=0))
+        self.entropy_metric.update_state(mean_entropy)
+        self.returns_metric.update_state(tf.reduce_mean(returns))
         
-        return policy_loss, entropy
+        return policy_loss, mean_entropy
     
     @tf.function
     def train_baseline_step(self, states: tf.Tensor, returns: tf.Tensor) -> tf.Tensor:
@@ -392,20 +516,24 @@ class REINFORCE:
         Retorna:
         --------
         tf.Tensor
-            Pérdida de la red de valor
+            Pérdida del baseline
         """
         with tf.GradientTape() as tape:
-            values = tf.squeeze(self.value_network(states))
-            value_loss = tf.reduce_mean(tf.square(returns - values), axis=0)
+            # Predecir valores
+            values = self.value_network(states)
+            values = tf.squeeze(values, axis=-1)
+            
+            # Calcular pérdida MSE
+            baseline_loss = tf.reduce_mean(tf.square(returns - values))
         
         # Calcular gradientes y actualizar red de valor
-        grads = tape.gradient(value_loss, self.value_network.trainable_variables)
+        grads = tape.gradient(baseline_loss, self.value_network.trainable_variables)
         self.value_optimizer.apply_gradients(zip(grads, self.value_network.trainable_variables))
         
         # Actualizar métrica
-        self.baseline_loss_metric.update_state(value_loss)
+        self.baseline_loss_metric.update_state(baseline_loss)
         
-        return value_loss
+        return baseline_loss
     
     def compute_returns(self, rewards: List[float]) -> np.ndarray:
         """
@@ -428,7 +556,7 @@ class REINFORCE:
         for t in reversed(range(len(rewards))):
             future_return = rewards[t] + self.gamma * future_return
             returns[t] = future_return
-            
+        
         # Normalizar retornos para estabilidad
         if len(returns) > 1:
             returns = (returns - np.mean(returns)) / (np.std(returns) + 1e-8)
@@ -468,10 +596,14 @@ class REINFORCE:
             if render:
                 env.render()
             
-            # Seleccionar acción según política actual
+            # Convertir estado a numpy array si no lo es
+            if not isinstance(state, np.ndarray):
+                state = np.array(state, dtype=np.float32)
+            
+            # Seleccionar acción según la política actual
             action = self.policy.get_action(state)
             
-            # Dar paso en el entorno
+            # Ejecutar acción en el entorno
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
             
@@ -480,7 +612,7 @@ class REINFORCE:
             actions.append(action)
             rewards.append(reward)
             
-            # Avanzar al siguiente estado
+            # Actualizar estado
             state = next_state
         
         return states, actions, rewards, sum(rewards), len(rewards)
@@ -528,103 +660,83 @@ class REINFORCE:
         
         # Actualizar baseline si se usa
         if self.use_baseline:
-            self.train_baseline_step(
-                tf.convert_to_tensor(states), 
+            baseline_loss = self.train_baseline_step(
+                tf.convert_to_tensor(states),
                 tf.convert_to_tensor(returns)
             )
         
-        return policy_loss.numpy(), entropy.numpy()
-    
-    def _update_history(
-        self, 
-        history: Dict[str, List[float]], 
-        episode_reward: float, 
-        episode_length: int
-    ) -> None:
-        """
-        Actualiza la historia de entrenamiento con las métricas actuales.
-        
-        Parámetros:
-        -----------
-        history : Dict[str, List[float]]
-            Diccionario de historia
-        episode_reward : float
-            Recompensa total del episodio
-        episode_length : int
-            Longitud del episodio
-        """
-        history['episode_rewards'].append(episode_reward)
-        history['episode_lengths'].append(episode_length)
-        history['policy_losses'].append(self.policy_loss_metric.result().numpy())
-        if self.use_baseline:
-            history['baseline_losses'].append(self.baseline_loss_metric.result().numpy())
-        history['entropies'].append(self.entropy_metric.result().numpy())
-        history['mean_returns'].append(self.returns_metric.result().numpy())
-        
-        # Resetear métricas
-        self.policy_loss_metric.reset_states()
-        self.entropy_metric.reset_states()
-        self.returns_metric.reset_states()
-        if self.use_baseline:
-            self.baseline_loss_metric.reset_states()
+        return policy_loss, entropy
     
     def train(
         self, 
         env: Any, 
-        episodes: Optional[int] = None, 
-        render: bool = False
+        episodes: int = REINFORCE_CONFIG['episodes'],
+        render: bool = False,
+        log_interval: int = REINFORCE_CONFIG['log_interval'],
+        max_steps: int = REINFORCE_CONFIG['max_steps']
     ) -> Dict[str, List[float]]:
         """
-        Entrena el agente REINFORCE en el entorno dado.
+        Entrena el agente REINFORCE.
         
         Parámetros:
         -----------
         env : Any
             Entorno de OpenAI Gym o compatible
-        episodes : Optional[int], opcional
-            Número de episodios de entrenamiento (default: None)
+        episodes : int, opcional
+            Número de episodios para entrenar (default: REINFORCE_CONFIG['episodes'])
         render : bool, opcional
             Si renderizar el entorno durante entrenamiento (default: False)
+        log_interval : int, opcional
+            Cada cuántos episodios mostrar estadísticas (default: REINFORCE_CONFIG['log_interval'])
+        max_steps : int, opcional
+            Número máximo de pasos por episodio (default: REINFORCE_CONFIG['max_steps_per_episode'])
             
         Retorna:
         --------
         Dict[str, List[float]]
-            Historia de entrenamiento
+            Historial de entrenamiento
         """
-        if episodes is None:
-            episodes = REINFORCE_CONFIG['episodes']
+        print(CONST_ENTRENANDO)
         
+        # Historial para seguimiento
         history = {
             'episode_rewards': [],
-            'episode_lengths': [],
+            'avg_rewards': [],
             'policy_losses': [],
-            'baseline_losses': [] if self.use_baseline else None,
-            'entropies': [],
-            'mean_returns': []
+            'entropy_values': []
         }
         
-        start_time = time.time()
+        # Ventana para promedio móvil
+        reward_window = []
         
         for episode in range(episodes):
             # Ejecutar episodio
-            states, actions, rewards, episode_reward, episode_length = self._run_episode(env, render)
+            states, actions, rewards, total_reward, _ = self._run_episode(env, render)
             
             # Actualizar redes
             policy_loss, entropy = self._update_networks(states, actions, rewards)
             
-            # Actualizar historia
-            self._update_history(history, episode_reward, episode_length)
+            # Seguimiento de métricas
+            history['episode_rewards'].append(total_reward)
+            history['policy_losses'].append(float(policy_loss))
+            history['entropy_values'].append(float(entropy))
             
-            # Mostrar progreso periódicamente
-            if (episode + 1) % REINFORCE_CONFIG['log_interval'] == 0:
-                elapsed_time = time.time() - start_time
-                avg_reward = np.mean(history['episode_rewards'][-REINFORCE_CONFIG['log_interval']:])
-                print(f"Episodio {episode+1}/{episodes} - "
-                      f"Recompensa Media: {avg_reward:.2f}, "
-                      f"Pérdida Política: {policy_loss:.4f}, "
-                      f"Entropía: {entropy:.4f}, "
-                      f"Tiempo: {elapsed_time:.2f}s")
-                start_time = time.time()
+            # Actualizar ventana de recompensas
+            reward_window.append(total_reward)
+            if len(reward_window) > 100:  # Mantener ventana de 100 episodios
+                reward_window.pop(0)
+            
+            # Calcular promedio
+            avg_reward = np.mean(reward_window)
+            history['avg_rewards'].append(avg_reward)
+            
+            # Mostrar progreso
+            if (episode + 1) % log_interval == 0:
+                print(f"{CONST_EPISODIO} {episode+1}/{episodes} - "
+                      f"{CONST_RECOMPENSA}: {total_reward:.2f}, "
+                      f"{CONST_PROMEDIO}: {avg_reward:.2f}, "
+                      f"{CONST_POLITICA_LOSS}: {float(policy_loss):.4f}, "
+                      f"{CONST_ENTROPIA}: {float(entropy):.4f}")
         
         return history
     
@@ -635,204 +747,85 @@ class REINFORCE:
         render: bool = False
     ) -> float:
         """
-        Evalúa el agente REINFORCE con su política actual.
+        Evalúa el agente entrenado.
         
         Parámetros:
         -----------
         env : Any
             Entorno de OpenAI Gym o compatible
         episodes : int, opcional
-            Número de episodios para evaluación (default: 10)
+            Número de episodios para evaluar (default: 10)
         render : bool, opcional
             Si renderizar el entorno durante evaluación (default: False)
             
         Retorna:
         --------
         float
-            Recompensa media obtenida
+            Recompensa promedio
         """
+        print(CONST_EVALUANDO)
         rewards = []
-        lengths = []
         
         for episode in range(episodes):
             state, _ = env.reset()
             done = False
             episode_reward = 0
-            steps = 0
             
             while not done:
                 if render:
                     env.render()
                 
-                # Usar política determinística para evaluación
-                action = self.policy.get_action(state, deterministic=True)
+                # Convertir estado a numpy array si no lo es
+                if not isinstance(state, np.ndarray):
+                    state = np.array(state, dtype=np.float32)
                 
-                # Dar paso en el entorno
+                # Seleccionar acción según la política actual (sin exploración)
+                if self.continuous:
+                    # Para continuo, usar media directamente
+                    network_output = self.policy.model(
+                        np.expand_dims(state, axis=0), 
+                        training=False
+                    ).numpy()
+                    action = network_output[0]
+                else:
+                    # Para discreto, elegir acción más probable
+                    network_output = self.policy.model(
+                        np.expand_dims(state, axis=0), 
+                        training=False
+                    ).numpy()
+                    logits = network_output[0]
+                    action = np.argmax(logits)
+                
+                # Ejecutar acción
                 next_state, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 
-                # Actualizar estado y contadores
-                state = next_state
                 episode_reward += reward
-                steps += 1
+                state = next_state
             
             rewards.append(episode_reward)
-            lengths.append(steps)
-            
-            print(f"Episodio Evaluación {episode+1}: Recompensa = {episode_reward:.2f}, Pasos = {steps}")
+            print(f"{CONST_EPISODIO} {episode+1}/{episodes} - {CONST_RECOMPENSA}: {episode_reward:.2f}")
         
         avg_reward = np.mean(rewards)
-        avg_length = np.mean(lengths)
-        
-        print(f"Evaluación Completada - Recompensa Media: {avg_reward:.2f}, Pasos Medios: {avg_length:.2f}")
+        print(f"{CONST_RESULTADOS} {CONST_PROMEDIO} {CONST_RECOMPENSA}: {avg_reward:.2f}")
         
         return avg_reward
-    
-    def save(self, policy_path: str, baseline_path: Optional[str] = None) -> None:
-        """
-        Guarda los modelos del agente.
-        
-        Parámetros:
-        -----------
-        policy_path : str
-            Ruta para guardar la política
-        baseline_path : Optional[str], opcional
-            Ruta para guardar el baseline (default: None)
-        """
-        # Guardar política
-        self.policy.save_weights(policy_path)
-        
-        # Guardar baseline si existe
-        if self.use_baseline and baseline_path:
-            self.value_network.save_weights(baseline_path)
-        
-        print(f"Modelo guardado en {policy_path}")
-    
-    def load(self, policy_path: str, baseline_path: Optional[str] = None) -> None:
-        """
-        Carga los modelos del agente.
-        
-        Parámetros:
-        -----------
-        policy_path : str
-            Ruta para cargar la política
-        baseline_path : Optional[str], opcional
-            Ruta para cargar el baseline (default: None)
-        """
-        # Asegurarse que el modelo está construido antes de cargar
-        dummy_state = np.zeros((1, self.state_dim))
-        _ = self.policy(dummy_state)
-        
-        # Cargar política
-        self.policy.load_weights(policy_path)
-        
-        # Cargar baseline si existe
-        if self.use_baseline and baseline_path:
-            _ = self.value_network(dummy_state)
-            self.value_network.load_weights(baseline_path)
-        
-        print(f"Modelo cargado desde {policy_path}")
-    
-    def visualize_training(
-        self, 
-        history: Optional[Dict[str, List[float]]] = None, 
-        smoothing_window: Optional[int] = None
-    ) -> None:
-        """
-        Visualiza las métricas de entrenamiento.
-        
-        Parámetros:
-        -----------
-        history : Optional[Dict[str, List[float]]], opcional
-            Historia de entrenamiento (default: None)
-        smoothing_window : Optional[int], opcional
-            Tamaño de ventana para suavizado (default: None)
-        """
-        if history is None:
-            return
-        
-        if smoothing_window is None:
-            smoothing_window = REINFORCE_CONFIG['smoothing_window']
-        
-        # Función para suavizar datos
-        def smooth(data: List[float], window_size: int) -> np.ndarray:
-            """Aplica suavizado con media móvil"""
-            if len(data) < window_size:
-                return data
-            kernel = np.ones(window_size) / window_size
-            return np.convolve(data, kernel, mode='valid')
-        
-        # Determinar número de subplots
-        n_plots = 4 if self.use_baseline else 3
-        _, axs = plt.subplots(n_plots, 1, figsize=(10, 3*n_plots))
-        
-        # 1. Gráfico de recompensas
-        axs[0].plot(history['episode_rewards'], alpha=0.3, color='blue', label='Original')
-        if len(history['episode_rewards']) > smoothing_window:
-            smoothed_rewards = smooth(history['episode_rewards'], smoothing_window)
-            axs[0].plot(range(smoothing_window-1, len(history['episode_rewards'])), 
-                      smoothed_rewards, color='blue', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[0].set_title('Recompensa por Episodio')
-        axs[0].set_xlabel('Episodio')
-        axs[0].set_ylabel('Recompensa')
-        axs[0].grid(alpha=0.3)
-        axs[0].legend()
-        
-        # 2. Gráfico de longitud de episodios
-        axs[1].plot(history['episode_lengths'], alpha=0.3, color='green', label='Original')
-        if len(history['episode_lengths']) > smoothing_window:
-            smoothed_lengths = smooth(history['episode_lengths'], smoothing_window)
-            axs[1].plot(range(smoothing_window-1, len(history['episode_lengths'])), 
-                      smoothed_lengths, color='green', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[1].set_title('Longitud de Episodios')
-        axs[1].set_xlabel('Episodio')
-        axs[1].set_ylabel('Pasos')
-        axs[1].grid(alpha=0.3)
-        axs[1].legend()
-        
-        # 3. Gráfico de pérdida de política
-        axs[2].plot(history['policy_losses'], alpha=0.3, color='red', label='Original')
-        if len(history['policy_losses']) > smoothing_window:
-            smoothed_losses = smooth(history['policy_losses'], smoothing_window)
-            axs[2].plot(range(smoothing_window-1, len(history['policy_losses'])), 
-                      smoothed_losses, color='red', 
-                      label=f'Suavizado (ventana={smoothing_window})')
-        axs[2].set_title('Pérdida de Política')
-        axs[2].set_xlabel('Episodio')
-        axs[2].set_ylabel('Pérdida')
-        axs[2].grid(alpha=0.3)
-        axs[2].legend()
-        
-        # 4. Gráfico de pérdida de baseline (si se usa)
-        if self.use_baseline:
-            axs[3].plot(history['baseline_losses'], alpha=0.3, color='purple', label='Original')
-            if len(history['baseline_losses']) > smoothing_window:
-                smoothed_baseline = smooth(history['baseline_losses'], smoothing_window)
-                axs[3].plot(range(smoothing_window-1, len(history['baseline_losses'])), 
-                          smoothed_baseline, color='purple', 
-                          label=f'Suavizado (ventana={smoothing_window})')
-            axs[3].set_title('Pérdida de Baseline')
-            axs[3].set_xlabel('Episodio')
-            axs[3].set_ylabel('Pérdida')
-            axs[3].grid(alpha=0.3)
-            axs[3].legend()
-        
-        plt.tight_layout()
-        plt.show()
 
-@register_keras_serializable
-class REINFORCEModel(Model):
+@register_keras_serializable()
+class REINFORCEModel(tf.keras.models.Model):
     """
-    Wrapper para el algoritmo REINFORCE que implementa la interfaz de Keras.Model.
+    Modelo Keras que encapsula el agente REINFORCE para uso con la API de Keras.
+    
+    Esta clase permite que el algoritmo REINFORCE se integre con el
+    flujo de trabajo de entrenamiento de Keras.
     """
     
     def __init__(
         self, 
         reinforce_agent: REINFORCE,
         cgm_shape: Tuple[int, ...],
-        other_features_shape: Tuple[int, ...]
+        other_features_shape: Tuple[int, ...],
+        **kwargs
     ) -> None:
         """
         Inicializa el modelo wrapper para REINFORCE.
@@ -840,278 +833,281 @@ class REINFORCEModel(Model):
         Parámetros:
         -----------
         reinforce_agent : REINFORCE
-            Agente REINFORCE a utilizar
+            Agente REINFORCE a encapsular
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
+        **kwargs
+            Argumentos adicionales para tf.keras.models.Model
         """
-        super(REINFORCEModel, self).__init__()
+        super().__init__(**kwargs)
+        
         self.reinforce_agent = reinforce_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
-        # Capas para procesamiento de entradas
-        self.cgm_encoder = Dense(64, activation='relu', name='cgm_encoder')
-        self.cgm_pooling = GlobalAveragePooling1D(name='cgm_pooling')
-        self.other_encoder = Dense(32, activation='relu', name='other_encoder')
-        self.combined_encoder = Dense(reinforce_agent.state_dim, activation='linear', name='state_encoder')
+        # Capas de procesamiento de entrada
+        self.cgm_flatten = Flatten()
+        self.cgm_dense = Dense(64, activation='relu')
         
-        # Capa para convertir acciones de política a dosis de insulina
-        self.action_decoder = Dense(1, kernel_initializer='glorot_uniform', name='action_decoder')
+        # Para otras características
+        self.other_features_dense = Dense(32, activation='relu')
         
-    def call(self, inputs: List[tf.Tensor], training: bool = False) -> tf.Tensor:
-        """
-        Implementa la llamada del modelo para predicciones.
+        # Capa de salida
+        self.output_layer = Dense(1)
         
-        Parámetros:
-        -----------
-        inputs : List[tf.Tensor]
-            Lista de tensores [cgm_data, other_features]
-        training : bool, opcional
-            Indica si está en modo de entrenamiento (default: False)
-            
-        Retorna:
-        --------
-        tf.Tensor
-            Predicciones basadas en la política actual
-        """
-        cgm_data, other_features = inputs
-        batch_size = tf.shape(cgm_data)[0]
-        
-        # Codificar estado a partir de entradas
-        states = self._encode_states(cgm_data, other_features)
-        
-        # Inicializar tensor para acciones
-        actions = tf.TensorArray(tf.float32, size=batch_size)
-        
-        # Para cada muestra en el batch, obtener acción determinística (sin exploración)
-        for i in range(batch_size):
-            state = states[i]
-            # Usar el agente para seleccionar acción sin exploración
-            action = self.reinforce_agent.policy.get_action(state.numpy(), deterministic=True)
-            actions = actions.write(i, tf.convert_to_tensor(action, dtype=tf.float32))
-        
-        # Obtener tensor de acciones y ajustar forma
-        actions_tensor = actions.stack()
-        
-        # Para espacio continuo, usar directamente las acciones
-        if self.reinforce_agent.continuous:
-            # Escalar a rango de dosis apropiado
-            scaled_actions = self.action_decoder(tf.reshape(actions_tensor, [batch_size, -1]))
-        else:
-            # Para espacio discreto, decodificar valores de acción a dosis
-            action_one_hot = tf.one_hot(tf.cast(actions_tensor, tf.int32), self.reinforce_agent.action_dim)
-            scaled_actions = self.action_decoder(action_one_hot)
-        
-        return scaled_actions
+        # Historial de entrenamiento
+        self.history = {'loss': [], 'val_loss': []}
     
-    def _encode_states(self, cgm_data: tf.Tensor, other_features: tf.Tensor) -> tf.Tensor:
+    def _create_environment(
+        self, 
+        cgm_data: tf.Tensor, 
+        other_features: tf.Tensor, 
+        target_doses: tf.Tensor
+    ) -> Any:
         """
-        Codifica las entradas CGM y otras características en representaciones de estado.
+        Crea un entorno personalizado para entrenamiento.
         
         Parámetros:
         -----------
         cgm_data : tf.Tensor
-            Datos de monitoreo continuo de glucosa
+            Datos CGM
         other_features : tf.Tensor
-            Otras características (carbohidratos, insulina a bordo, etc.)
-            
-        Retorna:
-        --------
-        tf.Tensor
-            Estados codificados
-        """
-        # Procesar CGM con capas convolucionales
-        cgm_encoded = self.cgm_encoder(cgm_data)
-        cgm_features = self.cgm_pooling(cgm_encoded)
-        
-        # Procesar otras características
-        other_encoded = self.other_encoder(other_features)
-        
-        # Combinar características
-        combined = tf.concat([cgm_features, other_encoded], axis=1)
-        
-        # Codificar a dimensión de estado esperada por REINFORCE
-        states = self.combined_encoder(combined)
-        
-        return states
-    
-    def fit(
-        self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
-        verbose: int = 0,
-        callbacks: Optional[List[Any]] = None,
-        validation_data: Optional[Tuple] = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """
-        Simula la interfaz de entrenamiento de Keras para el agente REINFORCE.
-        
-        Parámetros:
-        -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
-        batch_size : int, opcional
-            Tamaño del lote (default: 32)
-        epochs : int, opcional
-            Número de épocas (default: 1)
-        verbose : int, opcional
-            Nivel de verbosidad (default: 0)
-        callbacks : Optional[List[Any]], opcional
-            Lista de callbacks (default: None)
-        validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
-        **kwargs
-            Argumentos adicionales
-            
-        Retorna:
-        --------
-        Dict[str, Any]
-            Historia simulada de entrenamiento
-        """
-        if verbose > 0:
-            print("Entrenando agente REINFORCE...")
-        
-        # Crear entorno para entrenar el agente REINFORCE
-        env = self._create_environment(x, y)
-        
-        # Entrenar agente REINFORCE
-        history = self.reinforce_agent.train(
-            env=env,
-            episodes=batch_size * epochs,
-            render=False
-        )
-        
-        # Calibrar la capa de acción para mapeo apropiado
-        self._calibrate_action_decoder(y)
-        
-        if verbose > 0:
-            print(f"Entrenamiento completado en {len(history['episode_rewards'])} episodios.")
-        
-        # Convertir métricas a formato compatible con Keras
-        keras_history = {
-            'loss': history['policy_losses'],
-            'val_loss': [np.mean(history['policy_losses'][-10:])] if validation_data else None
-        }
-        
-        # Retornar directamente un diccionario
-        return {'history': keras_history}
-    
-    def _create_environment(self, x: List[tf.Tensor], y: tf.Tensor) -> Any:
-        """
-        Crea un entorno personalizado para entrenar el agente REINFORCE.
-        
-        Parámetros:
-        -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+            Otras características
+        target_doses : tf.Tensor
+            Dosis objetivo
             
         Retorna:
         --------
         Any
-            Entorno para entrenamiento de RL
+            Entorno para entrenamiento
         """
         # Convertir a numpy para procesamiento
-        cgm_data = x[0].numpy() if hasattr(x[0], 'numpy') else x[0]
-        other_features = x[1].numpy() if hasattr(x[1], 'numpy') else x[1]
-        targets = y.numpy() if hasattr(y, 'numpy') else y
+        cgm_np = cgm_data.numpy() if hasattr(cgm_data, 'numpy') else cgm_data
+        other_np = other_features.numpy() if hasattr(other_features, 'numpy') else other_features
+        targets_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
         
-        # Clase de entorno personalizado
-        class InsulinDosingEnvironment:
+        class InsulinDosingEnv:
+            """Entorno para problema de dosificación de insulina."""
+            
             def __init__(self, cgm, features, targets, model):
                 self.cgm = cgm
                 self.features = features
                 self.targets = targets
                 self.model = model
+                self.rng = np.random.Generator(np.random.PCG64(42))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(REINFORCE_CONFIG.get('seed', 42)))
                 
-            def reset(self):
-                """Reinicia el entorno con un ejemplo aleatorio."""
-                self.current_idx = self.rng.integers(0, self.max_idx)
-                state = self._get_state()
-                return state, {}
+                # Para compatibilidad con algoritmos RL
+                self.observation_space = SimpleNamespace(
+                    shape=(model.reinforce_agent.state_dim,),
+                    low=-np.inf,
+                    high=np.inf
+                )
                 
-            def step(self, action):
-                """Ejecuta un paso en el entorno con la acción dada."""
-                # Convertir acción a dosis según el tipo de espacio de acción
+                self.action_space = SimpleNamespace(
+                    n=model.reinforce_agent.action_dim if not model.reinforce_agent.continuous else None,
+                    shape=(model.reinforce_agent.action_dim,) if model.reinforce_agent.continuous else None,
+                    sample=self._sample_action,
+                    low=-1.0,
+                    high=1.0
+                )
+            
+            def _sample_action(self):
+                """Muestrea una acción aleatoria del espacio correspondiente."""
                 if self.model.reinforce_agent.continuous:
-                    # Escalar la acción continua al rango de dosis
-                    dose = action[0]  # Primera dimensión si es vector multidimensional
+                    return self.rng.uniform(
+                        -1.0, 1.0, 
+                        size=(self.model.reinforce_agent.action_dim,)
+                    )
                 else:
-                    # Mapear el índice discreto a valor de dosis
-                    max_dose = np.max(self.targets)
-                    dose = (action / (self.model.reinforce_agent.action_dim - 1)) * max_dose
+                    return self.rng.integers(0, self.model.reinforce_agent.action_dim)
+            
+            def reset(self):
+                """Reinicia el entorno eligiendo un ejemplo aleatorio."""
+                self.current_idx = self.rng.integers(0, self.max_idx)
                 
-                # Calcular recompensa (negativo del error absoluto)
+                # Procesar estado
+                state = self._get_state()
+                
+                return state, {}
+            
+            def step(self, action):
+                """Ejecuta un paso con la acción dada."""
+                # Convertir acción a dosis
+                if self.model.reinforce_agent.continuous:
+                    # Mapear acción continua [-1,1] a rango de dosis [0, max_dose]
+                    max_dose = np.max(self.targets) * 1.2
+                    dose = (action[0] + 1) * max_dose / 2.0
+                else:
+                    # Mapear acción discreta a rango de dosis
+                    max_dose = np.max(self.targets) * 1.2
+                    dose = action * max_dose / (self.model.reinforce_agent.action_dim - 1)
+                
+                # Calcular recompensa como negativo del error absoluto
                 target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                error = np.abs(dose - target)
                 
-                # Avanzar al siguiente caso
+                # Función de recompensa que prioriza precisión
+                if error < 0.5:
+                    reward = 1.0 - error  # Recompensa alta para error bajo
+                else:
+                    reward = -error  # Penalización para errores grandes
+                
+                # Avanzar al siguiente ejemplo
                 self.current_idx = (self.current_idx + 1) % self.max_idx
                 
                 # Obtener próximo estado
                 next_state = self._get_state()
                 
-                # Episodio siempre termina después de un paso
+                # Episodio termina después de un paso
                 done = True
                 
-                return next_state, reward, done, False, {}
-                
+                return next_state, reward, done, False, {'dose': dose, 'target': target}
+            
             def _get_state(self):
-                """Obtiene el estado actual codificado."""
-                # Obtener datos actuales
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
+                """Obtiene el estado actual procesado."""
+                # Extraer datos CGM y otras características para el índice actual
+                current_cgm = self.cgm[self.current_idx:self.current_idx+1]
+                current_features = self.features[self.current_idx:self.current_idx+1]
                 
-                # Codificar estado usando el modelo
-                state = self.model._encode_states(
-                    tf.convert_to_tensor(cgm_batch, dtype=tf.float32),
-                    tf.convert_to_tensor(features_batch, dtype=tf.float32)
-                )
+                # Procesar con las capas del modelo
+                cgm_flat = self.model.cgm_flatten(current_cgm)
+                cgm_encoded = self.model.cgm_dense(cgm_flat)
                 
-                return state[0].numpy()  # Extraer y convertir a numpy
+                other_encoded = self.model.other_features_dense(current_features)
+                
+                # Concatenar características
+                combined = tf.concat([cgm_encoded, other_encoded], axis=1)
+                
+                # Devolver numpy array
+                return combined.numpy()[0]
         
-        return InsulinDosingEnvironment(cgm_data, other_features, targets, self)
+        return InsulinDosingEnv(cgm_np, other_np, targets_np, self)
     
-    def _calibrate_action_decoder(self, y: tf.Tensor) -> None:
+    def call(self, inputs: List[tf.Tensor], training: bool = False) -> tf.Tensor:
         """
-        Calibra la capa que mapea acciones a dosis de insulina.
+        Procesa las entradas para generar predicciones.
         
         Parámetros:
         -----------
-        y : tf.Tensor
-            Dosis objetivo para calibración
+        inputs : List[tf.Tensor]
+            Lista con [cgm_data, other_features]
+        training : bool, opcional
+            Si está en modo entrenamiento (default: False)
+            
+        Retorna:
+        --------
+        tf.Tensor
+            Predicciones del modelo
         """
-        y_numpy = y.numpy() if hasattr(y, 'numpy') else y
-        max_dose = np.max(y_numpy)
-        min_dose = np.min(y_numpy)
+        cgm_data, other_features = inputs
+        batch_size = tf.shape(cgm_data)[0]
         
-        if self.reinforce_agent.continuous:
-            # Para política continua, escalar a rango adecuado
-            self.action_decoder.set_weights([
-                np.ones((1, 1)) * (max_dose - min_dose),
-                np.array([min_dose])
-            ])
-        else:
-            # Para política discreta, establecer pesos para mapear adecuadamente
-            self.action_decoder.set_weights([
-                np.ones((self.reinforce_agent.action_dim, 1)) * (max_dose - min_dose) / self.reinforce_agent.action_dim,
-                np.array([min_dose])
-            ])
+        # Procesar entradas
+        cgm_flat = self.cgm_flatten(cgm_data)
+        cgm_encoded = self.cgm_dense(cgm_flat)
+        
+        other_encoded = self.other_features_dense(other_features)
+        
+        # Concatenar características
+        combined = tf.concat([cgm_encoded, other_encoded], axis=1)
+        
+        # Obtener predicciones para cada muestra en el lote
+        predictions = tf.TensorArray(tf.float32, size=batch_size)
+        
+        for i in range(batch_size):
+            # Extraer estado para esta muestra
+            state = combined[i]
+            
+            # Usar política para predecir
+            if self.reinforce_agent.continuous:
+                action = self.reinforce_agent.policy.model(
+                    tf.expand_dims(state, axis=0), 
+                    training=False
+                )[0]
+                
+                # Convertir acción a dosis
+                max_dose = 15.0  # Valor típico máximo de dosis
+                pred = (action[0] + 1) * max_dose / 2.0
+                
+            else:
+                logits = self.reinforce_agent.policy.model(
+                    tf.expand_dims(state, axis=0), 
+                    training=False
+                )[0]
+                action = tf.argmax(logits)
+                
+                # Convertir acción a dosis
+                max_dose = 15.0  # Valor típico máximo de dosis
+                pred = tf.cast(action, tf.float32) * max_dose / (self.reinforce_agent.action_dim - 1)
+            
+            predictions = predictions.write(i, pred)
+        
+        return predictions.stack()
+    
+    def fit(
+        self, 
+        x: List[tf.Tensor], 
+        y: tf.Tensor, 
+        epochs: int = 1,
+        batch_size: int = 32,
+        callbacks: List = None,
+        validation_data: Optional[Tuple] = None,
+        verbose: int = 0
+    ) -> Dict:
+        """
+        Entrena el modelo con los datos proporcionados.
+        
+        Parámetros:
+        -----------
+        x : List[tf.Tensor]
+            Lista con [cgm_data, other_features]
+        y : tf.Tensor
+            Valores objetivo (dosis)
+        epochs : int, opcional
+            Número de épocas (default: 1)
+        batch_size : int, opcional
+            Tamaño del lote (default: 32)
+        callbacks : List, opcional
+            Lista de callbacks (default: None)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 0)
+            
+        Retorna:
+        --------
+        Dict
+            Historia de entrenamiento
+        """
+        # Extraer datos
+        cgm_data, other_features = x
+        
+        # Crear entorno para entrenamiento
+        env = self._create_environment(cgm_data, other_features, y)
+        
+        # Entrenar agente REINFORCE
+        history = self.reinforce_agent.train(
+            env=env,
+            episodes=epochs * (len(y) // batch_size or 1),
+            render=False,
+            log_interval=max(1, (epochs * (len(y) // batch_size)) // 10)
+        )
+        
+        # Guardar historial para compatibilidad con Keras
+        self.history = {
+            'loss': history['policy_losses'],
+            'val_loss': []
+        }
+        
+        return self.history
     
     def predict(self, x: List[tf.Tensor], **kwargs) -> np.ndarray:
         """
-        Implementa la interfaz de predicción de Keras.
+        Realiza predicciones con el modelo entrenado.
         
         Parámetros:
         -----------
@@ -1125,7 +1121,13 @@ class REINFORCEModel(Model):
         np.ndarray
             Predicciones de dosis
         """
-        return self.call(x).numpy()
+        # Usar el método call para predicción
+        predictions = self.call(x)
+        
+        # Convertir a numpy para consistencia
+        if hasattr(predictions, 'numpy'):
+            return predictions.numpy()
+        return predictions
     
     def get_config(self) -> Dict:
         """
@@ -1136,108 +1138,52 @@ class REINFORCEModel(Model):
         Dict
             Configuración del modelo
         """
-        return {
-            "cgm_shape": self.cgm_shape,
-            "other_features_shape": self.other_features_shape,
-            "state_dim": self.reinforce_agent.state_dim,
-            "action_dim": self.reinforce_agent.action_dim,
-            "continuous": self.reinforce_agent.continuous,
-            "gamma": self.reinforce_agent.gamma
-        }
-    
-    def save(self, filepath: str, **kwargs) -> None:
-        """
-        Guarda el modelo y los pesos del agente REINFORCE.
-        
-        Parámetros:
-        -----------
-        filepath : str
-            Ruta donde guardar el modelo
-        **kwargs
-            Argumentos adicionales
-        """
-        # Guardar pesos de la política y del modelo wrapper
-        self.save_weights(filepath + MODEL_WEIGHTS_EXT)
-        
-        # Guardar pesos de la política por separado
-        policy_path = filepath + POLICY_WEIGHTS_EXT
-        baseline_path = filepath + BASELINE_WEIGHTS_EXT if self.reinforce_agent.use_baseline else None
-        
-        self.reinforce_agent.save(policy_path, baseline_path)
-        
-    def load_weights(self, filepath: str, **kwargs) -> None:
-        """
-        Carga el modelo y los pesos del agente REINFORCE.
-        
-        Parámetros:
-        -----------
-        filepath : str
-            Ruta desde donde cargar el modelo
-        **kwargs
-            Argumentos adicionales
-        """
-        # Determinar rutas de archivos según el filepath proporcionado
-        if filepath.endswith(MODEL_WEIGHTS_EXT):
-            base_path = filepath[:-len(MODEL_WEIGHTS_EXT)]
-        else:
-            base_path = filepath
-            filepath = base_path + MODEL_WEIGHTS_EXT
-            
-        # Cargar pesos del wrapper
-        super().load_weights(filepath)
-        
-        # Cargar pesos de la política
-        policy_path = base_path + POLICY_WEIGHTS_EXT
-        baseline_path = base_path + BASELINE_WEIGHTS_EXT if self.reinforce_agent.use_baseline else None
-        
-        self.reinforce_agent.load(policy_path, baseline_path)
+        config = super().get_config()
+        config.update({
+            'cgm_shape': self.cgm_shape,
+            'other_features_shape': self.other_features_shape
+        })
+        return config
 
-
-# Constantes para evitar duplicación de strings
-CGM_ENCODER = 'cgm_encoder'
-OTHER_ENCODER = 'other_encoder'
-STATE_ENCODER = 'state_encoder'
-ACTION_DECODER = 'action_decoder'
-# Constantes para evitar duplicación de archivos
-MODEL_WEIGHTS_EXT = "_model.h5"
-POLICY_WEIGHTS_EXT = "_policy.h5"
-BASELINE_WEIGHTS_EXT = "_baseline.h5"
-
-
-def create_reinforce_mcpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
+def create_reinforce_mcpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> tf.keras.models.Model:
     """
-    Crea un modelo basado en REINFORCE (Monte Carlo Policy Gradient) para predicción de dosis de insulina.
+    Crea un modelo REINFORCE para predicción de dosis de insulina.
     
     Parámetros:
     -----------
     cgm_shape : Tuple[int, ...]
-        Forma de los datos CGM (batch_size, time_steps, features)
+        Forma de los datos CGM (batch_size, time_steps, features) o (batch_size, features)
     other_features_shape : Tuple[int, ...]
         Forma de otras características (batch_size, n_features)
         
     Retorna:
     --------
-    Model
+    tf.keras.models.Model
         Modelo REINFORCE que implementa la interfaz de Keras
     """
-    # Definir dimensiones de entrada
-    _ = cgm_shape[1] * cgm_shape[2] + other_features_shape[1]
-    state_dim = 64  # Dimensión del espacio de estado
+    # Definir dimensiones de las capas de codificación
+    # Estas deben coincidir con las dimensiones en REINFORCEModel.__init__
+    cgm_encoded_dim = 64
+    other_encoded_dim = 32
+    state_dim = cgm_encoded_dim + other_encoded_dim  # = 96
     
-    # Configurar espacio de acciones
-    action_dim = 20  # Acciones discretas (niveles de dosis)
-    continuous = REINFORCE_CONFIG['continuous_action']
+    # Configuración para espacio de acciones
+    if REINFORCE_CONFIG['continuous']:
+        action_dim = 1  # Una dimensión para dosis continua
+    else:
+        action_dim = 20  # 20 niveles discretos de dosis
     
     # Crear agente REINFORCE
     reinforce_agent = REINFORCE(
-        state_dim=state_dim,
-        action_dim=action_dim if not continuous else 1,
-        continuous=continuous,
-        learning_rate=REINFORCE_CONFIG['learning_rate'],
+        state_dim=state_dim,  # Usar la dimensión correcta del estado
+        action_dim=action_dim,
+        continuous=REINFORCE_CONFIG['continuous'],
         gamma=REINFORCE_CONFIG['gamma'],
-        hidden_units=REINFORCE_CONFIG['hidden_units'],
-        baseline=REINFORCE_CONFIG['use_baseline'],
+        policy_lr=REINFORCE_CONFIG['policy_lr'],
+        value_lr=REINFORCE_CONFIG['value_lr'],
+        use_baseline=REINFORCE_CONFIG['use_baseline'],
         entropy_coef=REINFORCE_CONFIG['entropy_coef'],
+        hidden_sizes=REINFORCE_CONFIG['hidden_units'],
         seed=REINFORCE_CONFIG.get('seed', 42)
     )
     
