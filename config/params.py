@@ -182,7 +182,7 @@ USE_JAX_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "jax_a2c": True,
     "jax_a3c": True,
-    "jax_ddpg": False,
+    "jax_ddpg": True,
     "jax_dqn": False,
     "jax_ppo": False,
     "jax_sac": False,
