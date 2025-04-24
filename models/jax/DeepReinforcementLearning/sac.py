@@ -11,6 +11,8 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 from functools import partial
 from collections import deque
 import matplotlib.pyplot as plt
+from types import SimpleNamespace
+import pickle
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -1233,7 +1235,7 @@ class SAC:
                 self.critic_state_2 = self.critic_state_2.replace(
                     params=critic_2_params, target_params=critic_2_params)
             
-            # Cargar alpha
+            # Guardar alpha
             try:
                 alpha = np.load(os.path.join(directory, 'alpha.npy')).item()
                 self.log_alpha = jnp.array(np.log(alpha), dtype=jnp.float32)
@@ -1391,18 +1393,23 @@ class SACWrapper:
         """
         Configura las funciones de codificación para procesar las entradas.
         """
-        # En un modelo real, esto inicializaría redes neuronales para codificar entradas
-        # Para simplificar, usaremos funciones de transformación lineales
+        # Calcular dimensiones de entrada aplanadas de manera segura
+        if len(self.cgm_shape) <= 1:
+            cgm_dim = 1
+        else:
+            cgm_dim = int(np.prod(self.cgm_shape[1:]))
         
-        # Dimensiones de características combinadas
-        cgm_dim = np.prod(self.cgm_shape[1:])
-        other_dim = np.prod(self.other_features_shape[1:])
+        if len(self.other_features_shape) <= 1:
+            other_dim = 1 
+        else:
+            other_dim = int(np.prod(self.other_features_shape[1:]))
         
         # Inicializar matrices de transformación
         self.key, key_cgm, key_other = jax.random.split(self.key, 3)
         
-        self.cgm_weight = jax.random.normal(key_cgm, (cgm_dim, self.sac_agent.state_dim // 2))
-        self.other_weight = jax.random.normal(key_other, (other_dim, self.sac_agent.state_dim // 2))
+        # Crear matrices de proyección para la codificación de entradas
+        self.cgm_weight = jax.random.normal(key_cgm, (int(cgm_dim), self.sac_agent.state_dim // 2))
+        self.other_weight = jax.random.normal(key_other, (int(other_dim), self.sac_agent.state_dim // 2))
         
         # JIT-compilar transformaciones para mayor rendimiento
         self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
@@ -1648,7 +1655,7 @@ class SACWrapper:
                 cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
                 features_batch = self.features[self.current_idx:self.current_idx+1]
                 
-                # Codificar a espacio de estado
+                # Codificar entradas a espacio de estado
                 cgm_encoded = self.model.encode_cgm(jnp.array(cgm_batch))
                 other_encoded = self.model.encode_other(jnp.array(features_batch))
                 
@@ -1656,9 +1663,6 @@ class SACWrapper:
                 state = np.concatenate([cgm_encoded[0], other_encoded[0]])
                 
                 return state
-                
-        # Importar lo necesario para el entorno
-        from types import SimpleNamespace
         
         # Crear y devolver el entorno
         return InsulinDosingEnv(cgm_data, other_features, targets, self)
@@ -1673,11 +1677,9 @@ class SACWrapper:
             Ruta donde guardar el modelo
         """
         # Crear directorio si no existe
-        import os
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
         # Guardar datos del modelo
-        import pickle
         model_data = {
             'cgm_shape': self.cgm_shape,
             'other_features_shape': self.other_features_shape,
@@ -1685,8 +1687,8 @@ class SACWrapper:
             'other_weight': self.other_weight,
             'state_dim': self.sac_agent.state_dim,
             'action_dim': self.sac_agent.action_dim,
-            'action_high': self.sac_agent.action_high,
-            'action_low': self.sac_agent.action_low,
+            'action_high': self.sac_agent.action_high.tolist(),
+            'action_low': self.sac_agent.action_low.tolist()
         }
         
         with open(filepath + "_wrapper.pkl", 'wb') as f:
@@ -1706,7 +1708,6 @@ class SACWrapper:
         filepath : str
             Ruta desde donde cargar el modelo
         """
-        import pickle
         
         # Cargar datos del wrapper
         with open(filepath + "_wrapper.pkl", 'rb') as f:
@@ -1777,28 +1778,8 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     action_dim = 1  # Una dimensión para la dosis continua
     
     # Límites de acción para dosis de insulina (0-15 unidades)
-    action_high = jnp.array([15.0])  # Máximo 15 unidades de insulina
-    action_low = jnp.array([0.0])    # Mínimo 0 unidades
-    
-    # Configuración personalizada para el agente SAC
-    config = {
-        'actor_lr': SAC_CONFIG['actor_lr'],
-        'critic_lr': SAC_CONFIG['critic_lr'],
-        'alpha_lr': SAC_CONFIG['alpha_lr'],
-        'gamma': SAC_CONFIG['gamma'],
-        'tau': SAC_CONFIG['tau'],
-        'batch_size': min(SAC_CONFIG['batch_size'], 64),  # Adaptado para este problema
-        'buffer_capacity': SAC_CONFIG['buffer_capacity'],
-        'initial_alpha': SAC_CONFIG['initial_alpha'],
-        'target_entropy': -action_dim,  # Heurística común: -dim(A)
-        'actor_hidden_units': SAC_CONFIG['actor_hidden_units'],
-        'critic_hidden_units': SAC_CONFIG['critic_hidden_units'],
-        'log_std_min': SAC_CONFIG['log_std_min'],
-        'log_std_max': SAC_CONFIG['log_std_max'],
-        'dropout_rate': SAC_CONFIG['dropout_rate'],
-        'epsilon': SAC_CONFIG['epsilon'],
-        'seed': 42
-    }
+    action_high = np.array([15.0])  # Máximo 15 unidades de insulina
+    action_low = np.array([0.0])    # Mínimo 0 unidades
     
     # Crear agente SAC
     sac_agent = SAC(
@@ -1806,7 +1787,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_dim=action_dim,
         action_high=action_high,
         action_low=action_low,
-        config=config,
+        config=SAC_CONFIG,
         seed=42
     )
     
