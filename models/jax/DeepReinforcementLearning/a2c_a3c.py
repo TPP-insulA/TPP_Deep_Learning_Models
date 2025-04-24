@@ -1490,7 +1490,7 @@ class A2CWrapper:
         epochs: int = 1,
         batch_size: int = 32,
         callbacks: List = None,
-        verbose: int = 0
+        verbose: int = 1
     ) -> Dict:
         """
         Entrena el modelo A2C con los datos proporcionados.
@@ -1529,7 +1529,7 @@ class A2CWrapper:
         env = self._create_training_environment(x[0], x[1], y)
         
         # Calcular número de pasos totales basados en epochs y batch_size
-        total_steps = epochs * (len(y) // batch_size) * batch_size
+        # total_steps = epochs * (len(y) // batch_size) * batch_size
         
         # Imprimir información inicial
         if verbose > 0:
@@ -1904,7 +1904,7 @@ class A3CWrapper(A2CWrapper):
         epochs: int = 1,
         batch_size: int = 32,
         callbacks: List = None,
-        verbose: int = 0
+        verbose: int = 1
     ) -> Dict:
         """
         Entrena el modelo A3C en los datos proporcionados utilizando múltiples workers.

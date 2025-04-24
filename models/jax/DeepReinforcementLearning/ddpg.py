@@ -1452,8 +1452,9 @@ class DDPGWrapper:
                 self.other_encoder = other_encoder
                 self.current_idx = 0
                 self.num_samples = len(targets)
+                self.rng = np.random.default_rng(seed=42)
                 self.action_space = SimpleNamespace(
-                    sample=lambda: np.random.uniform(0, 15, (1,)),
+                    sample=lambda: self.rng.uniform(0, 15, (1,)),
                     n=1,
                     shape=(1,)
                 )
@@ -1463,7 +1464,7 @@ class DDPGWrapper:
                 
             def reset(self):
                 # Seleccionar un punto aleatorio para iniciar
-                self.current_idx = np.random.randint(0, self.num_samples)
+                self.current_idx = self.rng.integers(0, self.num_samples)
                 
                 # Obtener estado actual
                 state = self._get_state(self.current_idx)

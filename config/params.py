@@ -183,7 +183,7 @@ USE_JAX_MODELS = {
     "jax_a2c": True,
     "jax_a3c": True,
     "jax_ddpg": True,
-    "jax_dqn": False,
+    "jax_dqn": True,
     "jax_ppo": False,
     "jax_sac": False,
     "jax_trpo": False,

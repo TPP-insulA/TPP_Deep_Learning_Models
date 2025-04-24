@@ -11,6 +11,7 @@ from collections import deque
 import random
 from functools import partial
 import matplotlib.pyplot as plt
+import gym
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -68,6 +69,17 @@ class ReplayBuffer:
         """
         self.buffer.append((state, action, reward, next_state, done))
     
+    def __len__(self) -> int:
+        """
+        Retorna la cantidad de transiciones almacenadas.
+        
+        Retorna:
+        --------
+        int
+            Número de transiciones en el buffer
+        """
+        return len(self.buffer)
+
     def sample(self, batch_size: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Muestrea un lote aleatorio de transiciones.
@@ -83,14 +95,9 @@ class ReplayBuffer:
             (states, actions, rewards, next_states, dones)
         """
         if len(self.buffer) < batch_size:
-            # Si no hay suficientes experiencias, muestrear con reemplazo
-            rng = np.random.Generator(np.random.PCG64(42))
-            indices = rng.integers(0, len(self.buffer), size=batch_size)
-            batch = [self.buffer[i] for i in indices]
+            batch = random.sample(self.buffer, len(self.buffer))
         else:
-            # Uso del nuevo método de muestreo con Generator
-            rng = np.random.Generator(np.random.PCG64(42))
-            batch = rng.choice(self.buffer, batch_size, replace=False)
+            batch = random.sample(self.buffer, batch_size)
         
         states, actions, rewards, next_states, dones = zip(*batch)
         
@@ -151,17 +158,16 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         max_priority = max(np.max(self.priorities), 1e-5)
         
         if len(self.buffer) < self.buffer.maxlen:
-            super().add(state, action, reward, next_state, done)
+            self.buffer.append((state, action, reward, next_state, done))
         else:
-            # Reemplazar en posición actual
             self.buffer[self.pos] = (state, action, reward, next_state, done)
         
         self.priorities[self.pos] = max_priority
         self.pos = (self.pos + 1) % self.buffer.maxlen
-    
+
     def sample(self, batch_size: int, beta: float = 0.4) -> Tuple[np.ndarray, np.ndarray, 
-                                                                np.ndarray, np.ndarray, 
-                                                                np.ndarray, List[int], np.ndarray]:
+                                                            np.ndarray, np.ndarray, 
+                                                            np.ndarray, List[int], np.ndarray]:
         """
         Muestrea un lote basado en prioridades.
         
@@ -177,29 +183,26 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[int], np.ndarray]
             (states, actions, rewards, next_states, dones, índices, pesos de importancia)
         """
+        # Crear generador NumPy moderno con semilla fija para reproducibilidad
+        rng = np.random.Generator(np.random.PCG64(42))
+        
         if len(self.buffer) < batch_size:
-            # Si no hay suficientes experiencias, usar todas con reemplazo
-            idx = np.random.Generator(np.random.PCG64(42)).choice(
-                len(self.buffer), batch_size, replace=True).tolist()
+            idx = rng.choice(len(self.buffer), len(self.buffer), replace=False)
         else:
-            # Muestreo basado en prioridades
+            # Muestreo basado en prioridad
             priorities = self.priorities[:len(self.buffer)]
-            probabilities = priorities ** DQN_CONFIG['priority_alpha']
-            probabilities /= np.sum(probabilities)
-            
-            # Muestreo según distribución de probabilidad
-            rng = np.random.Generator(np.random.PCG64(42))
-            idx = rng.choice(len(self.buffer), batch_size, p=probabilities, replace=False).tolist()
+            probabilities = priorities / np.sum(priorities)
+            idx = rng.choice(len(self.buffer), batch_size, replace=False, p=probabilities)
         
         # Extraer batch
         states, actions, rewards, next_states, dones = [], [], [], [], []
         for i in idx:
-            s, a, r, ns, d = self.buffer[i]
-            states.append(s)
-            actions.append(a)
-            rewards.append(r)
-            next_states.append(ns)
-            dones.append(d)
+            state, action, reward, next_state, done = self.buffer[i]
+            states.append(state)
+            actions.append(action)
+            rewards.append(reward)
+            next_states.append(next_state)
+            dones.append(done)
         
         # Calcular pesos de importancia (corrección del sesgo)
         weights = np.zeros(batch_size, dtype=np.float32)
@@ -261,7 +264,7 @@ class QNetwork(nn.Module):
     
     def _get_activation_fn(self, activation_name):
         """
-        Obtiene la función de activación según el nombre.
+        Obtiene la función de activación correspondiente al nombre.
         
         Parámetros:
         -----------
@@ -271,70 +274,75 @@ class QNetwork(nn.Module):
         Retorna:
         --------
         Callable
-            Función de activación correspondiente
+            Función de activación
         """
-        activation_map = {
-            CONST_RELU: nn.relu,
-            CONST_GELU: nn.gelu,
-            CONST_SELU: nn.selu,
-            CONST_TANH: jnp.tanh,
-            CONST_SIGMOID: jax.nn.sigmoid
-        }
-        return activation_map.get(activation_name, nn.relu)
-    
+        if activation_name == CONST_RELU:
+            return nn.relu
+        elif activation_name == CONST_TANH:
+            return nn.tanh
+        elif activation_name == CONST_SIGMOID:
+            return jax.nn.sigmoid
+        elif activation_name == CONST_GELU:
+            return nn.gelu
+        else:
+            return nn.relu  # Por defecto
+
     @nn.compact
-    def __call__(self, x: jnp.ndarray, training: bool = False) -> jnp.ndarray:
+    def __call__(self, inputs: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Aplica la red Q a las entradas.
+        Ejecuta la red Q con las entradas dadas.
         
         Parámetros:
         -----------
-        x : jnp.ndarray
-            Tensor de entrada (estados)
+        inputs : jnp.ndarray
+            Tensor de entrada
         training : bool, opcional
-            Indica si está en modo entrenamiento (default: False)
+            Si es True, habilita dropout (default: False)
             
         Retorna:
         --------
         jnp.ndarray
             Valores Q para cada acción
         """
-        # Default para capas ocultas si no se especifican
-        hidden_units = self.hidden_units or [256, 256]
-        
-        # Obtener función de activación
         activation_fn = self._get_activation_fn(self.activation)
         
-        # Procesar características de estado
+        # Valores predeterminados para capas ocultas si no se especificaron
+        hidden_units = self.hidden_units
+        if hidden_units is None:
+            hidden_units = [64, 64]
+        
+        # Procesamiento del estado
+        x = inputs
+        
+        # Capas ocultas
         for i, units in enumerate(hidden_units):
-            x = nn.Dense(units, name=f'feature_dense_{i}')(x)
-            x = nn.LayerNorm(epsilon=DQN_CONFIG['epsilon'], name=f'feature_ln_{i}')(x)
+            x = nn.Dense(units, name=f'hidden_{i}')(x)
+            x = nn.LayerNorm(epsilon=1e-5, name=f'ln_{i}')(x)
             x = activation_fn(x)
+            
             if self.dropout_rate > 0 and training:
                 x = nn.Dropout(rate=self.dropout_rate, deterministic=not training)(x)
         
-        # Para arquitectura Dueling DQN
+        # Implementación de Dueling Network si está habilitada
         if self.dueling:
-            # Ventaja: un valor por acción
-            advantage = x
-            for i, units in enumerate(hidden_units[-2:]):
-                advantage = nn.Dense(units, name=f'advantage_dense_{i}')(advantage)
-                advantage = activation_fn(advantage)
-            advantage = nn.Dense(self.action_dim, name='advantage')(advantage)
+            # Valor de estado
+            value = nn.Dense(hidden_units[-1] // 2, name='value_hidden')(x)
+            value = activation_fn(value)
+            value = nn.Dense(1, name='value_out')(value)
             
-            # Valor del estado: un valor único
-            value = x
-            for i, units in enumerate(hidden_units[-2:]):
-                value = nn.Dense(units, name=f'value_dense_{i}')(value)
-                value = activation_fn(value)
-            value = nn.Dense(1, name='value')(value)
+            # Ventaja para cada acción
+            advantage = nn.Dense(hidden_units[-1] // 2, name='advantage_hidden')(x)
+            advantage = activation_fn(advantage)
+            advantage = nn.Dense(self.action_dim, name='advantage_out')(advantage)
             
-            # Combinar ventaja y valor (restando la media de ventajas)
-            q_values = value + (advantage - advantage.mean(axis=-1, keepdims=True))
+            # Combinar valor y ventaja para obtener valores Q
+            # Q(s,a) = V(s) + (A(s,a) - mean(A(s)))
+            # Restar la media de ventajas para estabilidad
+            q_values = value + (advantage - jnp.mean(advantage, axis=-1, keepdims=True))
         else:
-            # DQN clásica: predecir valor Q para cada acción
+            # Red Q estándar
             q_values = nn.Dense(self.action_dim, name='q_values')(x)
-            
+        
         return q_values
 
 
@@ -383,6 +391,22 @@ class DQN:
         hidden_units: Optional[List[int]] = None,
         seed: int = 42
     ) -> None:
+        """
+        Inicializa el agente DQN.
+        
+        Parámetros:
+        -----------
+        state_dim : int
+            Dimensión del espacio de estados
+        action_dim : int
+            Dimensión del espacio de acciones
+        config : Optional[Dict[str, Any]], opcional
+            Configuración personalizada (default: None)
+        hidden_units : Optional[List[int]], opcional
+            Unidades en capas ocultas (default: None)
+        seed : int, opcional
+            Semilla para los generadores de números aleatorios (default: 42)
+        """
         # Use provided config or default
         self.config = config or DQN_CONFIG
         
@@ -399,6 +423,7 @@ class DQN:
         self.double = self.config.get('double', False)
         self.prioritized = self.config.get('prioritized', False)
         dropout_rate = self.config.get('dropout_rate', 0.0)
+        activation = self.config.get('activation', CONST_RELU)
         
         # Parámetros del entorno y del modelo
         self.state_dim = state_dim
@@ -431,7 +456,7 @@ class DQN:
             action_dim=action_dim,
             hidden_units=self.hidden_units,
             dueling=dueling,
-            activation=DQN_CONFIG['activation'],
+            activation=activation,
             dropout_rate=dropout_rate
         )
         
@@ -442,6 +467,9 @@ class DQN:
         # Crear optimizador
         tx = optax.adam(learning_rate=learning_rate)
         
+        # Inicializar estado del optimizador
+        opt_state = tx.init(params)
+        
         # Crear estado de entrenamiento
         self.state = DQNTrainState(
             step=0,
@@ -449,6 +477,7 @@ class DQN:
             params=params,
             target_params=params,  # Inicializar target = modelo principal
             tx=tx,
+            opt_state=opt_state,  # Añadir estado del optimizador
             rng=init_rng
         )
         
@@ -473,20 +502,23 @@ class DQN:
         
     def _compile_jitted_functions(self) -> None:
         """
-        Compila versiones JIT de las funciones principales para acelerar la ejecución.
+        Precompila funciones con JIT para mejorar el rendimiento.
         """
-        self.update_target_jit = jax.jit(self._update_target)
+        # Compilar función de paso de entrenamiento
         self.train_step_jit = jax.jit(self._train_step)
         
+        # Compilar función de actualización de target network
+        self.update_target_jit = jax.jit(self._update_target)
+
     def update_target_network(self) -> None:
         """
-        Actualiza los pesos del modelo target con los del modelo principal.
+        Actualiza la red target con los parámetros de la red principal.
         """
         self.state = self.update_target_jit(self.state)
-    
+
     def _update_target(self, state: DQNTrainState) -> DQNTrainState:
         """
-        Actualiza los parámetros target.
+        Función pura para actualizar los parámetros de la red target.
         
         Parámetros:
         -----------
@@ -496,13 +528,13 @@ class DQN:
         Retorna:
         --------
         DQNTrainState
-            Nuevo estado con parámetros target actualizados
+            Estado actualizado con nuevos parámetros target
         """
         return state.replace(target_params=state.params)
-    
+
     def _train_step(self, state: DQNTrainState, 
-                  batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
-                  importance_weights: Optional[jnp.ndarray] = None) -> Tuple[DQNTrainState, jnp.ndarray, jnp.ndarray]:
+              batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray],
+              importance_weights: Optional[jnp.ndarray] = None) -> Tuple[DQNTrainState, jnp.ndarray, jnp.ndarray]:
         """
         Realiza un paso de entrenamiento para actualizar la red Q.
         
@@ -542,7 +574,7 @@ class DQN:
                 # DQN estándar: target Q-network para seleccionar y evaluar
                 next_q_values = state.apply_fn(state.target_params, next_states)
                 next_q_values = jnp.max(next_q_values, axis=1)
-                
+                    
             # Calcular targets usando ecuación de Bellman
             targets = rewards + (1.0 - dones) * self.gamma * next_q_values
             
@@ -572,115 +604,108 @@ class DQN:
     
     def get_action(self, state: np.ndarray, epsilon: float = 0.0) -> int:
         """
-        Obtiene una acción usando la política epsilon-greedy.
+        Selecciona una acción usando política epsilon-greedy.
         
         Parámetros:
         -----------
         state : np.ndarray
-            Estado actual del entorno
+            Estado actual
         epsilon : float, opcional
-            Probabilidad de exploración (0-1) (default: 0.0)
+            Valor de epsilon para exploración (default: 0.0)
             
         Retorna:
         --------
         int
-            Acción seleccionada según la política
+            Acción seleccionada
         """
-        # Dividir clave para exploración
-        self.rng, explore_rng = jax.random.split(self.rng)
+        # Exploración aleatoria
+        if random.random() < epsilon:
+            return random.randint(0, self.action_dim - 1)
         
-        # Exploración
-        if jax.random.uniform(explore_rng) < epsilon:
-            # Explorar: acción aleatoria
-            self.rng, action_rng = jax.random.split(self.rng)
-            return int(jax.random.randint(action_rng, (), 0, self.action_dim))
-        else:
-            # Explotar: mejor acción según la red
-            state_tensor = jnp.array([state], dtype=jnp.float32)
-            q_values = self.q_network.apply(self.state.params, state_tensor)
-            return int(jnp.argmax(q_values[0]))
+        # Explotación: usar la red Q
+        state_tensor = jnp.array([state], dtype=jnp.float32)
+        q_values = self.q_network.apply(self.state.params, state_tensor)
+        return int(jnp.argmax(q_values[0]))
     
     def _sample_batch(self) -> Tuple:
         """
-        Muestrea un lote del buffer de experiencias.
+        Muestrea un lote de experiencias del buffer.
         
         Retorna:
         --------
         Tuple
-            Datos muestreados, según el tipo de buffer
+            Batch de experiencias y datos adicionales para PER si es necesario
         """
         if self.prioritized:
-            (states, actions, rewards, next_states, dones, 
-             indices, importance_weights) = self.replay_buffer.sample(
-                 self.batch_size, self.beta)
+            # Muestreo prioritario
             self.beta = min(1.0, self.beta + self.beta_increment)
+            samples, indices, weights = self.replay_buffer.sample(
+                self.batch_size, beta=self.beta)
             
             # Convertir a JAX arrays
             batch = (
-                jnp.array(states, dtype=jnp.float32),
-                jnp.array(actions, dtype=jnp.int32),
-                jnp.array(rewards, dtype=jnp.float32),
-                jnp.array(next_states, dtype=jnp.float32),
-                jnp.array(dones, dtype=jnp.float32)
+                jnp.array(samples[0], dtype=jnp.float32),
+                jnp.array(samples[1], dtype=np.int32),
+                jnp.array(samples[2], dtype=np.float32),
+                jnp.array(samples[3], dtype=np.float32),
+                jnp.array(samples[4], dtype=np.float32)
             )
-            importance_weights_array = jnp.array(importance_weights, dtype=jnp.float32)
-            return batch, indices, importance_weights_array
+            return batch, indices, jnp.array(weights, dtype=np.float32)
         else:
+            # Muestreo uniforme
             states, actions, rewards, next_states, dones = self.replay_buffer.sample(
                 self.batch_size)
             
             # Convertir a JAX arrays
             batch = (
-                jnp.array(states, dtype=jnp.float32),
-                jnp.array(actions, dtype=jnp.int32),
-                jnp.array(rewards, dtype=jnp.float32),
-                jnp.array(next_states, dtype=jnp.float32),
-                jnp.array(dones, dtype=jnp.float32)
+                jnp.array(states, dtype=np.float32),
+                jnp.array(actions, dtype=np.int32),
+                jnp.array(rewards, dtype=np.float32),
+                jnp.array(next_states, dtype=np.float32),
+                jnp.array(dones, dtype=np.float32)
             )
             return batch, None, None
     
     def _update_model(self, episode_loss: List[float], update_every: int, update_after: int) -> None:
         """
-        Actualiza el modelo si hay suficientes datos y es momento de hacerlo.
+        Actualiza el modelo si hay suficientes experiencias.
         
         Parámetros:
         -----------
         episode_loss : List[float]
-            Lista para almacenar pérdidas del episodio
+            Lista para almacenar pérdidas de la época
         update_every : int
             Frecuencia de actualización (cada cuántos pasos)
         update_after : int
-            Número de pasos antes de empezar a actualizar
+            Pasos antes de comenzar a actualizar
         """
-        # Actualizar sólo si el buffer tiene suficientes datos y es momento de actualizar
-        if len(self.replay_buffer) < self.batch_size or self.update_counter < update_after:
+        # Verificar si hay suficientes experiencias
+        if len(self.replay_buffer) <= update_after:
             return
+        
+        # Actualizar cada 'update_every' pasos
+        if self.update_counter % update_every == 0:
+            # Muestrear batch
+            batch, indices, importance_weights = self._sample_batch()
             
-        if self.update_counter % update_every != 0:
-            self.update_counter += 1
-            return
+            # Actualizar modelo con el batch
+            self.state, loss, td_errors = self.train_step_jit(self.state, batch, importance_weights)
+            episode_loss.append(float(loss))
             
-        # Muestrear batch
-        batch, indices, importance_weights = self._sample_batch()
-        
-        # Actualizar modelo
-        self.state, loss, td_errors = self.train_step_jit(self.state, batch, importance_weights)
-        episode_loss.append(float(loss))
-        
-        # Actualizar métricas acumuladas
-        self.loss_sum += float(loss)
-        # Calcular q_values del batch
-        states, actions = batch[0], batch[1]
-        q_values = self.q_network.apply(self.state.params, states)
-        q_values_selected = q_values[jnp.arange(q_values.shape[0]), actions]
-        self.q_value_sum += float(jnp.mean(q_values_selected))
-        self.updates_count += 1
-        
-        # Actualizar prioridades si es PER
-        if self.prioritized and indices is not None:
-            priorities = np.abs(np.array(td_errors)) + 1e-6
-            self.replay_buffer.update_priorities(indices, priorities)
-                
+            # Actualizar métricas acumuladas
+            self.loss_sum += float(loss)
+            # Calcular q_values del batch
+            states, actions = batch[0], batch[1]
+            q_values = self.q_network.apply(self.state.params, states)
+            q_values_selected = q_values[jnp.arange(q_values.shape[0]), actions]
+            self.q_value_sum += float(jnp.mean(q_values_selected))
+            self.updates_count += 1
+            
+            # Actualizar prioridades si es PER
+            if self.prioritized and indices is not None:
+                priorities = np.abs(np.array(td_errors)) + 1e-6
+                self.replay_buffer.update_priorities(indices, priorities)
+    
         # Actualizar target network periódicamente
         if self.update_counter % self.target_update_freq == 0 and self.update_counter > 0:
             self.update_target_network()
@@ -688,35 +713,36 @@ class DQN:
         self.update_counter += 1
     
     def _run_episode(self, env: Any, max_steps: int, render: bool, 
-                   update_every: int, update_after: int) -> Tuple[float, List[float]]:
+               update_every: int, update_after: int) -> Tuple[float, List[float]]:
         """
-        Ejecuta un episodio completo de entrenamiento.
+        Ejecuta un episodio completo.
         
         Parámetros:
         -----------
         env : Any
-            Entorno donde ejecutar el episodio
+            Entorno de interacción
         max_steps : int
-            Pasos máximos por episodio
+            Máximo número de pasos por episodio
         render : bool
-            Si se debe renderizar el entorno
+            Si renderizar el entorno
         update_every : int
-            Frecuencia de actualización del modelo
+            Frecuencia de actualización
         update_after : int
-            Pasos antes de empezar a actualizar la red
+            Pasos antes de comenzar a actualizar
             
         Retorna:
         --------
         Tuple[float, List[float]]
-            (episode_reward, episode_loss)
+            (recompensa_total, pérdidas)
         """
         state, _ = env.reset()
         state = np.array(state, dtype=np.float32)
+        
         episode_reward = 0.0
         episode_loss = []
         
         for _ in range(max_steps):
-            # Seleccionar acción
+            # Seleccionar acción con política epsilon-greedy
             action = self.get_action(state, self.epsilon)
             
             # Ejecutar acción
@@ -736,73 +762,65 @@ class DQN:
             
             # Actualizar modelo
             self._update_model(episode_loss, update_every, update_after)
-            
+
             if done:
                 break
                 
         return episode_reward, episode_loss
     
     def _update_history(self, history: Dict, episode_reward: float, episode_loss: List[float], 
-                      episode_reward_history: List[float], log_interval: int) -> List[float]:
+                  episode_reward_history: List[float], log_interval: int) -> List[float]:
         """
-        Actualiza el historial de entrenamiento con los resultados del episodio.
+        Actualiza el historial de entrenamiento.
         
         Parámetros:
         -----------
         history : Dict
-            Diccionario de historial a actualizar
+            Diccionario con historial del entrenamiento
         episode_reward : float
-            Recompensa obtenida en el episodio
+            Recompensa del episodio actual
         episode_loss : List[float]
-            Lista de pérdidas durante el episodio
+            Lista de pérdidas del episodio
         episode_reward_history : List[float]
-            Historial de recompensas para cálculos de promedio
+            Historial de recompensas para seguimiento
         log_interval : int
-            Intervalo para limitar el tamaño del historial
+            Intervalo para guardar promedio de recompensa
             
         Retorna:
         --------
         List[float]
             Historial de recompensas actualizado
         """
-        # Guardar recompensa
-        history['episode_rewards'].append(float(episode_reward))
+        # Añadir recompensa al historial
+        history['episode_rewards'].append(episode_reward)
         
-        # Guardar epsilon
-        history['epsilons'].append(float(self.epsilon))
+        # Añadir pérdida media del episodio al historial
+        avg_loss = np.mean(episode_loss) if episode_loss else 0.0
+        history['losses'].append(avg_loss)
         
-        # Guardar pérdida media si hay actualizaciones
-        if episode_loss:
-            history['losses'].append(float(np.mean(episode_loss)))
-        else:
-            history['losses'].append(0.0)
-            
-        # Calcular y guardar promedio del valor Q
-        if self.updates_count > 0:
-            avg_q_value = self.q_value_sum / self.updates_count
-            self.q_value_sum = 0.0
-            self.updates_count = 0
-        else:
-            avg_q_value = 0.0
-            
+        # Añadir epsilon actual al historial
+        history['epsilons'].append(self.epsilon)
+        
+        # Añadir valores Q medios al historial
+        avg_q_value = self.q_value_sum / max(1, self.updates_count)
         history['avg_q_values'].append(avg_q_value)
         
-        # Actualizar epsilon (decaimiento)
+        # Actualizar epsilon con decay
         self.epsilon = max(
             self.epsilon_end, 
             self.epsilon * self.epsilon_decay
         )
         
-        # Guardar últimas recompensas para promedio
+        # Actualizar historial de recompensas para seguimiento
         episode_reward_history.append(episode_reward)
         if len(episode_reward_history) > log_interval:
-            episode_reward_history.pop(0)
-            
+            episode_reward_history = episode_reward_history[-log_interval:]
+        
         return episode_reward_history
     
     def train(self, env: Any, episodes: int = 1000, max_steps: int = 1000, 
-             update_after: int = 1000, update_every: int = 4, 
-             render: bool = False, log_interval: int = 10) -> Dict:
+         update_after: int = 1000, update_every: int = 4, 
+         render: bool = False, log_interval: int = 10) -> Dict:
         """
         Entrena el agente DQN en un entorno dado.
         
@@ -858,7 +876,7 @@ class DQN:
                 if avg_reward > best_reward:
                     best_reward = avg_reward
                     print(f"Nuevo mejor modelo con recompensa: {best_reward:.2f}")
-        
+    
         return history
     
     def evaluate(self, env: Any, episodes: int = 10, render: bool = False) -> float:
@@ -1031,12 +1049,12 @@ class DQNWrapper:
         other_features_shape: Tuple[int, ...],
     ) -> None:
         """
-        Inicializa el wrapper DQN.
+        Inicializa el wrapper para DQN.
         
         Parámetros:
         -----------
         dqn_agent : DQN
-            Agente DQN a encapsular
+            Agente DQN inicializado
         cgm_shape : Tuple[int, ...]
             Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
@@ -1045,82 +1063,73 @@ class DQNWrapper:
         self.dqn_agent = dqn_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
+        self.rng_key = jax.random.PRNGKey(42)
         
-        # Inicializar generador de números aleatorios
-        self.key = jax.random.PRNGKey(42)
-        
-        # Configurar funciones de codificación para entradas
+        # Configurar codificadores para procesar entradas
         self._setup_encoders()
-        
-        # Historial de entrenamiento
-        self.history = {
-            'loss': [],
-            'val_loss': [],
-            'losses': [],
-            'episode_rewards': []
-        }
-    
+
     def _setup_encoders(self) -> None:
         """
-        Configura las funciones de codificación para procesar las entradas.
+        Configura codificadores para procesar entradas CGM y otras características.
         """
-        # Calcular dimensiones de entrada aplanadas
-        cgm_dim = np.prod(self.cgm_shape[1:])
-        other_dim = np.prod(self.other_features_shape[1:])
+        # Inicializar pesos aleatorios para encoders simples
+        cgm_encoder_shape = (np.prod(self.cgm_shape),)
+        other_encoder_shape = (np.prod(self.other_features_shape),)
         
-        # Inicializar matrices de transformación
-        self.key, key_cgm, key_other = jax.random.split(self.key, 3)
+        self.rng_key, cgm_key, other_key = jax.random.split(self.rng_key, 3)
         
-        # Crear matrices de proyección para la codificación de entradas
-        self.cgm_weight = jax.random.normal(key_cgm, (cgm_dim, self.dqn_agent.state_dim // 2))
-        self.other_weight = jax.random.normal(key_other, (other_dim, self.dqn_agent.state_dim // 2))
+        # Pesos aleatorios para codificadores simples
+        self.cgm_encoder_weights = jax.random.normal(
+            cgm_key, 
+            shape=cgm_encoder_shape
+        )
         
-        # JIT-compilar transformaciones para mayor rendimiento
-        self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
-        self.encode_other = jax.jit(self._create_encoder_fn(self.other_weight))
-    
+        self.other_encoder_weights = jax.random.normal(
+            other_key, 
+            shape=other_encoder_shape
+        )
+
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación para transformar entradas.
+        Crea una función de codificación simple.
         
         Parámetros:
         -----------
         weights : jnp.ndarray
-            Pesos de la transformación
+            Pesos del codificador
             
         Retorna:
         --------
         Callable
             Función de codificación
         """
-        def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
-            # Aplanar entrada
-            flat_x = x.reshape(x.shape[0], -1)
-            # Transformar a espacio de estados
-            encoded = jnp.tanh(jnp.matmul(flat_x, weights))
-            return encoded
-        return encode_fn
+        def encoder_fn(x):
+            # Simplemente aplana y normaliza la entrada
+            x_flat = x.reshape((x.shape[0], -1))
+            return x_flat / (jnp.linalg.norm(x_flat, axis=1, keepdims=True) + 1e-5)
+        
+        return encoder_fn
     
     def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Realiza una predicción usando el modelo DQN.
+        Predice con el modelo DQN.
         
         Parámetros:
         -----------
         cgm_input : jnp.ndarray
             Datos CGM de entrada
         other_input : jnp.ndarray
-            Otras características de entrada
+            Otras características
         training : bool, opcional
-            Indica si está en modo entrenamiento (default: False)
+            Modo de entrenamiento (default: False)
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis
+            Predicciones del modelo
         """
         return self.predict([cgm_input, other_input])
-    
+
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
         Realiza predicciones con el modelo.
@@ -1128,36 +1137,40 @@ class DQNWrapper:
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_input, other_input]
+            Lista de entradas [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis
+            Predicciones del modelo
         """
-        cgm_input, other_input = inputs
+        cgm_data, other_features = inputs
         
-        # Codificar entradas a espacio de estado
-        cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
-        other_encoded = self.encode_other(jnp.array(other_input))
+        # Codificar entradas
+        cgm_encoder = self._create_encoder_fn(self.cgm_encoder_weights)
+        other_encoder = self._create_encoder_fn(self.other_encoder_weights)
         
-        # Concatenar codificaciones
-        states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+        cgm_encoded = cgm_encoder(cgm_data)
+        other_encoded = other_encoder(other_features)
         
-        # Convertir a dosis usando política DQN (sin exploración)
-        batch_size = states.shape[0]
-        actions = np.zeros((batch_size, 1))
+        # Combinar características
+        combined_features = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
         
-        # Para cada muestra en el batch, obtener acción determinística
-        for i in range(batch_size):
-            state = np.array(states[i])
-            # Usar DQN para obtener acción sin exploración
-            action = self.dqn_agent.get_action(state, epsilon=0.0)
-            # Convertir índice discreto a valor continuo de dosis (0-15 unidades)
-            action_value = action / (self.dqn_agent.action_dim - 1) * 15.0
-            actions[i, 0] = action_value
-            
-        return actions
+        # Usar red Q para predecir valores
+        q_values = self.dqn_agent.q_network.apply(
+            self.dqn_agent.state.params, 
+            combined_features
+        )
+        
+        # Tomar acción con mayor valor Q
+        actions = jnp.argmax(q_values, axis=1)
+        
+        # Convertir a predicciones continuas (dosis)
+        # Suponiendo que actions son discretizaciones de 0 a 15 unidades
+        max_dose = 15.0
+        doses = (actions.astype(jnp.float32) / self.dqn_agent.action_dim) * max_dose
+        
+        return doses.reshape(-1, 1)
     
     def fit(
         self, 
@@ -1170,69 +1183,45 @@ class DQNWrapper:
         verbose: int = 0
     ) -> Dict:
         """
-        Entrena el modelo DQN con los datos proporcionados.
+        Entrena el modelo con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[jnp.ndarray]
-            Lista con [cgm_input, other_input]
+            Lista de entradas [cgm_data, other_features]
         y : jnp.ndarray
-            Valores objetivo de dosis
+            Valores objetivo (dosis)
         validation_data : Optional[Tuple], opcional
-            Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
+            Datos de validación (default: None)
         epochs : int, opcional
-            Número de episodios de entrenamiento (default: 1)
+            Número de épocas (default: 1)
         batch_size : int, opcional
-            Tamaño del lote (default: 32)
+            Tamaño de lote (default: 32)
         callbacks : List, opcional
-            Lista de callbacks (default: None)
+            Callbacks para el entrenamiento (default: None)
         verbose : int, opcional
-            Nivel de verbosidad (default: 0)
+            Nivel de detalle de los logs (default: 0)
             
         Retorna:
         --------
         Dict
             Historia del entrenamiento
         """
-        if verbose > 0:
-            print("Entrenando modelo DQN...")
-            
-        # Crear entorno simulado para RL a partir de los datos
+        # Crear entorno de entrenamiento a partir de los datos
         env = self._create_training_environment(x[0], x[1], y)
         
         # Entrenar el agente DQN
-        training_history = self.dqn_agent.train(
+        history = self.dqn_agent.train(
             env=env,
             episodes=epochs,
             max_steps=batch_size,
-            update_after=min(1000, batch_size // 2),
-            update_every=1,
+            update_after=min(500, len(y)),
+            update_every=4,
             render=False,
-            log_interval=max(1, epochs // 10) if verbose > 0 else epochs + 1
+            log_interval=max(1, epochs // 10)
         )
         
-        # Actualizar historial con métricas del entrenamiento
-        self.history['losses'].extend(training_history.get('losses', []))
-        self.history['episode_rewards'].extend(training_history.get('episode_rewards', []))
-        
-        # Calcular pérdida en datos de entrenamiento
-        train_preds = self.predict(x)
-        train_loss = float(np.mean((train_preds.flatten() - y) ** 2))
-        self.history['loss'].append(train_loss)
-        
-        # Evaluar en datos de validación si se proporcionan
-        if validation_data:
-            val_x, val_y = validation_data
-            val_preds = self.predict(val_x)
-            val_loss = float(np.mean((val_preds.flatten() - val_y) ** 2))
-            self.history['val_loss'].append(val_loss)
-        
-        if verbose > 0:
-            print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
-            if validation_data:
-                print(f"Pérdida de validación: {val_loss:.4f}")
-        
-        return self.history
+        return history
     
     def _create_training_environment(
         self, 
@@ -1241,7 +1230,7 @@ class DQNWrapper:
         targets: jnp.ndarray
     ) -> Any:
         """
-        Crea un entorno de entrenamiento personalizado basado en los datos.
+        Crea un entorno que simula un problema de dosificación de insulina.
         
         Parámetros:
         -----------
@@ -1250,86 +1239,73 @@ class DQNWrapper:
         other_features : jnp.ndarray
             Otras características
         targets : jnp.ndarray
-            Valores objetivo de dosis
+            Valores objetivo (dosis reales)
             
         Retorna:
         --------
         Any
-            Entorno de entrenamiento
+            Entorno simulado para entrenamiento
         """
-        class InsulinDosingEnv:
-            """Entorno personalizado para problema de dosificación de insulina."""
-            
-            def __init__(self, cgm, features, targets, model_wrapper):
-                self.cgm = np.array(cgm)
-                self.features = np.array(features)
-                self.targets = np.array(targets)
-                self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+        # Definir clase de entorno personalizado
+        class InsulinEnv:
+            def __init__(self, cgm, other, targets):
+                self.cgm = cgm
+                self.other = other
+                self.targets = targets
                 self.current_idx = 0
-                self.max_idx = len(targets) - 1
+                self.data_size = len(targets)
+                self.max_dose = 15.0  # Dosis máxima en unidades
+                self.action_space = gym.spaces.Discrete(20)  # 20 niveles discretos
                 
-                # Para compatibilidad con algoritmos RL
-                self.observation_space = SimpleNamespace(
-                    shape=(model_wrapper.dqn_agent.state_dim,),
-                    low=-np.ones(model_wrapper.dqn_agent.state_dim) * 10,
-                    high=np.ones(model_wrapper.dqn_agent.state_dim) * 10
-                )
-                
-                self.action_space = SimpleNamespace(
-                    shape=(1,),
-                    n=model_wrapper.dqn_agent.action_dim,
-                    sample=self._sample_action
+                # Espacio de estados: combinación de CGM y otras características
+                cgm_flat_dim = np.prod(cgm.shape[1:])
+                other_flat_dim = np.prod(other.shape[1:])
+                self.observation_space = gym.spaces.Box(
+                    low=-np.inf, 
+                    high=np.inf, 
+                    shape=(cgm_flat_dim + other_flat_dim,)
                 )
             
-            def _sample_action(self):
-                """Muestrea una acción aleatoria del espacio discreto."""
-                return self.rng.integers(0, self.action_space.n)
-                
-            def reset(self):
-                """Reinicia el entorno eligiendo un ejemplo aleatorio."""
-                self.current_idx = self.rng.integers(0, self.max_idx)
-                state = self._get_state()
-                return state, {}
-            
-            def step(self, action):
-                """Ejecuta un paso con la acción dada."""
-                # Convertir acción discreta a dosis continua
-                dose = action / (self.model.dqn_agent.action_dim - 1) * 15.0
-                
-                # Calcular recompensa como negativo del error absoluto
-                target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
-                
-                # Avanzar al siguiente ejemplo
-                self.current_idx = (self.current_idx + 1) % self.max_idx
-                
-                # Obtener próximo estado
-                next_state = self._get_state()
-                
-                # Episodio siempre termina después de un paso
-                done = True
-                truncated = False
-                
-                return next_state, reward, done, truncated, {}
+            def reset(self, seed=None):
+                rng = np.random.default_rng(seed)
+                self.current_idx = rng.integers(0, self.data_size)
+                return self._get_state(), {}
             
             def _get_state(self):
-                """Obtiene el estado codificado para el ejemplo actual."""
-                # Obtener datos actuales
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
+                # Obtener y combinar características
+                cgm_state = self.cgm[self.current_idx].flatten()
+                other_state = self.other[self.current_idx].flatten()
+                return np.concatenate([cgm_state, other_state])
+            
+            def step(self, action):
+                # Convertir acción discreta a dosis
+                dose = (action / self.action_space.n) * self.max_dose
                 
-                # Codificar a espacio de estado
-                cgm_encoded = self.model.encode_cgm(jnp.array(cgm_batch))
-                other_encoded = self.model.encode_other(jnp.array(features_batch))
+                # Calcular recompensa (negativo del error absoluto)
+                target_dose = self.targets[self.current_idx]
+                error = np.abs(dose - target_dose)
+                reward = -error  # Recompensa negativa por error
                 
-                # Combinar características
-                state = np.concatenate([cgm_encoded[0], other_encoded[0]])
+                # Avanzar a la siguiente muestra
+                self.current_idx = (self.current_idx + 1) % self.data_size
                 
-                return state
+                # Obtener nuevo estado
+                next_state = self._get_state()
+                
+                # Siempre done=False para entrenar continuamente
+                done = False
+                
+                return next_state, float(reward), done, False, {}
+            
+            def render(self):
+                pass
+                
+        # Convertir a numpy para usar con el entorno
+        cgm_np = np.array(cgm_data)
+        other_np = np.array(other_features)
+        targets_np = np.array(targets).flatten()
         
-        # Crear y devolver el entorno
-        return InsulinDosingEnv(cgm_data, other_features, targets, self)
+        return InsulinEnv(cgm_np, other_np, targets_np)
     
     def save(self, filepath: str) -> None:
         """
@@ -1426,12 +1402,15 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=42
     )
     
-    # Crear y devolver wrapper
-    return DRLModelWrapper(
+    # Crear wrapper para DQN
+    dqn_wrapper = DQNWrapper(
         dqn_agent=dqn_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Envolver en DRLModelWrapper para compatibilidad con el sistema
+    return DRLModelWrapper(lambda **kwargs: dqn_wrapper, algorithm="dqn")
 
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
