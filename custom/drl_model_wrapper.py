@@ -1,4 +1,5 @@
 from custom.model_wrapper import ModelWrapper
+from custom.printer import print_info
 from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 import numpy as np
@@ -287,7 +288,7 @@ class DRLModelWrapperTF(ModelWrapper):
         
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -305,6 +306,8 @@ class DRLModelWrapperTF(ModelWrapper):
             Número de épocas de entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso, 2=detallado)
             
         Retorna:
         --------
@@ -1026,7 +1029,7 @@ class DRLModelWrapperJAX(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -1044,6 +1047,8 @@ class DRLModelWrapperJAX(ModelWrapper):
             Número de épocas de entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso, 2=detallado)
             
         Retorna:
         --------
@@ -1072,7 +1077,7 @@ class DRLModelWrapperJAX(ModelWrapper):
                 self.params or self.state or self.states,
                 x_cgm_arr, x_other_arr, y_arr,
                 (x_cgm_val_arr, x_other_val_arr, y_val_arr) if x_cgm_val is not None else None,
-                epochs, batch_size
+                epochs, batch_size, verbose=verbose
             )
         
         # Inicializar buffer si es necesario
@@ -1273,7 +1278,7 @@ class DRLModelWrapper(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -1291,13 +1296,20 @@ class DRLModelWrapper(ModelWrapper):
             Número de épocas de entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso, 2=detallado)
             
         Retorna:
         --------
         Dict[str, List[float]]
             Historial de entrenamiento con métricas
         """
-        return self.wrapper.train(x_cgm, x_other, y, validation_data, epochs, batch_size)
+        if verbose > 0:
+            print_info(f"Entrenando modelo {self.wrapper.algorithm} en {self.framework}...")
+            print_info(f"Épocas: {epochs}, Batch size: {batch_size}, Ejemplos: {len(y)}")
+        
+        # Delegar el entrenamiento al wrapper específico con el nivel de verbosidad
+        return self.wrapper.train(x_cgm, x_other, y, validation_data, epochs, batch_size, verbose=verbose)
     
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
         """

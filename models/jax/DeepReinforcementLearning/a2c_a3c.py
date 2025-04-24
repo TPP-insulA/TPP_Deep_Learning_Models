@@ -9,6 +9,7 @@ from flax.training import train_state
 from typing import Tuple, Dict, List, Any, Optional, Union, Callable, Sequence
 import threading
 from functools import partial
+from tqdm import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -55,43 +56,51 @@ class ActorCriticModel(nn.Module):
         if self.hidden_units is None:
             self.hidden_units = A2C_A3C_CONFIG['hidden_units']
         
-        # Capas compartidas para procesamiento de estados
-        self.shared_layers = []
-        for i, units in enumerate(self.hidden_units[:2]):
-            self.shared_layers.append((
-                nn.Dense(units, name=f'shared_dense_{i}'),
-                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}'),
-                nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')
-            ))
+        # # Inicializamos con listas vacías
+        # shared_layers = []
+        # actor_layers = []
+        # critic_layers = []
         
-        # Red del Actor (política)
-        self.actor_layers = []
-        for i, units in enumerate(self.hidden_units[2:]):
-            self.actor_layers.append((
-                nn.Dense(units, name=f'actor_dense_{i}'),
-                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')
-            ))
+        # # Capas compartidas para procesamiento de estados
+        # for i, units in enumerate(self.hidden_units[:2]):
+        #     shared_layers.append((
+        #         nn.Dense(units, name=f'shared_dense_{i}'),
+        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}'),
+        #         nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')
+        #     ))
         
-        # Capas de salida del actor (depende de si el espacio de acción es continuo o discreto)
-        if self.continuous:
-            # Para acción continua (política gaussiana)
-            self.mu = nn.Dense(self.action_dim, name='actor_mu')
-            self.log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')
-        else:
-            # Para acción discreta (política categórica)
-            self.logits = nn.Dense(self.action_dim, name='actor_logits')
+        # # Red del Actor (política)
+        # for i, units in enumerate(self.hidden_units[2:]):
+        #     actor_layers.append((
+        #         nn.Dense(units, name=f'actor_dense_{i}'),
+        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')
+        #     ))
         
-        # Red del Crítico (valor)
-        self.critic_layers = []
-        for i, units in enumerate(self.hidden_units[2:]):
-            self.critic_layers.append((
-                nn.Dense(units, name=f'critic_dense_{i}'),
-                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')
-            ))
+        # # Red del Crítico (valor)
+        # for i, units in enumerate(self.hidden_units[2:]):
+        #     critic_layers.append((
+        #         nn.Dense(units, name=f'critic_dense_{i}'),
+        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')
+        #     ))
         
-        # Capa de salida del crítico (valor del estado)
-        self.value = nn.Dense(1, name='critic_value')
+        # # Asignar las listas completas
+        # self.shared_layers = shared_layers
+        # self.actor_layers = actor_layers
+        # self.critic_layers = critic_layers
+        
+        # # Capas de salida del actor (depende de si el espacio de acción es continuo o discreto)
+        # if self.continuous:
+        #     # Para acción continua (política gaussiana)
+        #     self.mu = nn.Dense(self.action_dim, name='actor_mu')
+        #     self.log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')
+        # else:
+        #     # Para acción discreta (política categórica)
+        #     self.logits = nn.Dense(self.action_dim, name='actor_logits')
+        
+        # # Capa de salida del crítico (valor del estado)
+        # self.value = nn.Dense(1, name='critic_value')
 
+    @nn.compact
     def __call__(self, inputs: jnp.ndarray, training: bool = False, 
                 rngs: Optional[Dict[str, jnp.ndarray]] = None) -> Tuple[Any, jnp.ndarray]:
         """
@@ -112,41 +121,42 @@ class ActorCriticModel(nn.Module):
             (política, valor) - la política puede ser una tupla (mu, sigma) o logits
         """
         x = inputs
-        dropout_rng = None if rngs is None else rngs.get('dropout')
+        dropout_rng = None if rngs is None else rngs.get(CONST_DROPOUT)
         
         # Capas compartidas
-        for dense, layer_norm, dropout in self.shared_layers:
-            x = dense(x)
+        for i, units in enumerate(self.hidden_units[:2]):
+            x = nn.Dense(units, name=f'shared_dense_{i}')(x)
             x = jnp.tanh(x)
-            x = layer_norm(x)
-            x = dropout(x, deterministic=not training, rng=dropout_rng)
+            x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}')(x)
+            x = nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')(
+                x, deterministic=not training, rng=dropout_rng)
         
-        # Red del Actor
+        # Actor network
         actor_x = x
-        for dense, layer_norm in self.actor_layers:
-            actor_x = dense(actor_x)
+        for i, units in enumerate(self.hidden_units[2:]):
+            actor_x = nn.Dense(units, name=f'actor_dense_{i}')(actor_x)
             actor_x = jnp.tanh(actor_x)
-            actor_x = layer_norm(actor_x)
+            actor_x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')(actor_x)
         
-        # Salida del actor según el tipo de política
+        # Salida del actor
         if self.continuous:
-            mu = self.mu(actor_x)
-            log_sigma = self.log_sigma(actor_x)
-            log_sigma = jnp.clip(log_sigma, -20.0, 2.0)  # Evitar valores extremos
+            mu = nn.Dense(self.action_dim, name='actor_mu')(actor_x)
+            log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')(actor_x)
+            log_sigma = jnp.clip(log_sigma, -20.0, 2.0)
             sigma = jnp.exp(log_sigma)
             policy = (mu, sigma)
         else:
-            logits = self.logits(actor_x)
+            logits = nn.Dense(self.action_dim, name='actor_logits')(actor_x)
             policy = logits
         
-        # Red del Crítico
+        # Crítico (valor)
         critic_x = x
-        for dense, layer_norm in self.critic_layers:
-            critic_x = dense(critic_x)
+        for i, units in enumerate(self.hidden_units[2:]):
+            critic_x = nn.Dense(units, name=f'critic_dense_{i}')(critic_x)
             critic_x = jnp.tanh(critic_x)
-            critic_x = layer_norm(critic_x)
+            critic_x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')(critic_x)
         
-        value = self.value(critic_x)
+        value = nn.Dense(1, name='critic_value')(critic_x)
         
         return policy, value
 
@@ -387,7 +397,7 @@ class A2C:
         
         Parámetros:
         -----------
-        state : a2c_train_state
+        state : A2CTrainState
             Estado actual del entrenamiento
         states : jnp.ndarray
             Estados observados en el entorno
@@ -400,44 +410,41 @@ class A2C:
             
         Retorna:
         --------
-        Tuple[a2c_train_state, Dict]
+        Tuple[A2CTrainState, Dict]
             Nuevo estado de entrenamiento y métricas
         """
+        # Función para calcular la pérdida y gradientes
         def loss_fn(params):
-            # Evaluar acciones con el modelo actual
+            # Obtener log_probs, valores y entropía de las acciones tomadas
             log_probs, values, entropy = self.model.evaluate_actions(params, states, actions)
             
-            # Ventaja ya está calculada externamente
-            advantages_flat = advantages.reshape(-1)
+            # Calcular pérdida de la política (actor)
+            policy_loss = -jnp.mean(log_probs * advantages)
             
-            # Calcular pérdida de política
-            policy_loss = -jnp.mean(log_probs * advantages_flat, axis=0)
+            # Calcular pérdida del valor (crítico)
+            value_loss = jnp.mean(jnp.square(returns - values))
             
-            # Calcular pérdida de valor
-            value_pred = values.reshape(-1)
-            returns_flat = returns.reshape(-1)
-            value_loss = jnp.mean(jnp.square(returns_flat - value_pred), axis=0)
+            # Calcular pérdida de entropía para promover exploración
+            entropy_loss = -jnp.mean(entropy)
             
-            # Calcular pérdida de entropía (regularización)
-            entropy_loss = -jnp.mean(entropy, axis=0)
-            
-            # Pérdida total combinada
+            # Pérdida total ponderada
             total_loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
             
+            # Devolver pérdida total y componentes individuales
             return total_loss, (policy_loss, value_loss, entropy_loss)
         
         # Calcular pérdida y gradientes
         grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
         (total_loss, (policy_loss, value_loss, entropy_loss)), grads = grad_fn(state.params)
         
-        # Recortar gradientes si es necesario
-        if self.max_grad_norm is not None:
+        # Recortar gradientes para estabilidad
+        if self.max_grad_norm > 0:
             grads = optax.clip_by_global_norm(grads, self.max_grad_norm)
         
         # Actualizar parámetros
         new_state = state.apply_gradients(grads=grads)
         
-        # Actualizar métricas
+        # Crear diccionario de métricas
         metrics = {
             "policy_loss": policy_loss,
             "value_loss": value_loss,
@@ -665,12 +672,15 @@ class A2C:
             history['episode_rewards'].extend(episode_rewards)
             avg_reward = np.mean(episode_rewards)
             
-            # Mostrar progreso cada 10 épocas
-            if (epoch + 1) % 10 == 0:
-                print(f"Epoch {epoch+1}/{epochs} - Avg Reward: {avg_reward:.2f}, "
-                      f"Policy Loss: {policy_loss:.4f}, Value Loss: {value_loss:.4f}")
+            # Mostrar progreso en cada época para mejor visibilidad
+            print(f"Época {epoch+1}/{epochs} - Recompensa media: {avg_reward:.2f}, "
+                  f"P. política: {policy_loss:.4f}, P. valor: {value_loss:.4f}")
             
             return []  # Resetear lista de recompensas
+        
+        # Si no hay nuevos episodios completos, mostrar al menos el progreso
+        if (epoch + 1) % 5 == 0:
+            print(f"Época {epoch+1}/{epochs} - P. política: {policy_loss:.4f}, P. valor: {value_loss:.4f}")
         
         return episode_rewards
 
@@ -860,6 +870,7 @@ class A3C(A2C):
             worker = self.create_worker(env_fn, i)
             worker.rng = worker_rng
             workers.append(worker)
+            print(f"Worker {i} inicializado")
         
         # Variables para seguimiento de recompensas y pérdidas
         history = {
@@ -872,12 +883,20 @@ class A3C(A2C):
         # Lock para proteger el acceso concurrente al modelo global
         model_lock = threading.Lock()
         
+        progress = tqdm(total=total_steps, desc="Progreso A3C global")
+        self.progress_counter = 0
+        
+        def update_progress(steps_completed):
+            with model_lock:
+                self.progress_counter += steps_completed
+                progress.update(steps_completed)
+        
         # Crear e iniciar hilos
         threads = []
         for worker in workers:
             thread = threading.Thread(
                 target=worker.train,
-                args=(n_steps, total_steps // self.n_workers, history, model_lock, render)
+                args=(n_steps, total_steps // self.n_workers, history, model_lock, render, update_progress)
             )
             threads.append(thread)
             thread.daemon = True  # Terminar hilos cuando el programa principal termina
@@ -886,6 +905,9 @@ class A3C(A2C):
         # Esperar a que terminen todos los hilos
         for thread in threads:
             thread.join()
+        
+        progress.close()
+        print(f"Entrenamiento A3C completado. {len(history['episode_rewards'])} episodios finalizados.")
         
         return history
 
@@ -1233,7 +1255,7 @@ class A3CWorker:
         self.update_local_model()
     
     def train(self, n_steps: int, max_steps: int, shared_history: Dict, 
-             model_lock: threading.Lock, render: bool = False) -> None:
+             model_lock: threading.Lock, render: bool = False, update_progress: Optional[Callable] = None, verbose: int = 1) -> None:
         """
         Entrenamiento asíncrono del trabajador.
         
@@ -1249,6 +1271,8 @@ class A3CWorker:
             Lock para proteger acceso al modelo global
         render : bool, opcional
             Si se debe renderizar el entorno
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso, 2=detallado)
         """
         # Estado inicial
         state, _ = self.env.reset()
@@ -1292,6 +1316,10 @@ class A3CWorker:
                 self._update_model_with_collected_data(
                     states, actions, rewards, dones, values, done, state, shared_history, model_lock
                 )
+            
+            # Actualizar progreso global
+            if update_progress:
+                update_progress(n_steps)
 
 class A2CWrapper:
     """
@@ -1341,9 +1369,16 @@ class A2CWrapper:
         """
         Configura las funciones de codificación para procesar las entradas.
         """
-        # Calcular dimensiones de características aplanadas
-        cgm_dim = np.prod(self.cgm_shape[1:])
-        other_dim = np.prod(self.other_features_shape[1:])
+        # Calcular dimensiones de características aplanadas asegurando que sean enteros
+        if len(self.cgm_shape) > 1:
+            cgm_dim = int(np.prod(self.cgm_shape[1:]))
+        else:
+            cgm_dim = int(self.cgm_shape[0])
+        
+        if len(self.other_features_shape) > 1:
+            other_dim = int(np.prod(self.other_features_shape[1:]))
+        else:
+            other_dim = int(self.other_features_shape[0])
         
         # Inicializar matrices de transformación
         self.key, key_cgm, key_other = jax.random.split(self.key, 3)
@@ -1393,57 +1428,58 @@ class A2CWrapper:
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo A2C.
+        Realiza predicciones usando el modelo entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones del modelo (dosis de insulina)
         """
-        # Obtener entradas
-        cgm_data, other_features = inputs
+        # Preparar las entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
         
-        # Convertir a arrays de JAX si no lo son
-        cgm_data = jnp.array(cgm_data)
-        other_features = jnp.array(other_features)
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
         
-        # Codificar entradas a estado
-        cgm_encoded = self.encode_cgm(cgm_data)
-        other_encoded = self.encode_other(other_features)
-        states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+        # Inicializar array de acciones
+        actions = np.zeros((batch_size, 1), dtype=np.float32)
         
-        # Obtener acciones usando el agente A2C (modo determinístico para predicciones)
-        batch_size = states.shape[0]
-        actions = np.zeros((batch_size, 1))
-        
-        # Para cada muestra en el batch, obtener acción determinística
+        # Procesar cada muestra del batch
         for i in range(batch_size):
-            state = np.array(states[i])
-            # Usar PRNG key para cada predicción
-            self.key, action_key = jax.random.split(self.key)
-            # Obtener acción determinística
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
+            
+            # Codificar estado
+            state = self._encode_state(cgm_sample, other_sample)
+            
+            # Obtener acción determinística (para predicción)
             action, _ = self.a2c_agent.model.get_action(
-                self.a2c_agent.state.params, 
-                state, 
-                action_key,
+                self.a2c_agent.state.params,
+                state,
+                self.a2c_agent.rng,
                 deterministic=True
             )
             
-            # Convertir a dosis de insulina (asumiendo espacio continuo)
-            if self.a2c_agent.model.continuous:
+            # Convertir a valor de dosis (asumiendo espacio continuo)
+            if self.a2c_agent.continuous:
                 action_value = action[0]  # Acción ya continua
             else:
                 # Para acciones discretas, convertir índice a valor continuo
-                # Asumiendo 20 niveles discretos que mapean a 0-15 unidades
-                action_value = action / (self.a2c_agent.model.action_dim - 1) * 15.0
+                action_value = action / (self.a2c_agent.action_dim - 1) * 15.0
                 
             actions[i, 0] = action_value
-            
+        
         return actions
     
     def fit(
@@ -1457,49 +1493,64 @@ class A2CWrapper:
         verbose: int = 0
     ) -> Dict:
         """
-        Entrena el modelo A2C en los datos proporcionados.
+        Entrena el modelo A2C con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista de tensores de entrada [cgm_data, other_features]
         y : jnp.ndarray
-            Etiquetas (dosis objetivo)
+            Valores objetivo (dosis de insulina)
         validation_data : Optional[Tuple], opcional
-            Datos de validación (default: None)
+            Datos de validación como (x_val, y_val) (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas de entrenamiento (default: 1)
         batch_size : int, opcional
-            Tamaño del lote (default: 32)
+            Tamaño de lote (default: 32)
         callbacks : List, opcional
-            Lista de callbacks (default: None)
+            Callbacks para el entrenamiento (default: None)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
             
         Retorna:
         --------
         Dict
-            Historia del entrenamiento
+            Historial de entrenamiento con métricas
         """
+        # Verificar que las entradas son correctas
+        if not isinstance(x, list) or len(x) != 2:
+            raise ValueError("x debe ser una lista con [cgm_data, other_features]")
+        
+        # Configurar reportes de progreso
         if verbose > 0:
-            print("Entrenando modelo A2C...")
-            
-        # Crear entorno simulado para RL a partir de los datos
+            progress_bar = tqdm(total=epochs, desc="Entrenando A2C")
+        
+        # Crear entorno para entrenamiento
         env = self._create_training_environment(x[0], x[1], y)
         
-        # Entrenar el agente A2C
-        a2c_history = self.a2c_agent.train(
+        # Calcular número de pasos totales basados en epochs y batch_size
+        total_steps = epochs * (len(y) // batch_size) * batch_size
+        
+        # Imprimir información inicial
+        if verbose > 0:
+            print(f"Iniciando entrenamiento A2C | Épocas: {epochs} | Batch: {batch_size} | Ejemplos: {len(y)}")
+        
+        # Entrenar al agente A2C
+        history = self.a2c_agent.train(
             env=env,
-            n_steps=batch_size // 4,  # Tamaño del lote para actualización A2C
+            n_steps=batch_size,
             epochs=epochs,
             render=False
         )
         
-        # Actualizar historial con métricas del entrenamiento
-        self.history['policy_loss'].extend(a2c_history.get('policy_losses', [0.0]))
-        self.history['value_loss'].extend(a2c_history.get('value_losses', [0.0]))
-        self.history['entropy_loss'].extend(a2c_history.get('entropy_losses', [0.0]))
-        self.history['episode_rewards'].extend(a2c_history.get('episode_rewards', [0.0]))
+        # Calibrar predictor de dosis basado en los datos objetivo
+        self._calibrate_dose_predictor(y)
+        
+        # Actualizar historial
+        self.history['episode_rewards'].extend(history.get('episode_rewards', []))
+        self.history['policy_loss'].extend(history.get('policy_losses', []))
+        self.history['value_loss'].extend(history.get('value_losses', []))
+        self.history['entropy_loss'].extend(history.get('entropy_losses', []))
         
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
@@ -1514,6 +1565,7 @@ class A2CWrapper:
             self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
+            progress_bar.close()
             print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
             if validation_data:
                 print(f"Pérdida de validación: {val_loss:.4f}")
@@ -1711,11 +1763,114 @@ class A2CWrapper:
             'entropy_coef': self.a2c_agent.entropy_coef,
             'value_coef': self.a2c_agent.value_coef
         }
+    
+    def start(self, x_cgm: jnp.ndarray, x_other: jnp.ndarray, y: jnp.ndarray, 
+         rng_key: Optional[jax.random.PRNGKey] = None) -> Any:
+        """
+        Inicializa el agente con los datos de entrada.
+        
+        Parámetros:
+        -----------
+        x_cgm : jnp.ndarray
+            Datos CGM de entrada
+        x_other : jnp.ndarray
+            Otras características de entrada
+        y : jnp.ndarray
+            Valores objetivo
+        rng_key : Optional[jax.random.PRNGKey], opcional
+            Clave para generación aleatoria (default: None)
+            
+        Retorna:
+        --------
+        Any
+            Estado inicial del agente
+        """
+        # Inicializar codificadores si es necesario
+        if not hasattr(self, 'encode_cgm') or self.encode_cgm is None:
+            self._setup_encoders()
+        
+        # Inicializar pesos de encoders si no existen
+        if not hasattr(self, 'cgm_weight') or self.cgm_weight is None:
+            # Inicializar pesos aleatorios para los codificadores
+            key1, key2 = jax.random.split(rng_key)
+            self.cgm_weight = jax.random.normal(key1, shape=(self.cgm_shape[1], 64))
+            self.other_weight = jax.random.normal(key2, shape=(self.other_features_shape[0], 32))
+            
+            # Crear funciones de codificación
+            self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
+            self.encode_other = jax.jit(self._create_encoder_fn(self.other_weight))
+        
+        # Inicializar historial de entrenamiento
+        self.history = {
+            'loss': [],
+            'val_loss': [],
+            'episode_rewards': [],
+            'policy_loss': [],
+            'value_loss': [],
+            'entropy_loss': []
+        }
+        
+        return self
+
+    def _encode_state(self, cgm_sample: jnp.ndarray, other_sample: jnp.ndarray) -> jnp.ndarray:
+        """
+        Codifica cgm y otras características en un estado para el agente RL.
+        
+        Parámetros:
+        -----------
+        cgm_sample : jnp.ndarray
+            Datos CGM para una muestra
+        other_sample : jnp.ndarray
+            Otras características para una muestra
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Estado codificado para el agente RL
+        """
+        # Codificar CGM y otras características a la dimensión del estado
+        cgm_encoded = self.encode_cgm(cgm_sample)
+        other_encoded = self.encode_other(other_sample)
+        
+        # Concatenar para formar el estado completo
+        state = jnp.concatenate([cgm_encoded[0], other_encoded[0]])
+        
+        return state
+
+    def _calibrate_dose_predictor(self, targets: jnp.ndarray) -> None:
+        """
+        Calibra el predictor de dosis basado en los datos objetivo.
+        
+        Parámetros:
+        -----------
+        targets : jnp.ndarray
+            Dosis objetivo observadas
+        """
+        # Obtener estadísticas de las dosis objetivo
+        min_dose = float(jnp.min(targets))
+        max_dose = float(jnp.max(targets))
+        mean_dose = float(jnp.mean(targets))
+        std_dose = float(jnp.std(targets))
+        
+        # Almacenar para escalar predicciones
+        self.dose_stats = {
+            'min': min_dose,
+            'max': max_dose,
+            'mean': mean_dose,
+            'std': std_dose
+        }
+        
+        # Actualizar límites para acciones continuas
+        if self.a2c_agent.continuous:
+            # Si las acciones son valores normalizados entre -1 y 1
+            # necesitamos mapearlos al rango de dosis [min_dose, max_dose]
+            self.output_scale = (max_dose - min_dose) / 2.0
+            self.output_shift = (max_dose + min_dose) / 2.0
 
 
 class A3CWrapper(A2CWrapper):
     """
-    Wrapper para hacer que el agente A3C sea compatible con la interfaz de modelos de aprendizaje profundo.
+    Wrapper para hacer que el agente A3C sea compatible con la interfaz de modelos de aprendizaje por refuerzo profundo.
     Extiende el wrapper A2C añadiendo funcionalidad para entrenamiento asíncrono.
     """
     
@@ -1731,14 +1886,15 @@ class A3CWrapper(A2CWrapper):
         Parámetros:
         -----------
         a3c_agent : A3C
-            Agente A3C a utilizar
+            Agente A3C a envolver
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
         """
-        # Llamar al constructor de la clase padre
-        super(A3CWrapper, self).__init__(a3c_agent, cgm_shape, other_features_shape)
+        super().__init__(a3c_agent, cgm_shape, other_features_shape)
+        # Especificamos que es un agente A3C para gestión apropiada
+        self.algorithm_type = "a3c"
     
     def fit(
         self, 
@@ -1896,8 +2052,8 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         other_features_shape=other_features_shape
     )
     
-    # Envolver en DRLModelWrapper para compatibilidad total con el sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="a2c")
+    # Usar DRLModelWrapper en lugar de DLModelWrapper
+    return DRLModelWrapper(lambda **kwargs: wrapper, framework="jax", algorithm="a2c")
 
 def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

@@ -178,10 +178,10 @@ USE_JAX_MODELS = {
     "jax_q_learning": False,
     "jax_reinforce_mcpg": False,
     "jax_sarsa": False,
-    "jax_value_iteration": True,
+    "jax_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "jax_a2c": False,
-    "jax_a3c": False,
+    "jax_a2c": True,
+    "jax_a3c": True,
     "jax_ddpg": False,
     "jax_dqn": False,
     "jax_ppo": False,
