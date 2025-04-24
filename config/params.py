@@ -150,9 +150,9 @@ USE_TF_MODELS = {
     "tf_sarsa": False,
     "tf_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "tf_a2c": True,
-    "tf_a3c": True,
-    "tf_ddpg": False,
+    "tf_a2c": False,
+    "tf_a3c": False,
+    "tf_ddpg": True,
     "tf_dqn": False,
     "tf_ppo": False,
     "tf_sac": False,
