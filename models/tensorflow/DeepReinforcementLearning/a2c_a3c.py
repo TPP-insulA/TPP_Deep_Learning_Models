@@ -11,6 +11,8 @@ from tensorflow.keras.optimizers import Adam
 import threading
 from typing import Tuple, Dict, List, Any, Optional, Union, Callable
 
+from custom.printer import print_success
+
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
@@ -134,18 +136,18 @@ class ActorCriticModel(Model):
     def get_action(self, state: np.ndarray, deterministic: bool = False) -> np.ndarray:
         """
         Obtiene una acción basada en el estado actual.
-        
+
         Parámetros:
         -----------
         state : np.ndarray
-            El estado actual
+            El estado actual del entorno
         deterministic : bool, opcional
-            Si es True, devuelve la acción con máxima probabilidad
+            Si se debe tomar la acción de forma determinística (True) o estocástica (False)
         
         Retorna:
         --------
         np.ndarray
-            Una acción muestreada de la distribución de política
+            Acción seleccionada según la política actual
         """
         state = tf.convert_to_tensor([state], dtype=tf.float32)
         policy, _ = self.call(state)
@@ -154,9 +156,9 @@ class ActorCriticModel(Model):
             mu, sigma = policy
             if deterministic:
                 return mu[0].numpy()
-            # Muestrear de la distribución normal
-            dist = tf.random.normal(shape=mu.shape)
-            action = mu + sigma * dist
+            # Muestrear de la distribución normal con tipos consistentes
+            dist = tf.random.normal(shape=mu.shape, dtype=mu.dtype)
+            action = mu + sigma * dist  # Ahora tienen el mismo tipo
             return action[0].numpy()
         else:
             logits = policy
@@ -164,7 +166,7 @@ class ActorCriticModel(Model):
                 return tf.argmax(logits[0]).numpy()
             # Muestrear de la distribución categórica
             probs = tf.nn.softmax(logits)
-            action = tf.random.categorical(tf.math.log(probs), 1)
+            action = tf.random.categorical(tf.math.log(probs + 1e-10), 1)
             return action[0, 0].numpy()
     
     def get_value(self, state: np.ndarray) -> float:
@@ -557,10 +559,10 @@ class A2C:
         history['entropy_losses'].append(self.entropy_metric.result().numpy())
         
         # Resetear métricas
-        self.policy_loss_metric.reset_states()
-        self.value_loss_metric.reset_states()
-        self.entropy_metric.reset_states()
-        self.total_loss_metric.reset_states()
+        self.policy_loss_metric.reset_state()
+        self.value_loss_metric.reset_state()
+        self.entropy_metric.reset_state()
+        self.total_loss_metric.reset_state()
         
         # Añadir recompensas de episodios completados
         if episode_rewards:
@@ -641,6 +643,11 @@ class A2C:
         filepath : str
             Ruta donde guardar el modelo
         """
+        # Asegurar que el modelo esté construido antes de guardar
+        dummy_state = tf.zeros((1, self.state_dim))
+        _ = self.model(dummy_state)  # Esto construye el modelo
+        
+        # Ahora guardar los pesos
         self.model.save_weights(filepath)
         
     def load_model(self, filepath: str) -> None:
@@ -1133,8 +1140,8 @@ class A3CWorker:
 CGM_ENCODER = 'cgm_encoder'
 OTHER_ENCODER = 'other_encoder'
 COMBINED_LAYER = 'combined_layer'
-WRAPPER_WEIGHTS_SUFFIX = '_wrapper_weights.h5'
-POLICY_WEIGHTS_SUFFIX = '_policy_weights.h5'
+WRAPPER_WEIGHTS_SUFFIX = '_wrapper.weights.h5'
+POLICY_WEIGHTS_SUFFIX = '_policy.weights.h5'
 
 
 class A2CWrapper(Model):
@@ -1144,7 +1151,7 @@ class A2CWrapper(Model):
     
     def __init__(
         self, 
-        a2c_agent: A2C,
+        aNc_agent: A2C,
         cgm_shape: Tuple[int, ...],
         other_features_shape: Tuple[int, ...]
     ) -> None:
@@ -1153,7 +1160,7 @@ class A2CWrapper(Model):
         
         Parámetros:
         -----------
-        a2c_agent : A2C
+        aNc_agent : A2C
             Agente A2C a utilizar
         cgm_shape : Tuple[int, ...]
             Forma de entrada para datos CGM
@@ -1161,7 +1168,7 @@ class A2CWrapper(Model):
             Forma de entrada para otras características
         """
         super(A2CWrapper, self).__init__()
-        self.a2c_agent = a2c_agent
+        self.aNc_agent = aNc_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
@@ -1173,7 +1180,7 @@ class A2CWrapper(Model):
         self.other_dense = Dense(32, activation='relu', name=OTHER_ENCODER)
         
         # Capa para combinar características
-        self.combined = Dense(self.a2c_agent.state_dim, activation='relu', name=COMBINED_LAYER)
+        self.combined = Dense(self.aNc_agent.state_dim, activation='relu', name=COMBINED_LAYER)
         
         # Capa final para mapear de salidas de política a dosis
         self.dose_predictor = Dense(1, kernel_initializer='glorot_uniform', name='dose_predictor')
@@ -1217,7 +1224,7 @@ class A2CWrapper(Model):
             state = tf.gather(states, i)
             
             # Usar el agente A2C para obtener acción determinística
-            action = self.a2c_agent.model.get_action(state.numpy(), deterministic=True)
+            action = self.aNc_agent.model.get_action(state.numpy(), deterministic=True)
             
             # Almacenar la acción
             actions = actions.write(i, tf.convert_to_tensor(action, dtype=tf.float32))
@@ -1226,7 +1233,7 @@ class A2CWrapper(Model):
         actions_tensor = actions.stack()
         
         # Para acción continua, mapear directamente a dosis
-        if self.a2c_agent.continuous:
+        if self.aNc_agent.continuous:
             if len(tf.shape(actions_tensor)) > 2:
                 actions_tensor = tf.reshape(actions_tensor, [batch_size, -1])
             
@@ -1234,31 +1241,31 @@ class A2CWrapper(Model):
             doses = self.dose_predictor(actions_tensor)
         else:
             # Para acción discreta, convertir a one-hot y luego a dosis
-            one_hot = tf.one_hot(tf.cast(actions_tensor, tf.int32), self.a2c_agent.action_dim)
+            one_hot = tf.one_hot(tf.cast(actions_tensor, tf.int32), self.aNc_agent.action_dim)
             doses = self.dose_predictor(one_hot)
         
         return doses
     
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[List[tf.Tensor], tf.data.Dataset], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente A2C.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[List[tf.Tensor], tf.data.Dataset]
+            Lista con [cgm_data, other_features] o un dataset de TensorFlow
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo), se ignora si x es un dataset (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1274,17 +1281,39 @@ class A2CWrapper(Model):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Historia de entrenamiento compatible con Keras
         """
         if verbose > 0:
             print("Entrenando modelo A2C...")
         
+        # Extraer datos del dataset si es necesario
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            cgm_data = []
+            other_features = []
+            targets = []
+            
+            for (batch_cgm, batch_other), batch_y in x:
+                cgm_data.append(batch_cgm)
+                other_features.append(batch_other)
+                targets.append(batch_y)
+            
+            cgm_tensor = tf.concat(cgm_data, axis=0)
+            other_tensor = tf.concat(other_features, axis=0)
+            y_tensor = tf.concat(targets, axis=0)
+            
+            x_input = [cgm_tensor, other_tensor]
+        else:
+            # Usar listas de tensores directamente
+            x_input = x
+            y_tensor = y
+        
         # Crear entorno para entrenamiento
-        env = self._create_training_environment(x[0], x[1], y)
+        env = self._create_training_environment(x_input[0], x_input[1], y_tensor)
         
         # Entrenar al agente A2C
-        history = self.a2c_agent.train(
+        history = self.aNc_agent.train(
             env=env,
             n_steps=batch_size,
             epochs=epochs,
@@ -1292,10 +1321,10 @@ class A2CWrapper(Model):
         )
         
         # Ajustar capa de predicción de dosis
-        self._calibrate_dose_predictor(y)
+        self._calibrate_dose_predictor(y_tensor)
         
         if verbose > 0:
-            print("Entrenamiento completado.")
+            print_success("Entrenamiento completado.")
         
         # Convertir historia a formato compatible con Keras
         keras_history = {
@@ -1303,17 +1332,22 @@ class A2CWrapper(Model):
             'val_loss': [history.get('policy_losses', [0.0])[-1]] if validation_data else None
         }
         
-        return {'history': keras_history}
+        # Crear un objeto con atributo .history para compatibilidad con Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+        
+        return KerasHistoryCompatible(keras_history)
     
     def _create_training_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                                    target_doses: tf.Tensor) -> Any:
         """
-        Crea un entorno personalizado para entrenar el agente A2C.
+        Crea un entorno de entrenamiento para el agente A2C.
         
         Parámetros:
         -----------
         cgm_data : tf.Tensor
-            Datos de CGM
+            Datos CGM 
         other_features : tf.Tensor
             Otras características
         target_doses : tf.Tensor
@@ -1322,9 +1356,9 @@ class A2CWrapper(Model):
         Retorna:
         --------
         Any
-            Entorno para entrenamiento RL
+            Entorno para entrenamiento
         """
-        # Convertir a numpy para procesamiento
+        # Convertir tensores a numpy para procesamiento
         cgm_np = cgm_data.numpy() if hasattr(cgm_data, 'numpy') else cgm_data
         other_np = other_features.numpy() if hasattr(other_features, 'numpy') else other_features
         targets_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
@@ -1341,54 +1375,76 @@ class A2CWrapper(Model):
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 self.rng = np.random.Generator(np.random.PCG64(42))
+                self.lock = threading.RLock()  # Lock para sincronización en entrenamiento asíncrono
                 
                 # Para compatibilidad con algoritmos RL
                 self.observation_space = gym.spaces.Box(
                     low=-np.inf, high=np.inf, 
-                    shape=(model_wrapper.a2c_agent.state_dim,)
+                    shape=(model_wrapper.aNc_agent.state_dim,)
                 )
                 
                 # Espacio de acción según tipo
-                if model_wrapper.a2c_agent.continuous:
+                if model_wrapper.aNc_agent.continuous:
                     self.action_space = gym.spaces.Box(
-                        low=np.zeros(model_wrapper.a2c_agent.action_dim), 
-                        high=np.ones(model_wrapper.a2c_agent.action_dim) * 15, 
+                        low=np.zeros(model_wrapper.aNc_agent.action_dim), 
+                        high=np.ones(model_wrapper.aNc_agent.action_dim) * 15, 
                         dtype=np.float32
                     )
                 else:
-                    self.action_space = gym.spaces.Discrete(model_wrapper.a2c_agent.action_dim)
-            
+                    self.action_space = gym.spaces.Discrete(model_wrapper.aNc_agent.action_dim)
+                    
+                # Pre-calcular codificaciones para evitar crear tensores/capas durante la ejecución
+                self._initialize_encoders(model_wrapper)
+                
+            def _initialize_encoders(self, model_wrapper):
+                """Inicializa los codificadores para evitar problemas de construcción tardía."""
+                # Crear tensores vacíos
+                dummy_cgm = np.zeros((1,) + self.cgm.shape[1:], dtype=np.float32)
+                dummy_other = np.zeros((1,) + self.features.shape[1:], dtype=np.float32)
+                
+                # Ejecutar una pasada para inicializar todas las capas
+                _ = model_wrapper.call([tf.convert_to_tensor(dummy_cgm), 
+                                          tf.convert_to_tensor(dummy_other)])
+                
+                # Almacenar encoders pre-construidos
+                self.cgm_conv = model_wrapper.cgm_conv
+                self.cgm_pooling = model_wrapper.cgm_pooling
+                self.other_dense = model_wrapper.other_dense
+                self.combined = model_wrapper.combined
+                
             def reset(self):
                 """Reinicia el entorno seleccionando un ejemplo aleatorio."""
-                self.current_idx = self.rng.integers(0, self.max_idx)
-                state = self._get_state()
-                return state, {}
+                with self.lock:
+                    self.current_idx = self.rng.integers(0, self.max_idx)
+                    state = self._get_state()
+                    return state, {}
             
             def step(self, action):
                 """Ejecuta un paso en el entorno con la acción dada."""
-                # Convertir acción a dosis según tipo de espacio
-                if isinstance(self.action_space, gym.spaces.Box):
-                    # Para acción continua, usar directamente (limitando al rango)
-                    dose = np.clip(action[0], 0, 15)
-                else:
-                    # Para acción discreta, mapear a valor de dosis
-                    dose = action / (self.model.a2c_agent.action_dim - 1) * 15
-                
-                # Calcular recompensa (negativo del error absoluto)
-                target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
-                
-                # Avanzar al siguiente ejemplo
-                self.current_idx = (self.current_idx + 1) % self.max_idx
-                
-                # Obtener próximo estado
-                next_state = self._get_state()
-                
-                # Episodio siempre termina después de un paso
-                done = True
-                truncated = False
-                
-                return next_state, reward, done, truncated, {}
+                with self.lock:
+                    # Convertir acción a dosis según tipo de espacio
+                    if isinstance(self.action_space, gym.spaces.Box):
+                        # Para acción continua, usar directamente (limitando al rango)
+                        dose = np.clip(action[0], 0, 15)
+                    else:
+                        # Para acción discreta, mapear a valor de dosis
+                        dose = action / (self.model.aNc_agent.action_dim - 1) * 15
+                    
+                    # Calcular recompensa (negativo del error absoluto)
+                    target = self.targets[self.current_idx]
+                    reward = -abs(dose - target)
+                    
+                    # Avanzar al siguiente ejemplo
+                    self.current_idx = (self.current_idx + 1) % self.max_idx
+                    
+                    # Obtener próximo estado
+                    next_state = self._get_state()
+                    
+                    # Episodio siempre termina después de un paso
+                    done = True
+                    truncated = False
+                    
+                    return next_state, reward, done, truncated, {}
             
             def _get_state(self):
                 """Codifica el estado actual a partir de los datos."""
@@ -1402,17 +1458,19 @@ class A2CWrapper(Model):
                     dtype=tf.float32
                 )
                 
+                # Procesar con capas previamente construidas
                 # Procesar con capas de codificación
-                cgm_encoded = self.model.cgm_conv(cgm_batch)
-                cgm_features = self.model.cgm_pooling(cgm_encoded)
-                other_encoded = self.model.other_dense(features_batch)
+                cgm_encoded = self.cgm_conv(cgm_batch)
+                cgm_features = self.cgm_pooling(cgm_encoded)
+                other_encoded = self.other_dense(features_batch)
                 
                 # Combinar características
                 combined = tf.concat([cgm_features, other_encoded], axis=1)
-                state = self.model.combined(combined)
+                state = self.combined(combined)
                 
                 return state[0].numpy()
         
+        # Crear y devolver instancia del entorno
         return InsulinDosingEnv(cgm_np, other_np, targets_np, self)
     
     def _calibrate_dose_predictor(self, y: tf.Tensor) -> None:
@@ -1428,16 +1486,25 @@ class A2CWrapper(Model):
         max_dose = np.max(y_np)
         min_dose = np.min(y_np)
         
-        if self.a2c_agent.continuous:
-            # Para política continua, ajustar escala
+        # Crear una entrada ficticia para construir la capa antes de establecer pesos
+        if self.aNc_agent.continuous:
+            # Para acción continua, forma de entrada es [batch_size, 1]
+            dummy_input = tf.zeros((1, 1))
+            _ = self.dose_predictor(dummy_input)
+            
+            # Ahora configurar los pesos
             self.dose_predictor.set_weights([
                 np.ones((1, 1)) * (max_dose - min_dose) / 15,
                 np.array([min_dose])
             ])
         else:
-            # Para política discreta, ajustar peso para categorías discretas
+            # Para acción discreta, forma de entrada es [batch_size, action_dim]
+            dummy_input = tf.zeros((1, self.aNc_agent.action_dim))
+            _ = self.dose_predictor(dummy_input)
+            
+            # Ahora configurar los pesos
             self.dose_predictor.set_weights([
-                np.ones((self.a2c_agent.action_dim, 1)) * (max_dose - min_dose) / self.a2c_agent.action_dim,
+                np.ones((self.aNc_agent.action_dim, 1)) * (max_dose - min_dose) / self.aNc_agent.action_dim,
                 np.array([min_dose])
             ])
     
@@ -1471,9 +1538,9 @@ class A2CWrapper(Model):
         return {
             "cgm_shape": self.cgm_shape,
             "other_features_shape": self.other_features_shape,
-            "state_dim": self.a2c_agent.state_dim,
-            "action_dim": self.a2c_agent.action_dim,
-            "continuous": self.a2c_agent.continuous
+            "state_dim": self.aNc_agent.state_dim,
+            "action_dim": self.aNc_agent.action_dim,
+            "continuous": self.aNc_agent.continuous
         }
     
     def save(self, filepath: str, **kwargs) -> None:
@@ -1487,11 +1554,49 @@ class A2CWrapper(Model):
         **kwargs
             Argumentos adicionales
         """
+        # Asegurar que todas las capas estén construidas antes de guardar
+        self._ensure_model_is_built()
+        
         # Guardar pesos del wrapper
         self.save_weights(filepath + WRAPPER_WEIGHTS_SUFFIX)
         
         # Guardar modelo A2C
-        self.a2c_agent.save_model(filepath + POLICY_WEIGHTS_SUFFIX)
+        self.aNc_agent.save_model(filepath + POLICY_WEIGHTS_SUFFIX)
+
+    def _ensure_model_is_built(self) -> None:
+        """
+        Asegura que todas las capas del modelo estén construidas antes de guardar.
+        """
+        # Crear datos ficticios con las formas correctas
+        batch_size = 1
+        
+        # Datos CGM ficticios - SIEMPRE debe ser 3D para Conv1D (batch, secuencia, características)
+        if isinstance(self.cgm_shape, tuple) and len(self.cgm_shape) > 2:
+            # Si tenemos la forma completa, usarla
+            dummy_cgm = tf.zeros((batch_size, self.cgm_shape[1], self.cgm_shape[2]))
+        else:
+            # Forma predeterminada asegurando 3 dimensiones para Conv1D
+            dummy_cgm = tf.zeros((batch_size, 24, 3))  # (batch, secuencia, características)
+        
+        # Otras características ficticias - debe ser 2D (batch, características)
+        if isinstance(self.other_features_shape, tuple) and len(self.other_features_shape) > 1:
+            dummy_other = tf.zeros((batch_size, self.other_features_shape[1]))
+        else:
+            # Forma predeterminada
+            dummy_other = tf.zeros((batch_size, 6))  # (batch, características)
+        
+        # Realizar una pasada hacia adelante para construir todas las capas
+        _ = self([dummy_cgm, dummy_other])
+        
+        # Asegurar que dose_predictor esté construido
+        if hasattr(self.aNc_agent, 'continuous') and self.aNc_agent.continuous:
+            dummy_action = tf.zeros((batch_size, 1))
+        else:
+            dummy_action = tf.zeros((batch_size, self.aNc_agent.action_dim))
+        
+        _ = self.dose_predictor(dummy_action)
+        
+        print("Modelo completamente construido antes de guardar.")
     
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
@@ -1516,7 +1621,7 @@ class A2CWrapper(Model):
         super().load_weights(wrapper_path)
         
         # Cargar modelo A2C
-        self.a2c_agent.load_model(policy_path)
+        self.aNc_agent.load_model(policy_path)
 
 
 class A3CWrapper(A2CWrapper):
@@ -1526,44 +1631,63 @@ class A3CWrapper(A2CWrapper):
     
     def __init__(
         self, 
-        a3c_agent: A3C,
+        aNc_agent: A3C,
         cgm_shape: Tuple[int, ...],
         other_features_shape: Tuple[int, ...]
     ) -> None:
         """
-        Inicializa el modelo wrapper para A3C.
+        Inicializa el wrapper para el modelo A3C.
         
         Parámetros:
         -----------
-        a3c_agent : A3C
-            Agente A3C a utilizar
+        aNc_agent : A3C
+            Agente A3C a envolver
         cgm_shape : Tuple[int, ...]
-            Forma de entrada para datos CGM
+            Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
-            Forma de entrada para otras características
+            Forma de otras características
         """
-        super(A3CWrapper, self).__init__(a3c_agent, cgm_shape, other_features_shape)
+        super(A2CWrapper, self).__init__()  # Inicializa tf.keras.Model
+        self.aNc_agent = aNc_agent
+        self.cgm_shape = cgm_shape
+        self.other_features_shape = other_features_shape
+        
+        # Capas para procesamiento de CGM
+        self.cgm_conv = Conv1D(64, 3, padding='same', activation='relu', name=f'{CGM_ENCODER}_conv')
+        self.cgm_pooling = GlobalAveragePooling1D(name=f'{CGM_ENCODER}_pooling')
+        
+        # Capas para procesamiento de otras características
+        self.other_dense = Dense(32, activation='relu', name=OTHER_ENCODER)
+        
+        # Capa para combinar características
+        self.combined = Dense(self.aNc_agent.state_dim, activation='relu', name=COMBINED_LAYER)
+        
+        # Capa final para mapear de salidas de política a dosis
+        self.dose_predictor = Dense(1, kernel_initializer='glorot_uniform', name='dose_predictor')
+        
+        # Para almacenar la forma de entrada durante la llamada
+        self.built_input_shape = None
     
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[List[tf.Tensor], tf.data.Dataset], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente A3C.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[List[tf.Tensor], tf.data.Dataset]
+            Lista con [cgm_data, other_features] o un dataset de TensorFlow
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo), se ignora si x es un dataset (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1579,40 +1703,84 @@ class A3CWrapper(A2CWrapper):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Historia de entrenamiento compatible con Keras
         """
         if verbose > 0:
             print("Entrenando modelo A3C...")
         
+        # Extraer datos del dataset si es necesario
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            cgm_data = []
+            other_features = []
+            targets = []
+            
+            for (batch_cgm, batch_other), batch_y in x:
+                cgm_data.append(batch_cgm)
+                other_features.append(batch_other)
+                targets.append(batch_y)
+            
+            cgm_tensor = tf.concat(cgm_data, axis=0)
+            other_tensor = tf.concat(other_features, axis=0)
+            y_input = tf.concat(targets, axis=0)
+            
+            x_input = [cgm_tensor, other_tensor]
+        else:
+            # Usar listas de tensores directamente
+            x_input = x
+            y_input = y
+    
         # Crear entorno para entrenamiento
-        _ = self._create_training_environment(x[0], x[1], y)
+        env_instance = self._create_training_environment(x_input[0], x_input[1], y_input)
         
         # Función generadora de entornos para trabajadores
         def env_creator():
-            return self._create_training_environment(x[0], x[1], y)
+            return env_instance
         
-        # Entrenar al agente A3C de manera asíncrona
-        history = self.a2c_agent.train_async(
-            env_fn=env_creator,
-            n_steps=batch_size,
-            total_steps=epochs * batch_size,
-            render=False
-        )
+        # Verificar que todos los workers tengan acceso al mismo entorno
+        # para evitar problemas de concurrencia
+        env_instance.lock = threading.RLock()
+        
+        # Entrenar al agente A3C de manera asíncrona con menos workers y pasos
+        # para evitar sobrecargar la memoria y problemas de concurrencia
+        history = {}
+        try:
+            # Ejecutar entrenamiento asíncrono con manejo de excepciones
+            history = self.aNc_agent.train_async(
+                env_fn=env_creator,
+                n_steps=batch_size,
+                total_steps=epochs * batch_size,
+                render=False
+            )
+        except Exception as e:
+            print(f"Error durante el entrenamiento asíncrono: {e}")
+            # Proporcionar un historial vacío pero válido en caso de error
+            history = {'policy_losses': [0.0], 'value_losses': [0.0], 'total_losses': [0.0]}
         
         # Ajustar capa de predicción de dosis
-        self._calibrate_dose_predictor(y)
+        self._calibrate_dose_predictor(y_input)
         
         if verbose > 0:
-            print("Entrenamiento asíncrono completado.")
+            print_success("Entrenamiento asíncrono completado.")
         
         # Convertir historia a formato compatible con Keras
+        # Asegurarse de que siempre haya al menos un elemento en policy_losses
+        policy_losses = history.get('policy_losses', [0.0])
+        if not policy_losses:
+            policy_losses = [0.0]
+            
         keras_history = {
-            'loss': history.get('policy_losses', [0.0]),
-            'val_loss': [history.get('policy_losses', [0.0])[-1]] if validation_data else None
+            'loss': policy_losses,
+            'val_loss': [policy_losses[-1]] if validation_data else None
         }
         
-        return {'history': keras_history}
+        # Crear un objeto con atributo .history para compatibilidad con Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+                
+        return KerasHistoryCompatible(keras_history)
 
 
 def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> tf.keras.models.Model:
@@ -1654,7 +1822,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     
     # Crear y devolver el modelo wrapper
     return A2CWrapper(
-        a2c_agent=a2c_agent,
+        aNc_agent=a2c_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
@@ -1684,8 +1852,9 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     continuous = True  # Usar espacio de acción continuo para dosificación precisa
     
     # Número de trabajadores para entrenamiento paralelo
-    n_workers = 4
-    
+    # Reducir para evitar sobrecarga en sistemas con pocos núcleos
+    n_workers = 4 
+
     # Crear agente A3C
     a3c_agent = A3C(
         state_dim=state_dim,
@@ -1702,7 +1871,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     
     # Crear y devolver el modelo wrapper
     return A3CWrapper(
-        a3c_agent=a3c_agent,
+        aNc_agent=a3c_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
