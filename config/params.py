@@ -82,8 +82,8 @@ from models.pytorch.ReinforcementLearning.policy_iteration import model_creator 
 ### Modelos de Aprendizaje por Refuerzo Profundo
 from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
 from models.pytorch.DeepReinforcementLearning.ddpg import model_creator as pt_ddpg_creator
-# from models.pytorch.DeepReinforcementLearning.dqn import model_creator as pt_dqn_creator
-# from models.pytorch.DeepReinforcementLearning.ppo import model_creator as pt_ppo_creator
+from models.pytorch.DeepReinforcementLearning.dqn import model_creator as pt_dqn_creator
+from models.pytorch.DeepReinforcementLearning.ppo import model_creator as pt_ppo_creator
 # from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac_creator
 # from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
@@ -184,8 +184,8 @@ PT_MODELS = {
     "pt_a2c": pt_a2c_creator,
     "pt_a3c": pt_a3c_creator,
     "pt_ddpg": pt_ddpg_creator,
-    # "pt_dqn": pt_dqn_creator,
-    # "pt_ppo": pt_ppo_creator,
+    "pt_dqn": pt_dqn_creator,
+    "pt_ppo": pt_ppo_creator,
     # "pt_sac": pt_sac_creator,
     # "pt_trpo": pt_trpo_creator,
 }
@@ -265,7 +265,7 @@ USE_PT_MODELS = {
     "pt_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": False,
-    "pt_policy_iteration": True,
+    "pt_policy_iteration": False,
     "pt_q_learning": False,
     "pt_reinforce_mcpg": False,
     "pt_sarsa": False,
@@ -273,9 +273,9 @@ USE_PT_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": False,
     "pt_a3c": False,
-    "pt_ddpg": True,
+    "pt_ddpg": False,
     "pt_dqn": False,
-    "pt_ppo": False,
+    "pt_ppo": True,
     "pt_sac": False,
     "pt_trpo": False,
 }
