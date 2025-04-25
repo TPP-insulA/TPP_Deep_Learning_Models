@@ -79,9 +79,9 @@ from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_waven
 # from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
 # from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
 
-# ### Modelos de Aprendizaje por Refuerzo Profundo
-# from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
-# from models.pytorch.DeepReinforcementLearning.ddpg import model_creator as pt_ddpg_creator
+### Modelos de Aprendizaje por Refuerzo Profundo
+from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
+from models.pytorch.DeepReinforcementLearning.ddpg import model_creator as pt_ddpg_creator
 # from models.pytorch.DeepReinforcementLearning.dqn import model_creator as pt_dqn_creator
 # from models.pytorch.DeepReinforcementLearning.ppo import model_creator as pt_ppo_creator
 # from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac_creator
@@ -180,10 +180,10 @@ PT_MODELS = {
     # "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
     # "pt_sarsa": pt_sarsa_creator,
     # "pt_value_iteration": pt_value_iteration_creator,
-    # ## Modelos de Aprendizaje por Refuerzo Profundo
-    # "pt_a2c": pt_a2c_creator,
-    # "pt_a3c": pt_a3c_creator,
-    # "pt_ddpg": pt_ddpg_creator,
+    ## Modelos de Aprendizaje por Refuerzo Profundo
+    "pt_a2c": pt_a2c_creator,
+    "pt_a3c": pt_a3c_creator,
+    "pt_ddpg": pt_ddpg_creator,
     # "pt_dqn": pt_dqn_creator,
     # "pt_ppo": pt_ppo_creator,
     # "pt_sac": pt_sac_creator,
@@ -253,16 +253,16 @@ USE_JAX_MODELS = {
 # Modelos Pytorch a utilizar
 USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "pt_attention_only": True,
-    "pt_cnn": True,
-    "pt_fnn": True,
-    "pt_gru": True,
-    "pt_lstm": True,
-    "pt_rnn": True,
-    "pt_tabnet": True,
-    "pt_tcn": True,
-    "pt_transformer": True,
-    "pt_wavenet": True,
+    "pt_attention_only": False,
+    "pt_cnn": False,
+    "pt_fnn": False,
+    "pt_gru": False,
+    "pt_lstm": False,
+    "pt_rnn": False,
+    "pt_tabnet": False,
+    "pt_tcn": False,
+    "pt_transformer": False,
+    "pt_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": False,
     "pt_policy_iteration": False,
@@ -273,7 +273,7 @@ USE_PT_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": False,
     "pt_a3c": False,
-    "pt_ddpg": False,
+    "pt_ddpg": True,
     "pt_dqn": False,
     "pt_ppo": False,
     "pt_sac": False,
