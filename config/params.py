@@ -186,5 +186,5 @@ USE_JAX_MODELS = {
     "jax_dqn": True,
     "jax_ppo": True,
     "jax_sac": True,
-    "jax_trpo": False,
+    "jax_trpo": True,
 }
