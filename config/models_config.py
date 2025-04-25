@@ -302,7 +302,8 @@ PPO_CONFIG = {
     'clip_epsilon': 0.2,                 # Parámetro epsilon para recorte del ratio de probabilidades
     'entropy_coef': 0.01,                # Coeficiente para el término de entropía en la función de pérdida
     'value_coef': 0.5,                   # Coeficiente para la pérdida de la función de valor
-    'max_grad_norm': 0.5                 # Valor máximo para recorte de norma del gradiente
+    'max_grad_norm': 0.5,                # Valor máximo para recorte de norma del gradiente
+    'lambda': 0.95,                      # Factor lambda para cálculo de ventaja generalizada (GAE)
 }
 
 SAC_CONFIG = {

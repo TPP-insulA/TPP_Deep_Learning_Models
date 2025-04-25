@@ -24,7 +24,9 @@ CONST_TANH = "tanh"
 CONST_SELU = "selu"
 CONST_SIGMOID = "sigmoid"
 CONST_EPSILON = "epsilon"
-CONST_DROPOUT = "dropout"
+CONST_GAMMA = 'gamma'
+CONST_LAMBDA = 'lambda'
+CONST_DROPOUT = "dropout_rate"
 CONST_ENTROPIA = "Entropía"
 
 FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'ppo')
@@ -167,10 +169,7 @@ class PPO:
         self.seed = seed
         
         # Valores predeterminados para capas ocultas
-        if hidden_units is None:
-            self.hidden_units = PPO_CONFIG['hidden_units']
-        else:
-            self.hidden_units = hidden_units
+        self.hidden_units = PPO_CONFIG['hidden_units'] if hidden_units is None else hidden_units
         
         # Crear modelo
         self.model = ActorCriticModel(action_dim=action_dim, hidden_units=self.hidden_units)
@@ -214,7 +213,7 @@ class PPO:
         os.makedirs(FIGURES_DIR, exist_ok=True)
     
     def _get_action_and_value(self, params: flax.core.FrozenDict, state: jnp.ndarray, 
-                            key: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+                        key: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Obtiene acción, log_prob y valor para un estado dado.
         
@@ -245,10 +244,10 @@ class PPO:
         return action, log_prob, value, key
     
     def _get_action(self, params: flax.core.FrozenDict, state: jnp.ndarray, 
-                  key: jnp.ndarray, deterministic: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
+              key: jnp.ndarray, deterministic: bool = False) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
         Obtiene una acción basada en el estado actual.
-        
+
         Parámetros:
         -----------
         params : flax.core.FrozenDict
@@ -266,15 +265,15 @@ class PPO:
             (acción, nueva_llave)
         """
         mu, sigma, _ = self.model.apply(params, state)
-        
+
         if deterministic:
             return mu, key
-        
+
         # Muestrear de la distribución normal
         key, subkey = jax.random.split(key)
         noise = jax.random.normal(subkey, mu.shape)
         action = mu + sigma * noise
-        
+
         return action, key
     
     def _get_value(self, params: flax.core.FrozenDict, state: jnp.ndarray) -> jnp.ndarray:
@@ -318,7 +317,7 @@ class PPO:
         return jnp.sum(logp_normal, axis=-1, keepdims=True)
     
     def _compute_gae(self, rewards: np.ndarray, values: np.ndarray, next_values: np.ndarray, 
-                   dones: np.ndarray, gamma: float = 0.99, lam: float = 0.95) -> Tuple[np.ndarray, np.ndarray]:
+               dones: np.ndarray, gamma: float = PPO_CONFIG[CONST_GAMMA], lam: float = PPO_CONFIG[CONST_LAMBDA]) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calcula el Estimador de Ventaja Generalizada (GAE).
         
@@ -346,80 +345,84 @@ class PPO:
         last_gae = 0
         
         for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_value = next_values[t]
-            else:
-                next_value = values[t + 1]
-                
-            delta = rewards[t] + gamma * next_value * (1 - dones[t]) - values[t]
-            advantages[t] = last_gae = delta + gamma * lam * (1 - dones[t]) * last_gae
-            
+            # Si el episodio ha terminado, no hay recompensa futura
+            mask = 1.0 - dones[t]
+            # Calcular delta (diferencia temporal)
+            delta = rewards[t] + gamma * next_values[t] * mask - values[t]
+            # Actualizar la ventaja usando lambda
+            last_gae = delta + gamma * lam * mask * last_gae
+            advantages[t] = last_gae
+        
         returns = advantages + values
         
-        # Normalizar ventajas
+        # Normalizar ventajas para estabilidad numérica
         advantages = (advantages - np.mean(advantages)) / (np.std(advantages) + 1e-10)
         
         return advantages, returns
     
     def _train_step(self, state: PPOTrainState, states: jnp.ndarray, actions: jnp.ndarray, 
-                  old_log_probs: jnp.ndarray, returns: jnp.ndarray, advantages: jnp.ndarray) -> Tuple[PPOTrainState, Dict[str, jnp.ndarray]]:
+              old_log_probs: jnp.ndarray, returns: jnp.ndarray, advantages: jnp.ndarray) -> Tuple[PPOTrainState, Dict[str, jnp.ndarray]]:
         """
-        Realiza un paso de entrenamiento para actualizar el modelo.
+        Ejecuta un paso de entrenamiento PPO.
         
         Parámetros:
         -----------
         state : PPOTrainState
-            Estado actual del modelo
+            Estado actual del entrenamiento
         states : jnp.ndarray
-            Estados observados en el entorno
+            Estados para el paso de entrenamiento
         actions : jnp.ndarray
-            Acciones tomadas para esos estados
+            Acciones tomadas
         old_log_probs : jnp.ndarray
-            Log de probabilidades de acciones bajo la política antigua
+            Log-probabilidades de la política antigua
         returns : jnp.ndarray
-            Retornos estimados
+            Estimaciones de retorno
         advantages : jnp.ndarray
             Ventajas estimadas
             
         Retorna:
         --------
         Tuple[PPOTrainState, Dict[str, jnp.ndarray]]
-            (nuevo_estado, métricas)
+            Estado actualizado y métricas
         """
+        # Función de pérdida para este paso
         def loss_fn(params):
-            # Obtener predicciones actuales
+            # Obtener distribuciones de la política actual
             mu, sigma, values = self.model.apply(params, states)
             
-            # Calcular log probabilidades actuales
-            log_probs = self._log_prob(mu, sigma, actions)
+            # Calcular log_probs actuales
+            new_log_probs = self._log_prob(mu, sigma, actions)
             
-            # Calcular ratio para PPO clipping
-            ratio = jnp.exp(log_probs - old_log_probs)
+            # Ratio de probabilidades (nueva/vieja)
+            ratio = jnp.exp(new_log_probs - old_log_probs)
             
-            # Calcular pérdida de política con clipping
-            pg_loss1 = -advantages * ratio
-            pg_loss2 = -advantages * jnp.clip(ratio, 1 - self.epsilon, 1 + self.epsilon)
-            policy_loss = jnp.mean(jnp.maximum(pg_loss1, pg_loss2))
+            # Calcular pérdidas clipeadas y no clipeadas
+            policy_loss1 = -ratio * advantages
+            policy_loss2 = -jnp.clip(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon) * advantages
             
-            # Pérdida de valor (MSE)
-            value_loss = jnp.mean(jnp.square(returns - values))
+            # Tomar el máximo para minimizar
+            policy_loss = jnp.mean(jnp.maximum(policy_loss1, policy_loss2))
             
-            # Calcular entropía para exploración
-            entropy = jnp.mean(0.5 * jnp.log(2.0 * jnp.pi * sigma**2) + 0.5)
+            # Pérdida de valor
+            value_pred = values.squeeze(-1)
+            value_loss = jnp.mean(jnp.square(value_pred - returns))
             
-            # Pérdida total con términos de entropía y valor
+            # Términos de entropía para exploración
+            entropy = jnp.mean(0.5 * (jnp.log(2.0 * jnp.pi) + 1.0 + jnp.log(jnp.square(sigma))))
+            
+            # Pérdida total combinada
             total_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
             
             return total_loss, (policy_loss, value_loss, entropy)
         
-        # Calcular pérdida y gradientes
+        # Calcular gradientes
         grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
         (total_loss, (policy_loss, value_loss, entropy)), grads = grad_fn(state.params)
         
-        # Actualizar parámetros
+        # Actualizar parámetros con optimizador
         new_state = state.apply_gradients(grads=grads)
         
-        # Recopilar métricas
+        # Preparar métricas para seguimiento
         metrics = {
             'total_loss': total_loss,
             'policy_loss': policy_loss,
@@ -471,182 +474,192 @@ class PPO:
     
     def _collect_trajectories(self, env: Any, steps_per_epoch: int) -> Tuple[Dict[str, np.ndarray], Dict[str, List[float]]]:
         """
-        Recolecta trayectorias de experiencia en el entorno.
+        Recolecta trayectorias de experiencia interactuando con el entorno.
         
         Parámetros:
         -----------
         env : Any
-            Entorno de OpenAI Gym o compatible
+            Entorno de interacción
         steps_per_epoch : int
-            Número de pasos a ejecutar
+            Número de pasos a recolectar
             
         Retorna:
         --------
         Tuple[Dict[str, np.ndarray], Dict[str, List[float]]]
-            (datos_trayectoria, historial_episodios) - Datos recopilados y métricas por episodio
+            Datos de trayectorias y métricas de episodios
         """
-        # Contenedores para almacenar experiencias
-        states = []
-        actions = []
-        rewards = []
-        values = []
-        dones = []
-        next_values = []
-        log_probs = []
+        # Listas para almacenar experiencias
+        states, actions, rewards, values, log_probs, dones = [], [], [], [], [], []
         
-        # Para tracking de episodios
+        # Métricas de episodios
         episode_rewards = []
         episode_lengths = []
+        
+        # Estado inicial
+        state, _ = env.reset()
+        done = False
         episode_reward = 0
         episode_length = 0
         
         # Recolectar experiencias
-        state, _ = env.reset()
         for _ in range(steps_per_epoch):
-            # Obtener acción, valor y log_prob
+            states.append(state)
+            
+            # Obtener acción, valor y log-prob
+            key = self.state.key
             action, log_prob, value, new_key = self.get_action_and_value(
-                self.state.params, jnp.asarray(state)[None, :], self.state.key)
+                self.state.params, 
+                jnp.array([state]), 
+                key
+            )
             self.state = self.state.replace(key=new_key)
             
+            actions.append(action[0])
+            log_probs.append(log_prob[0])
+            values.append(value[0, 0])
+            
             # Ejecutar acción en el entorno
-            next_state, reward, done, truncated, _ = env.step(np.asarray(action[0]))
+            next_state, reward, done, truncated, _ = env.step(action[0])
             done = done or truncated
             
-            # Almacenar transición
-            states.append(state)
-            actions.append(action[0])
+            # Almacenar recompensa y flag de finalización
             rewards.append(reward)
-            values.append(float(value[0][0]))
             dones.append(float(done))
-            log_probs.append(float(log_prob[0][0]))
             
-            # Actualizar métricas de episodio
+            # Actualizar métricas del episodio
             episode_reward += reward
             episode_length += 1
             
-            # Si el episodio termina
+            # Si el episodio terminó
             if done:
-                # Estimar valor del estado final (0 si terminó)
-                next_values.append(0.0)
-                
-                # Guardar métricas del episodio
+                # Registrar métricas del episodio
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
                 
-                # Reiniciar para nuevo episodio
+                # Reiniciar episodio
+                state, _ = env.reset()
                 episode_reward = 0
                 episode_length = 0
-                state, _ = env.reset()
             else:
-                # Estimar valor del siguiente estado si no terminó
-                next_value = float(self._get_value(self.state.params, jnp.asarray(next_state)[None, :])[0][0])
-                next_values.append(next_value)
                 state = next_state
         
-        # Si el último episodio no terminó, guardar sus métricas parciales
-        if episode_length > 0:
-            episode_rewards.append(episode_reward)
-            episode_lengths.append(episode_length)
-            
+        # Calcular el valor del estado final (0 si terminado)
+        if done:
+            last_value = 0
+        else:
+            # Estimar el valor del último estado
+            last_value = self._get_value(self.state.params, jnp.array([state]))[0, 0]
+        
+        # Calcular ventajas y retornos usando GAE
+        values_np = np.array(values)
+        rewards_np = np.array(rewards)
+        dones_np = np.array(dones)
+        
+        # Crear array de valores "siguiente"
+        next_values = np.append(values_np[1:], last_value)
+        
+        # Calcular GAE
+        advantages, returns = self._compute_gae(
+            rewards=rewards_np,
+            values=values_np,
+            next_values=next_values,
+            dones=dones_np,
+            gamma=self.gamma,
+            lam=0.95
+        )
+        
         # Empaquetar datos
         trajectory_data = {
-            'states': np.array(states, dtype=np.float32),
-            'actions': np.array(actions, dtype=np.float32),
-            'rewards': np.array(rewards, dtype=np.float32),
-            'values': np.array(values, dtype=np.float32),
-            'dones': np.array(dones, dtype=np.float32),
-            'next_values': np.array(next_values, dtype=np.float32),
-            'log_probs': np.array(log_probs, dtype=np.float32).reshape(-1, 1)
+            'states': np.array(states),
+            'actions': np.array(actions),
+            'log_probs': np.array(log_probs),
+            'returns': returns,
+            'advantages': advantages
         }
         
-        episode_history = {
-            'reward': episode_rewards,
-            'length': episode_lengths
+        episode_info = {
+            'episode_rewards': episode_rewards,
+            'episode_lengths': episode_lengths
         }
         
-        return trajectory_data, episode_history
+        return trajectory_data, episode_info
     
     def _update_policy(self, data: Dict[str, np.ndarray], batch_size: int, 
-                     update_iters: int) -> Dict[str, float]:
+                 update_iters: int) -> Dict[str, float]:
         """
-        Actualiza la política y función de valor con los datos recopilados.
+        Actualiza la política usando los datos recolectados.
         
         Parámetros:
         -----------
         data : Dict[str, np.ndarray]
-            Datos de trayectoria recolectados
+            Datos de experiencias recolectadas
         batch_size : int
-            Tamaño del lote para actualizaciones
+            Tamaño de lote para actualizaciones
         update_iters : int
-            Número de iteraciones de actualización por época
+            Número de iteraciones de actualización
             
         Retorna:
         --------
         Dict[str, float]
-            Estadísticas de actualización
+            Métricas promedio de las actualizaciones
         """
-        # Calcular ventajas usando GAE
-        advantages, returns = self._compute_gae(
-            data['rewards'], 
-            data['values'], 
-            data['next_values'], 
-            data['dones'], 
-            self.gamma
-        )
+        # Extraer datos
+        states = data['states']
+        actions = data['actions']
+        log_probs = data['log_probs']
+        returns = data['returns']
+        advantages = data['advantages']
         
-        # Convertir a arrays JAX para actualización
-        states = jnp.asarray(data['states'])
-        actions = jnp.asarray(data['actions'])
-        log_probs = jnp.asarray(data['log_probs'])
-        returns = jnp.asarray(returns).reshape(-1, 1)
-        advantages = jnp.asarray(advantages).reshape(-1, 1)
-        
-        # Variables para métricas
-        metrics_mean = {
-            'total_loss': 0, 
-            'policy_loss': 0, 
-            'value_loss': 0, 
-            'entropy': 0
+        # Métricas acumuladas
+        metrics_sum = {
+            'total_loss': 0.0,
+            'policy_loss': 0.0,
+            'value_loss': 0.0,
+            'entropy': 0.0
         }
         
-        # Múltiples epochs de actualización sobre los mismos datos
+        # Índices para muestreo aleatorio
+        indices = np.arange(len(states))
+        
+        # Crear un generador de números aleatorios con semilla fija para reproducibilidad
+        rng = np.random.Generator(np.random.PCG64(seed=42))
+        
+        # Múltiples épocas de actualización con los mismos datos
         for _ in range(update_iters):
-            # Crear generador aleatorio para índices
-            rng = np.random.Generator(np.random.PCG64(42))
+            # Mezclar índices para muestreo
+            rng.shuffle(indices)
             
-            # Barajar datos
-            perm = rng.permutation(len(states))
-            n_batches = max(len(states) // batch_size, 1)
-            
-            # Actualizar en mini-batches
-            for i in range(n_batches):
-                # Obtener índices del batch
-                idx_start = i * batch_size
-                idx_end = min((i + 1) * batch_size, len(states))
-                batch_indices = perm[idx_start:idx_end]
+            # Procesar por lotes
+            for start in range(0, len(states), batch_size):
+                end = start + batch_size
+                batch_indices = indices[start:end]
                 
-                # Seleccionar datos del batch
-                state_batch = states[batch_indices]
-                action_batch = actions[batch_indices]
-                old_log_prob_batch = log_probs[batch_indices]
-                return_batch = returns[batch_indices]
-                advantage_batch = advantages[batch_indices]
+                # Extraer lote
+                batch_states = states[batch_indices]
+                batch_actions = actions[batch_indices]
+                batch_log_probs = log_probs[batch_indices]
+                batch_returns = returns[batch_indices]
+                batch_advantages = advantages[batch_indices]
                 
-                # Realizar paso de actualización
+                # Actualizar parámetros con este lote
                 self.state, batch_metrics = self.train_step(
-                    self.state, 
-                    state_batch, 
-                    action_batch, 
-                    old_log_prob_batch, 
-                    return_batch, 
-                    advantage_batch
+                    self.state,
+                    jnp.array(batch_states),
+                    jnp.array(batch_actions),
+                    jnp.array(batch_log_probs),
+                    jnp.array(batch_returns),
+                    jnp.array(batch_advantages)
                 )
                 
                 # Acumular métricas
                 for k, v in batch_metrics.items():
-                    metrics_mean[k] += float(v) / (n_batches * update_iters)
+                    metrics_sum[k] += float(v)
         
-        return metrics_mean
+        # Calcular promedios
+        num_updates = update_iters * ((len(states) + batch_size - 1) // batch_size)
+        metrics_avg = {k: v / max(1, num_updates) for k, v in metrics_sum.items()}
+        
+        return metrics_avg
     
     def train(self, env: Any, epochs: int = 100, steps_per_epoch: int = 4000, batch_size: int = 64, 
              update_iters: int = 10, gae_lambda: float = 0.95,
@@ -956,16 +969,23 @@ class PPOWrapper:
         """
         Configura las funciones de codificación para procesar las entradas.
         """
-        # Calcular dimensiones de entrada aplanadas
-        cgm_dim = np.prod(self.cgm_shape[1:])
-        other_dim = np.prod(self.other_features_shape[1:])
+        # Calcular dimensiones de entrada aplanadas de manera segura
+        if len(self.cgm_shape) <= 1:
+            cgm_dim = 1
+        else:
+            cgm_dim = int(np.prod(self.cgm_shape[1:]))
+        
+        if len(self.other_features_shape) <= 1:
+            other_dim = 1 
+        else:
+            other_dim = int(np.prod(self.other_features_shape[1:]))
         
         # Inicializar matrices de transformación
         self.key, key_cgm, key_other = jax.random.split(self.key, 3)
         
         # Crear matrices de proyección para la codificación de entradas
-        self.cgm_weight = jax.random.normal(key_cgm, (cgm_dim, self.ppo_agent.state_dim // 2))
-        self.other_weight = jax.random.normal(key_other, (other_dim, self.ppo_agent.state_dim // 2))
+        self.cgm_weight = jax.random.normal(key_cgm, (int(cgm_dim), self.ppo_agent.state_dim // 2))
+        self.other_weight = jax.random.normal(key_other, (int(other_dim), self.ppo_agent.state_dim // 2))
         
         # JIT-compilar transformaciones para mayor rendimiento
         self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
@@ -1312,8 +1332,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad completa con la interfaz del sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="ppo")
-
+    return DRLModelWrapper(lambda **kwargs: wrapper, framework="jax", algorithm="ppo")
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

@@ -58,7 +58,7 @@ from models.jax.DeepReinforcementLearning.sac import model_creator as jax_sac_cr
 from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_creator
 
 # Modo de Ejecución
-DEBUG = True 
+DEBUG = False 
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
@@ -178,13 +178,13 @@ USE_JAX_MODELS = {
     "jax_q_learning": False,
     "jax_reinforce_mcpg": False,
     "jax_sarsa": False,
-    "jax_value_iteration": True,
+    "jax_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "jax_a2c": False,
-    "jax_a3c": False,
-    "jax_ddpg": False,
-    "jax_dqn": False,
-    "jax_ppo": False,
-    "jax_sac": False,
-    "jax_trpo": False,
+    "jax_a2c": True,
+    "jax_a3c": True,
+    "jax_ddpg": True,
+    "jax_dqn": True,
+    "jax_ppo": True,
+    "jax_sac": True,
+    "jax_trpo": True,
 }

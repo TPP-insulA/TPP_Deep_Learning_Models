@@ -8,6 +8,7 @@ import optax
 from typing import Dict, List, Tuple, Any, Optional, Callable, Sequence
 from collections import deque
 from types import SimpleNamespace
+import pickle
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -614,8 +615,7 @@ class DDPG:
         action = np.array(action)
         
         if add_noise:
-            noise = self.noise()
-            action += noise
+            action += self.noise()
             
         # Clipear al rango válido de acciones
         action = np.clip(action, self.action_low, self.action_high)
@@ -803,13 +803,6 @@ class DDPG:
             # Realizar actualización
             self.train_state, metrics = self.train_step(self.train_state, batch)
             
-            # Actualizar métricas acumuladas
-            self.train_state.update_metrics(
-                metrics['actor_loss'],
-                metrics['critic_loss'],
-                metrics['q_value']
-            )
-            
             return metrics['actor_loss'], metrics['critic_loss']
         return None, None
     
@@ -836,18 +829,28 @@ class DDPG:
         """
         history['episode_rewards'].append(episode_reward)
         
-        # Obtener promedios de métricas
-        actor_loss_avg, critic_loss_avg, q_value_avg = self.train_state.get_metrics()
-        
         if episode_actor_loss:
-            history['actor_losses'].append(actor_loss_avg)
-            history['critic_losses'].append(critic_loss_avg)
-            history['avg_q_values'].append(q_value_avg)
+            avg_actor_loss = sum(episode_actor_loss) / len(episode_actor_loss)
+            avg_critic_loss = sum(episode_critic_loss) / len(episode_critic_loss)
+            history['actor_losses'].append(avg_actor_loss)
+            history['critic_losses'].append(avg_critic_loss)
+            
+            # Calcular valor Q medio para este episodio
+            q_values = []
+            for i in range(len(episode_actor_loss)):
+                # Podemos estimar los valores Q a partir de las pérdidas
+                # Valor Q aproximado es lo inverso de la pérdida del actor
+                q_value = -episode_actor_loss[i]
+                q_values.append(q_value)
+            
+            avg_q = sum(q_values) / len(q_values) if q_values else 0.0
+            history['avg_q_values'].append(avg_q)
         else:
+            # Si no hay pérdidas, registrar NaN para mantener consistencia
             history['actor_losses'].append(float('nan'))
             history['critic_losses'].append(float('nan'))
             history['avg_q_values'].append(float('nan'))
-            
+        
         return history
     
     def _log_progress(self, episode: int, episodes: int, episode_reward_history: List, 
@@ -876,15 +879,27 @@ class DDPG:
             Mejor recompensa actualizada
         """
         if (episode + 1) % log_interval == 0:
-            avg_reward = np.mean(episode_reward_history)
-            print(f"Episodio {episode+1}/{episodes} - Recompensa Promedio: {avg_reward:.2f}, "
-                  f"Pérdida Actor: {history['actor_losses'][-1]:.4f}, "
-                  f"Pérdida Crítico: {history['critic_losses'][-1]:.4f}")
+            # Calcular promedio de recompensas recientes
+            avg_reward = sum(episode_reward_history) / len(episode_reward_history)
             
-            # Verificar si es el mejor modelo
+            # Verificar si hay una nueva mejor recompensa
+            new_best = ""
             if avg_reward > best_reward:
                 best_reward = avg_reward
-                print(f"Nuevo mejor modelo con recompensa: {best_reward:.2f}")
+                new_best = " (nuevo mejor)"
+            
+            # Obtener promedios de pérdidas recientes (si están disponibles)
+            actor_losses = [l for l in history['actor_losses'][-log_interval:] if not np.isnan(l)]
+            critic_losses = [l for l in history['critic_losses'][-log_interval:] if not np.isnan(l)]
+            
+            avg_actor_loss = sum(actor_losses) / len(actor_losses) if actor_losses else float('nan')
+            avg_critic_loss = sum(critic_losses) / len(critic_losses) if critic_losses else float('nan')
+            
+            # Mostrar progreso
+            print(f"Episodio {episode+1}/{episodes} - "
+                  f"Recompensa promedio: {avg_reward:.2f}{new_best} - "
+                  f"Actor loss: {avg_actor_loss:.4f} - "
+                  f"Critic loss: {avg_critic_loss:.4f}")
         
         return best_reward
     
@@ -1000,8 +1015,7 @@ class DDPG:
             # Actualizar historial
             history = self._update_history(history, episode_reward, episode_actor_loss, episode_critic_loss)
             
-            # Resetear métricas y ruido
-            self.train_state.reset_metrics()
+            # Resetear el ruido para el siguiente episodio
             self.noise.reset()
             
             # Actualizar historial de recompensas
@@ -1216,6 +1230,15 @@ class DDPG:
 class DDPGWrapper:
     """
     Wrapper para hacer que el agente DDPG sea compatible con la interfaz de modelos de aprendizaje profundo.
+    
+    Parámetros:
+    -----------
+    ddpg_agent : DDPG
+        Agente DDPG inicializado
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características
     """
     
     def __init__(
@@ -1230,7 +1253,7 @@ class DDPGWrapper:
         Parámetros:
         -----------
         ddpg_agent : DDPG
-            Agente DDPG a encapsular
+            Agente DDPG inicializado
         cgm_shape : Tuple[int, ...]
             Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
@@ -1239,72 +1262,62 @@ class DDPGWrapper:
         self.ddpg_agent = ddpg_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
+        self.state_dim = ddpg_agent.state_dim
         
-        # Inicializar generador de números aleatorios
-        self.key = jax.random.PRNGKey(42)
-        self.key, self.encoder_key = jax.random.split(self.key)
-        
-        # Configurar funciones de codificación para entradas
+        # Inicializar los codificadores
         self._setup_encoders()
-        
-        # Historial de entrenamiento
-        self.history = {
-            'loss': [],
-            'val_loss': [],
-            'actor_losses': [],
-            'critic_losses': [],
-            'episode_rewards': []
-        }
     
     def _setup_encoders(self) -> None:
         """
-        Configura las funciones de codificación para procesar las entradas.
+        Configura los codificadores para proyectar datos de entrada al espacio de estados.
         """
-        # Calcular dimensiones de entrada aplanadas
-        cgm_dim = np.prod(self.cgm_shape[1:])
-        other_dim = np.prod(self.other_features_shape[1:])
+        # Semilla para reproducibilidad
+        rng_key = jax.random.PRNGKey(42)
+        key_cgm, key_other = jax.random.split(rng_key)
         
-        # Inicializar matrices de transformación
-        self.key, key_cgm, key_other = jax.random.split(self.key, 3)
+        # Obtener dimensiones y convertirlas explícitamente a enteros
+        cgm_dim = int(np.prod(self.cgm_shape))
+        other_dim = int(np.prod(self.other_features_shape))
         
-        # Crear matrices de proyección para la codificación de entradas
+        # Inicializar pesos para la proyección de dimensiones
         self.cgm_weight = jax.random.normal(key_cgm, (cgm_dim, self.ddpg_agent.state_dim // 2))
         self.other_weight = jax.random.normal(key_other, (other_dim, self.ddpg_agent.state_dim // 2))
-        
-        # JIT-compilar transformaciones para mayor rendimiento
-        self.encode_cgm = jax.jit(self._create_encoder_fn(self.cgm_weight))
-        self.encode_other = jax.jit(self._create_encoder_fn(self.other_weight))
     
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación para transformar entradas.
+        Crea una función de codificación.
         
         Parámetros:
         -----------
         weights : jnp.ndarray
-            Pesos de la transformación
+            Pesos para la codificación
             
         Retorna:
         --------
         Callable
             Función de codificación
         """
-        def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
-            # Aplanar entrada
-            flat_x = x.reshape(x.shape[0], -1)
-            # Transformar a espacio de estados
-            encoded = jnp.tanh(jnp.matmul(flat_x, weights))
-            return encoded
-        return encode_fn
+        def encoder_fn(x: jnp.ndarray) -> jnp.ndarray:
+            # Aplanar la entrada si es necesario
+            if x.ndim > 2:
+                x_flat = x.reshape(x.shape[0], -1)
+            else:
+                x_flat = x
+            
+            # Proyectar a la dimensión del espacio de estado
+            encoded = jnp.dot(x_flat, weights)
+            return jax.nn.tanh(encoded)  # Activación tanh para limitar valores
+            
+        return encoder_fn
     
     def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = False) -> jnp.ndarray:
         """
-        Realiza una predicción usando el modelo DDPG.
+        Llamada principal del modelo.
         
         Parámetros:
         -----------
         cgm_input : jnp.ndarray
-            Datos CGM de entrada
+            Datos de entrada CGM
         other_input : jnp.ndarray
             Otras características de entrada
         training : bool, opcional
@@ -1313,7 +1326,7 @@ class DDPGWrapper:
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis
+            Predicciones del modelo
         """
         return self.predict([cgm_input, other_input])
     
@@ -1324,30 +1337,33 @@ class DDPGWrapper:
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_input, other_input]
+            Lista de entradas [cgm_input, other_input]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis
+            Predicciones del modelo
         """
         cgm_input, other_input = inputs
         
-        # Codificar entradas a espacio de estado
-        cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
-        other_encoded = self.encode_other(jnp.array(other_input))
+        # Codificar entradas
+        cgm_encoder = self._create_encoder_fn(self.cgm_weight)
+        other_encoder = self._create_encoder_fn(self.other_weight)
         
-        # Combinar características en un estado
-        states = np.concatenate([cgm_encoded, other_encoded], axis=-1)
+        encoded_cgm = cgm_encoder(cgm_input)
+        encoded_other = other_encoder(other_input)
         
-        # Predecir acciones (dosis) para cada estado
-        predictions = np.zeros((len(states), 1))
-        for i, state in enumerate(states):
-            # Usar el actor sin ruido para predicción determinística
-            action = self.ddpg_agent.get_action(state, add_noise=False)
-            predictions[i] = action
+        # Combinar características codificadas
+        encoded_state = jnp.concatenate([encoded_cgm, encoded_other], axis=-1)
         
-        return predictions
+        # Obtener acción del agente DDPG (sin exploración en predicción)
+        actions = np.zeros((encoded_state.shape[0], 1), dtype=np.float32)
+        
+        for i in range(encoded_state.shape[0]):
+            action = self.ddpg_agent.get_action(encoded_state[i], add_noise=False)
+            actions[i, 0] = action[0]  # Tomar el primer valor de la acción
+            
+        return actions
     
     def fit(
         self, 
@@ -1360,20 +1376,20 @@ class DDPGWrapper:
         verbose: int = 0
     ) -> Dict:
         """
-        Entrena el modelo DDPG con los datos proporcionados.
+        Entrena el modelo con los datos proporcionados.
         
         Parámetros:
         -----------
         x : List[jnp.ndarray]
-            Lista con [cgm_input, other_input]
+            Lista de entradas [cgm_input, other_input]
         y : jnp.ndarray
-            Valores objetivo de dosis
+            Valores objetivo (acciones)
         validation_data : Optional[Tuple], opcional
             Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de episodios de entrenamiento (default: 1)
+            Número de épocas de entrenamiento (default: 1)
         batch_size : int, opcional
-            Tamaño del lote (default: 32)
+            Tamaño de lote (default: 32)
         callbacks : List, opcional
             Lista de callbacks (default: None)
         verbose : int, opcional
@@ -1382,48 +1398,26 @@ class DDPGWrapper:
         Retorna:
         --------
         Dict
-            Historia del entrenamiento
+            Historial de entrenamiento
         """
-        if verbose > 0:
-            print("Entrenando modelo DDPG...")
-            
-        # Crear entorno simulado para RL a partir de los datos
-        env = self._create_training_environment(x[0], x[1], y)
+        # Extraer datos de entrenamiento
+        x_cgm, x_other = x
+        
+        # Crear entorno de entrenamiento para el agente DDPG
+        env = self._create_training_environment(x_cgm, x_other, y)
         
         # Entrenar el agente DDPG
-        training_history = self.ddpg_agent.train(
-            env=env,
+        history = self.ddpg_agent.train(
+            env, 
             episodes=epochs,
             max_steps=batch_size,
-            warmup_steps=min(1000, batch_size // 2),
+            warmup_steps=min(500, batch_size * 5),
             update_every=1,
             render=False,
-            log_interval=max(1, epochs // 10) if verbose > 0 else epochs + 1
+            log_interval=max(1, epochs // 10)
         )
         
-        # Actualizar historial con métricas del entrenamiento
-        self.history['actor_losses'].extend(training_history.get('actor_losses', []))
-        self.history['critic_losses'].extend(training_history.get('critic_losses', []))
-        self.history['episode_rewards'].extend(training_history.get('episode_rewards', []))
-        
-        # Calcular pérdida en datos de entrenamiento
-        train_preds = self.predict(x)
-        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
-        self.history['loss'].append(train_loss)
-        
-        # Evaluar en datos de validación si se proporcionan
-        if validation_data:
-            val_x, val_y = validation_data
-            val_preds = self.predict(val_x)
-            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
-            self.history['val_loss'].append(val_loss)
-        
-        if verbose > 0:
-            print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
-            if validation_data:
-                print(f"Pérdida de validación: {val_loss:.4f}")
-        
-        return self.history
+        return history
     
     def _create_training_environment(
         self, 
@@ -1432,7 +1426,7 @@ class DDPGWrapper:
         targets: jnp.ndarray
     ) -> Any:
         """
-        Crea un entorno de entrenamiento personalizado basado en los datos.
+        Crea un entorno de entrenamiento para el agente DDPG.
         
         Parámetros:
         -----------
@@ -1441,90 +1435,78 @@ class DDPGWrapper:
         other_features : jnp.ndarray
             Otras características
         targets : jnp.ndarray
-            Valores objetivo de dosis
+            Valores objetivo (acciones)
             
         Retorna:
         --------
         Any
             Entorno de entrenamiento
         """
-        class InsulinDosingEnv:
-            """Entorno personalizado para problema de dosificación de insulina."""
-            
-            def __init__(self, cgm, features, targets, model_wrapper):
-                self.cgm = np.array(cgm)
-                self.features = np.array(features)
-                self.targets = np.array(targets)
-                self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+        # Crear un entorno personalizado para el entrenamiento DDPG
+        class DDPGEnv:
+            def __init__(self, cgm_data, other_features, targets, cgm_encoder, other_encoder):
+                self.cgm_data = cgm_data
+                self.other_features = other_features
+                self.targets = targets
+                self.cgm_encoder = cgm_encoder
+                self.other_encoder = other_encoder
                 self.current_idx = 0
-                self.max_idx = len(targets) - 1
-                
-                # Para compatibilidad con algoritmos RL
-                self.observation_space = SimpleNamespace(
-                    shape=(model_wrapper.ddpg_agent.state_dim,),
-                    low=-np.ones(model_wrapper.ddpg_agent.state_dim) * 10,
-                    high=np.ones(model_wrapper.ddpg_agent.state_dim) * 10
-                )
-                
+                self.num_samples = len(targets)
+                self.rng = np.random.default_rng(seed=42)
                 self.action_space = SimpleNamespace(
-                    shape=model_wrapper.ddpg_agent.action_high.shape,
-                    low=model_wrapper.ddpg_agent.action_low,
-                    high=model_wrapper.ddpg_agent.action_high,
-                    sample=self._sample_action
+                    sample=lambda: self.rng.uniform(0, 15, (1,)),
+                    n=1,
+                    shape=(1,)
                 )
-            
-            def _sample_action(self):
-                """Muestrea una acción aleatoria del espacio continuo."""
-                return self.rng.uniform(
-                    self.action_space.low, 
-                    self.action_space.high
+                self.observation_space = SimpleNamespace(
+                    shape=(self.ddpg_agent.state_dim,)
                 )
                 
             def reset(self):
-                """Reinicia el entorno eligiendo un ejemplo aleatorio."""
-                self.current_idx = self.rng.integers(0, self.max_idx)
-                state = self._get_state()
+                # Seleccionar un punto aleatorio para iniciar
+                self.current_idx = self.rng.integers(0, self.num_samples)
+                
+                # Obtener estado actual
+                state = self._get_state(self.current_idx)
+                
                 return state, {}
-            
+                
             def step(self, action):
-                """Ejecuta un paso con la acción dada."""
-                # Obtener valor de dosis (acción continua)
-                dose = float(action[0])
+                # Calcular error con respecto al objetivo
+                true_action = self.targets[self.current_idx]
+                error = np.abs(action[0] - true_action)
                 
-                # Calcular recompensa como negativo del error absoluto
-                target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                # Recompensa inversamente proporcional al error
+                reward = -error
                 
-                # Avanzar al siguiente ejemplo
-                self.current_idx = (self.current_idx + 1) % self.max_idx
+                # Avanzar al siguiente punto
+                self.current_idx = (self.current_idx + 1) % self.num_samples
                 
-                # Obtener próximo estado
-                next_state = self._get_state()
+                # Obtener siguiente estado
+                next_state = self._get_state(self.current_idx)
                 
-                # Episodio siempre termina después de un paso
-                done = True
-                truncated = False
+                # Verificar si el episodio ha terminado
+                done = False  # En este caso, los episodios no terminan naturalmente
                 
-                return next_state, reward, done, truncated, {}
-            
-            def _get_state(self):
-                """Obtiene el estado codificado para el ejemplo actual."""
-                # Obtener datos actuales
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
+                return next_state, reward, done, False, {}
                 
-                # Codificar a espacio de estado
-                cgm_encoded = self.model.encode_cgm(jnp.array(cgm_batch))
-                other_encoded = self.model.encode_other(jnp.array(features_batch))
+            def _get_state(self, idx):
+                # Codificar estado actual
+                cgm_sample = self.cgm_data[idx:idx+1]
+                other_sample = self.other_features[idx:idx+1]
                 
-                # Combinar características
-                state = np.concatenate([cgm_encoded[0], other_encoded[0]])
+                encoded_cgm = self.cgm_encoder(cgm_sample)[0]
+                encoded_other = self.other_encoder(other_sample)[0]
                 
-                return state
+                # Combinar características codificadas
+                return np.concatenate([encoded_cgm, encoded_other])
         
-        # Crear y devolver el entorno
-        return InsulinDosingEnv(cgm_data, other_features, targets, self)
+        # Crear encoders
+        cgm_encoder = self._create_encoder_fn(self.cgm_weight)
+        other_encoder = self._create_encoder_fn(self.other_weight)
+        
+        # Crear y retornar el entorno
+        return DDPGEnv(cgm_data, other_features, targets, cgm_encoder, other_encoder)
     
     def save(self, filepath: str) -> None:
         """
@@ -1535,24 +1517,35 @@ class DDPGWrapper:
         filepath : str
             Ruta donde guardar el modelo
         """
-        # Guardar modelos actor y crítico
-        self.ddpg_agent.save_models(filepath + "_actor.h5", filepath + "_critic.h5")
+        # Crear directorio si no existe
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        print(f"Modelo guardado en {filepath}")
+        # Guardar datos del modelo
+        model_data = {
+            'cgm_weight': np.array(self.cgm_weight),
+            'other_weight': np.array(self.other_weight),
+            'agent_state': self.ddpg_agent.state
+        }
+        
+        with open(filepath, 'wb') as f:
+            pickle.dump(model_data, f)
     
     def load(self, filepath: str) -> None:
         """
-        Carga el modelo DDPG desde disco.
+        Carga el modelo desde disco.
         
         Parámetros:
         -----------
         filepath : str
             Ruta desde donde cargar el modelo
         """
-        # Cargar modelos actor y crítico
-        self.ddpg_agent.load_models(filepath + "_actor.h5", filepath + "_critic.h5")
+        with open(filepath, 'rb') as f:
+            model_data = pickle.load(f)
         
-        print(f"Modelo cargado desde {filepath}")
+        # Cargar pesos y estado
+        self.cgm_weight = model_data['cgm_weight']
+        self.other_weight = model_data['other_weight']
+        self.ddpg_agent.state = model_data['agent_state']
     
     def get_config(self) -> Dict:
         """
@@ -1564,12 +1557,10 @@ class DDPGWrapper:
             Configuración del modelo
         """
         return {
-            "cgm_shape": self.cgm_shape,
-            "other_features_shape": self.other_features_shape,
-            "state_dim": self.ddpg_agent.state_dim,
-            "action_dim": self.ddpg_agent.action_dim,
-            "action_high": self.ddpg_agent.action_high.tolist(),
-            "action_low": self.ddpg_agent.action_low.tolist()
+            'cgm_shape': self.cgm_shape,
+            'other_features_shape': self.other_features_shape,
+            'state_dim': self.state_dim,
+            'action_dim': self.ddpg_agent.action_dim
         }
 
 def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
