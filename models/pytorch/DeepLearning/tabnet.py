@@ -151,7 +151,12 @@ def sparsemax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     
     # Obtener último valor donde sorted_x > tau
     valid = sorted_x > candidate_tau
+    
+    # Sumar para obtener k, asegurando que sea al menos 1
     k = valid.long().sum(dim=1, keepdim=True)
+    k = torch.max(k, torch.ones_like(k))  # Asegurar que k sea al menos 1
+    
+    # Obtener tau y calcular la salida sparsemax
     tau = torch.gather(candidate_tau, 1, k - 1)
     
     # Calcular la salida sparsemax
@@ -364,19 +369,63 @@ class TabNetStep(nn.Module):
             - Máscara de atención generada en este paso
             - Escalas de prior actualizadas para el siguiente paso
         """
+        # Estabilizar prior_scales para evitar valores extremos
+        prior_scales = torch.clamp(prior_scales, min=1e-8, max=1e8)
+        
         # Generar máscara de atención
         attn_raw = self.attention.fc(features)
+        
+        # Estabilizar attn_raw para evitar valores extremos
+        attn_raw = torch.clamp(attn_raw, min=-100.0, max=100.0)
+        
         attn_scaled = attn_raw * prior_scales
-        mask = sparsemax(attn_scaled, dim=-1) if hasattr(self.attention, 'use_sparsity') and self.attention.use_sparsity else F.softmax(attn_scaled, dim=-1)
         
-        # Actualizar escalas de prior
-        new_prior_scales = prior_scales * (1 - mask + self.sparsity_coeff * self.relaxation_factor)
+        # Usar try-except para manejar posibles errores en sparsemax
+        try:
+            if hasattr(self.attention, 'use_sparsity') and self.attention.use_sparsity:
+                mask = sparsemax(attn_scaled, dim=-1)
+            else:
+                mask = F.softmax(attn_scaled, dim=-1)
+        except Exception:
+            # Fallback seguro si sparsemax falla
+            mask = F.softmax(attn_scaled, dim=-1)
         
-        # Aplicar máscara a las características
+        # Verificar y corregir cualquier NaN en la máscara
+        if torch.isnan(mask).any():
+            mask = torch.where(torch.isnan(mask), torch.zeros_like(mask), mask)
+            # Renormalizar para asegurar que sume 1 en la dimensión adecuada
+            mask_sum = mask.sum(dim=-1, keepdim=True)
+            mask_sum = torch.where(mask_sum == 0, torch.ones_like(mask_sum), mask_sum)
+            mask = mask / mask_sum
+        
+        # Actualizar prior_scales con protección contra NaN
+        relaxation_term = self.sparsity_coeff * self.relaxation_factor
+        relaxation_term = max(0.0, min(relaxation_term, 1.0))
+        mask_complement = torch.clamp(1.0 - mask, min=0.0, max=1.0)
+        
+        new_prior_scales = prior_scales * (mask_complement + relaxation_term)
+        
+        # Verificar y corregir NaN en prior_scales
+        if torch.isnan(new_prior_scales).any():
+            new_prior_scales = torch.where(
+                torch.isnan(new_prior_scales),
+                prior_scales,  # Mantener valores anteriores si hay NaN
+                new_prior_scales
+            )
+        
+        # Aplicar máscara a las características con protección
         masked_features = features * mask
         
         # Transformar características enmascaradas
         transformed_features = self.feature_transformer(masked_features)
+        
+        # Verificar y corregir NaN en las características transformadas
+        if torch.isnan(transformed_features).any():
+            transformed_features = torch.where(
+                torch.isnan(transformed_features),
+                torch.zeros_like(transformed_features),
+                transformed_features
+            )
         
         # Aplicar ReLU para la salida
         step_output = F.relu(transformed_features)
@@ -449,7 +498,7 @@ class TabNetModel(nn.Module):
         ])
         
         # Capas finales
-        final_units = [self.output_dim, self.output_dim // 2, self.output_dim]
+        final_units = [self.feature_dim, self.output_dim // 2, self.output_dim]
         self.final_layers = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(final_units[i], final_units[i+1]),

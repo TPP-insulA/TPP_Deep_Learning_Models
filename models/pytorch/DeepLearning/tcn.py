@@ -106,7 +106,7 @@ class WeightNorm(nn.Module):
         
         # Reemplazar temporalmente el peso
         tmp_weight = getattr(self.module, 'weight')
-        setattr(self.module, 'weight', weight_scaled)
+        self.module.weight.data = weight_scaled
         
         # Ejecutar el módulo
         output = self.module(x)
