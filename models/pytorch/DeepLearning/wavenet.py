@@ -74,7 +74,7 @@ def causal_padding(x: torch.Tensor, padding_size: int) -> torch.Tensor:
 
 class WaveNetBlock(nn.Module):
     """
-    Bloque básico de WaveNet con activaciones gated y conexiones residuales/skip.
+    Bloque residual para WaveNet con conexiones residuales y de salto.
     
     Atributos:
     ----------
@@ -92,84 +92,90 @@ class WaveNetBlock(nn.Module):
         Si se debe escalar la conexión skip
     """
     
-    def __init__(
-        self, 
-        filters: int, 
-        kernel_size: int, 
-        dilation_rate: int, 
-        dropout_rate: float,
-        residual_scale: float = 0.1,
-        use_skip_scale: bool = True
-    ) -> None:
+    def __init__(self, residual_channels: int, skip_channels: int, dilation: int, 
+                 kernel_size: int = 3, causal: bool = True, use_bias: bool = True,
+                 input_channels: Optional[int] = None) -> None:
         """
-        Inicializa un bloque WaveNet.
+        Inicializa un bloque residual WaveNet.
         
         Parámetros:
         -----------
-        filters : int
+        residual_channels : int
             Número de filtros para las convoluciones
-        kernel_size : int
-            Tamaño del kernel convolucional
-        dilation_rate : int
+        skip_channels : int
+            Número de filtros para la convolución de la conexión skip
+        dilation : int
             Tasa de dilatación para la convolución
-        dropout_rate : float
-            Tasa de dropout para regularización
-        residual_scale : float, opcional
-            Factor de escala para la conexión residual (default: 0.1)
-        use_skip_scale : bool, opcional
-            Si se debe escalar la conexión skip (default: True)
+        kernel_size : int, opcional
+            Tamaño del kernel convolucional (default: 3)
+        causal : bool, opcional
+            Si se debe usar padding causal (default: True)
+        use_bias : bool, opcional
+            Si se debe usar sesgo en las capas convolucionales (default: True)
+        input_channels : int, opcional
+            Número de canales en la entrada. Si es diferente de residual_channels, 
+            se añade una proyección de entrada (default: None)
         """
         super().__init__()
         
-        self.filters = filters
+        self.residual_channels = residual_channels
+        self.skip_channels = skip_channels
+        self.dilation = dilation
         self.kernel_size = kernel_size
-        self.dilation_rate = dilation_rate
-        self.dropout_rate = dropout_rate
-        self.residual_scale = residual_scale
-        self.use_skip_scale = use_skip_scale
+        self.causal = causal
+        
+        # Proyección de entrada si es necesario
+        self.input_projection = None
+        if input_channels is not None and input_channels != residual_channels:
+            self.input_projection = nn.Conv1d(
+                input_channels, 
+                residual_channels, 
+                kernel_size=1, 
+                bias=use_bias
+            )
         
         # Convoluciones dilatadas para filter y gate
         self.filter_conv = nn.Conv1d(
-            in_channels=filters,
-            out_channels=filters,
-            kernel_size=kernel_size,
-            dilation=dilation_rate,
-            bias=True
+            residual_channels, 
+            residual_channels, 
+            kernel_size, 
+            dilation=dilation, 
+            bias=use_bias
         )
         
         self.gate_conv = nn.Conv1d(
-            in_channels=filters,
-            out_channels=filters,
-            kernel_size=kernel_size,
-            dilation=dilation_rate,
-            bias=True
+            residual_channels, 
+            residual_channels, 
+            kernel_size, 
+            dilation=dilation, 
+            bias=use_bias
         )
         
         # Normalización por lotes
-        self.filter_norm = nn.BatchNorm1d(filters)
-        self.gate_norm = nn.BatchNorm1d(filters)
+        self.filter_norm = nn.BatchNorm1d(residual_channels)
+        self.gate_norm = nn.BatchNorm1d(residual_channels)
         
         # Dropout
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout = nn.Dropout(0.2)
         
         # Proyecciones para residual y skip
         self.residual_proj = nn.Conv1d(
-            in_channels=filters,
-            out_channels=filters,
+            in_channels=residual_channels,
+            out_channels=residual_channels,
             kernel_size=1,
             bias=True
         )
         
         self.skip_proj = nn.Conv1d(
-            in_channels=filters,
-            out_channels=filters,
+            in_channels=residual_channels,
+            out_channels=skip_channels,
             kernel_size=1,
             bias=True
         )
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Aplica el bloque WaveNet a la entrada.
+        Procesa la entrada a través del bloque residual.
         
         Parámetros:
         -----------
@@ -181,11 +187,21 @@ class WaveNetBlock(nn.Module):
         Tuple[torch.Tensor, torch.Tensor]
             Tupla con (salida_residual, salida_skip)
         """
-        # Aplicar padding causal
-        padding_size = (self.kernel_size - 1) * self.dilation_rate
-        x_padded = causal_padding(x, padding_size)
+        # Proyectar entrada si es necesario
+        if self.input_projection is not None:
+            x = self.input_projection(x)
         
-        # Calcular filtro y gate
+        # Guardar la entrada original para la conexión residual
+        x_original = x
+        
+        # Aplicar padding causal si es necesario
+        if self.causal:
+            padding_size = (self.kernel_size - 1) * self.dilation
+            x_padded = causal_padding(x, padding_size)
+        else:
+            x_padded = x
+        
+        # Calcular filtro y gate usando la versión con padding
         filter_out = self.filter_conv(x_padded)
         gate_out = self.gate_conv(x_padded)
         
@@ -196,23 +212,11 @@ class WaveNetBlock(nn.Module):
         gated_out = torch.tanh(filter_out) * torch.sigmoid(gate_out)
         gated_out = self.dropout(gated_out)
         
-        # Conexión residual
-        residual_input_proj = self.residual_proj(x)
-        
-        # Alinear la dimensión temporal de la entrada proyectada con la salida gated
-        # La convolución causal reduce la longitud, así que tomamos la parte final
-        target_len = gated_out.size(2)
-        residual_input_aligned = residual_input_proj[:, :, -target_len:]
-        
-        # Aplicar escalado residual y sumar
-        residual_out = gated_out * self.residual_scale + residual_input_aligned
+        # Conexión residual con la entrada original (sin padding)
+        residual_out = self.residual_proj(gated_out) + x_original
         
         # Conexión skip
         skip_out = self.skip_proj(gated_out)
-        
-        # Escalar skip connection si está habilitado
-        if self.use_skip_scale:
-            skip_out = skip_out * torch.sqrt(torch.tensor(1.0 - self.residual_scale))
         
         return residual_out, skip_out
 
@@ -231,7 +235,8 @@ class WaveNetModel(nn.Module):
         Forma de otras características
     """
     
-    def __init__(self, cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> None:
+    def __init__(self, cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], 
+             initial_channels: int = 32, residual_channels: int = 32, skip_channels: int = 64) -> None:
         """
         Inicializa el modelo WaveNet.
         
@@ -241,8 +246,19 @@ class WaveNetModel(nn.Module):
             Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
             Forma de otras características
+        initial_channels : int, opcional
+            Número de canales después de la primera convolución (default: 32)
+        residual_channels : int, opcional
+            Número de canales en los bloques residuales (default: 32)
+        skip_channels : int, opcional
+            Número de canales en las conexiones skip (default: 64)
         """
         super().__init__()
+        
+        # Guardar parámetros de canales
+        self.initial_channels = initial_channels
+        self.residual_channels = residual_channels  # Añadido
+        self.skip_channels = skip_channels          # Reemplaza self.config_filters[-1]
         
         # Obtener parámetros de configuración
         self.activation_name = WAVENET_CONFIG['activation']
@@ -271,37 +287,38 @@ class WaveNetModel(nn.Module):
         # Proyección inicial
         self.initial_conv = nn.Conv1d(
             in_channels=self.cgm_features,
-            out_channels=self.config_filters[0],
+            out_channels=self.initial_channels,
             kernel_size=1,
             padding=0
         )
-        self.initial_norm = nn.BatchNorm1d(self.config_filters[0])
+        self.initial_norm = nn.BatchNorm1d(self.initial_channels)
+        
+        # Añadir proyección de canal si es necesario
+        self.channel_projection = None
+        if self.initial_channels != self.residual_channels:
+            self.channel_projection = nn.Conv1d(
+                in_channels=self.initial_channels,
+                out_channels=self.residual_channels,
+                kernel_size=1,
+                bias=True
+            )
         
         # Crear bloques WaveNet
-        self.wavenet_blocks = nn.ModuleList()
-        self.skip_projections = nn.ModuleList()
-        
-        for i, filters in enumerate(self.config_filters):
-            for dilation in self.dilations:
-                # Crear bloque WaveNet
-                block = WaveNetBlock(
-                    filters=filters,
-                    kernel_size=self.kernel_size,
-                    dilation_rate=dilation,
-                    dropout_rate=self.dropout_rate,
-                    residual_scale=self.residual_scale,
-                    use_skip_scale=self.use_skip_scale
-                )
-                self.wavenet_blocks.append(block)
-                
-                # Proyección para skip connection
-                skip_proj = nn.Conv1d(
-                    in_channels=filters,
-                    out_channels=self.skip_channels,
-                    kernel_size=1,
-                    padding=0
-                )
-                self.skip_projections.append(skip_proj)
+        self.residual_blocks = nn.ModuleList()  # Cambiar el nombre para que coincida con el forward
+
+        for i, dilation in enumerate(self.dilations):
+            # Crear bloque WaveNet con los nuevos parámetros
+            block = WaveNetBlock(
+                residual_channels=self.residual_channels,
+                skip_channels=self.skip_channels,
+                dilation=dilation,
+                kernel_size=self.kernel_size,
+                causal=True,
+                use_bias=True,
+                # Para el primer bloque, especificar los canales de entrada
+                input_channels=self.initial_channels if i == 0 and self.channel_projection is None else None
+            )
+            self.residual_blocks.append(block)
         
         # Capas de post-procesamiento después de sumar las conexiones skip
         self.post_skip_act1 = lambda x: self.activation_fn(x)
@@ -334,7 +351,7 @@ class WaveNetModel(nn.Module):
     
     def forward(self, cgm_input: torch.Tensor, other_input: torch.Tensor) -> torch.Tensor:
         """
-        Realiza la pasada hacia adelante del modelo WaveNet.
+        Realiza una pasada forward del modelo WaveNet.
         
         Parámetros:
         -----------
@@ -348,33 +365,29 @@ class WaveNetModel(nn.Module):
         torch.Tensor
             Predicciones del modelo con forma (batch, 1)
         """
-        # Cambiar forma para convolución 1D: (batch, time_steps, features) -> (batch, features, time_steps)
-        x = cgm_input.transpose(1, 2)
+        # Transponer los datos CGM para que sean compatibles con Conv1D
+        # De [batch, time_steps, features] a [batch, features, time_steps]
+        if cgm_input.dim() == 3:
+            cgm_input = cgm_input.transpose(1, 2)
         
-        # Proyección inicial
-        x = self.initial_conv(x)
-        x = self.initial_norm(x)
-        x = self.activation_fn(x)
+        # Procesar entrada CGM
+        x = self.initial_conv(cgm_input)
         
-        # Lista para almacenar las salidas de skip connections
-        skip_outputs = []
+        # Resto del método sin cambios...
+        # Asegurarse de que x tiene el número correcto de canales para los bloques residuales
+        if x.size(1) != self.residual_channels:
+            x = self.channel_projection(x)  # Añadir esta capa en __init__
         
-        # Aplicar bloques WaveNet
-        current_input = x
-        for i, (block, skip_proj) in enumerate(zip(self.wavenet_blocks, self.skip_projections)):
-            # Aplicar bloque WaveNet
-            residual, skip = block(current_input)
-            
-            # Proyectar skip a la dimensión objetivo
-            projected_skip = skip_proj(skip)
-            skip_outputs.append(projected_skip)
-            
-            # Actualizar input para el siguiente bloque
-            current_input = residual
+        # Procesamiento a través de bloques residuales
+        skip_connections = []
+        for block in self.residual_blocks:
+            residual, skip = block(x)
+            x = x + residual  # Conexión residual
+            skip_connections.append(skip)
         
         # Combinar las salidas de skip
-        if skip_outputs:
-            combined_skip = torch.stack(skip_outputs).sum(dim=0)
+        if skip_connections:
+            combined_skip = torch.stack(skip_connections).sum(dim=0)
         else:
             # Si no hay bloques, crear un tensor de ceros con la dimensión esperada
             batch_size = x.size(0)
@@ -427,7 +440,23 @@ def create_wavenet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple
     nn.Module
         Instancia del modelo WaveNet
     """
-    return WaveNetModel(cgm_shape, other_features_shape)
+    config = WAVENET_CONFIG
+    
+    # Extraer parámetros de canales
+    initial_channels = config.get('initial_channels', 32)
+    residual_channels = config.get('residual_channels', 32)
+    skip_channels = config.get('skip_channels', 64)
+    
+    # Crear el modelo WaveNet con parámetros específicos
+    model = WaveNetModel(
+        cgm_shape=cgm_shape, 
+        other_features_shape=other_features_shape,
+        initial_channels=initial_channels,
+        residual_channels=residual_channels,
+        skip_channels=skip_channels
+    )
+    
+    return model
 
 
 def create_wavenet_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:

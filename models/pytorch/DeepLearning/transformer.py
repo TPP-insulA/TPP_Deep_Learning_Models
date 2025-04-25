@@ -51,6 +51,43 @@ def get_activation_fn(activation_name: str) -> Callable:
         print(f"Advertencia: Función de activación '{activation_name}' no reconocida. Usando ReLU por defecto.")
         return F.relu
 
+class ActivationLayer(nn.Module):
+    """
+    Capa de activación personalizada que envuelve cualquier función de activación.
+    
+    Atributos:
+    ----------
+    activation_fn : Callable
+        Función de activación a aplicar.
+    """
+    
+    def __init__(self, activation_fn: Callable) -> None:
+        """
+        Inicializa la capa de activación.
+        
+        Parámetros:
+        -----------
+        activation_fn : Callable
+            Función de activación a aplicar.
+        """
+        super().__init__()
+        self.activation_fn = activation_fn
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Aplica la función de activación a la entrada.
+        
+        Parámetros:
+        -----------
+        x : torch.Tensor
+            Tensor de entrada.
+            
+        Retorna:
+        --------
+        torch.Tensor
+            Resultado de aplicar la función de activación.
+        """
+        return self.activation_fn(x)
 class PositionEncoding(nn.Module):
     """
     Codificación posicional para el Transformer (implementación PyTorch).
@@ -342,11 +379,11 @@ class TransformerModel(nn.Module):
         self.mlp_layers = nn.Sequential(
             nn.Linear(combined_dim, 128, bias=self.use_bias),
             nn.LayerNorm(128, eps=self.epsilon),
-            lambda x: self.activation_fn(x),
+            ActivationLayer(self.activation_fn),
             nn.Dropout(self.dropout_rate),
             nn.Linear(128, 64, bias=self.use_bias),
             nn.LayerNorm(64, eps=self.epsilon),
-            lambda x: self.activation_fn(x),
+            ActivationLayer(self.activation_fn),
             nn.Dropout(self.dropout_rate),
             nn.Linear(64, 1)  # Capa de salida para regresión
         )
@@ -446,13 +483,15 @@ def create_transformer_model_wrapper(cgm_shape: Tuple[int, ...], other_features_
     DLModelWrapper
         Modelo Transformer envuelto y listo para ser usado por el sistema de entrenamiento.
     """
-    model = create_transformer_model(cgm_shape, other_features_shape)
+    # Definir una función creadora que no toma argumentos
+    def model_creator_fn() -> nn.Module:
+        return create_transformer_model(cgm_shape, other_features_shape)
     
     # Obtener la configuración del early stopping
     es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
     
-    # Crear el wrapper
-    model_wrapper = DLModelWrapperPyTorch(model)
+    # Crear el wrapper con la función creadora
+    model_wrapper = DLModelWrapperPyTorch(model_creator=model_creator_fn)
     
     # Añadir early stopping
     model_wrapper.add_early_stopping(
