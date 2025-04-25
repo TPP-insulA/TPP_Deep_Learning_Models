@@ -13,12 +13,21 @@ import random
 import gym
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 import matplotlib.pyplot as plt
+from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG
+from custom.printer import print_debug
 
+# Constantes para evitar duplicación
+ACTOR_PREFIX = 'actor'
+CRITIC_PREFIX = 'critic'
+MODEL_SUFFIX = '_model.h5'
+ACTOR_SUFFIX = '_actor.weights.h5'
+CRITIC_SUFFIX = '_critic.weights.h5'
+CONST_WEIGHTS_SUFFIX = '.weights.h5'
 
 class ReplayBuffer:
     """
@@ -983,6 +992,8 @@ class DDPG:
         critic_path : str
             Ruta para guardar el modelo del crítico
         """
+        print_debug(f"actor_path >> {actor_path}")
+        print_debug(f"critic_path >> {critic_path}")
         self.actor.save_weights(actor_path)
         self.critic.save_weights(critic_path)
         print(f"Modelos guardados en {actor_path} y {critic_path}")
@@ -1085,15 +1096,8 @@ class DDPG:
         
         plt.tight_layout()
         plt.show()
-        
-# Constantes para evitar duplicación
-ACTOR_PREFIX = 'actor'
-CRITIC_PREFIX = 'critic'
-MODEL_SUFFIX = '_model.h5'
-ACTOR_SUFFIX = '_actor.h5'
-CRITIC_SUFFIX = '_critic.h5'
 
-@register_keras_serializable
+@register_keras_serializable()
 class DDPGWrapper(Model):
     """
     Wrapper para el algoritmo DDPG que implementa la interfaz de Keras.Model.
@@ -1155,10 +1159,11 @@ class DDPGWrapper(Model):
         actions = tf.TensorArray(tf.float32, size=batch_size)
         
         for i in range(batch_size):
-            # Obtener estado para la muestra actual
-            state = states[i].numpy()
-            # Usar el actor para predecir sin ruido de exploración
-            action = self.ddpg_agent.get_action(state, add_noise=False)
+            # Extraer estado para esta muestra
+            state = tf.gather(states, i)
+            # Obtener acción del agente DDPG sin añadir ruido (exploración)
+            action = self.ddpg_agent.get_action(state.numpy(), add_noise=False)
+            # Almacenar en el array
             actions = actions.write(i, tf.convert_to_tensor(action, dtype=tf.float32))
         
         # Convertir a tensor
@@ -1168,23 +1173,23 @@ class DDPGWrapper(Model):
     
     def _encode_states(self, cgm_data: tf.Tensor, other_features: tf.Tensor) -> tf.Tensor:
         """
-        Codifica las entradas en representación de estado para el agente DDPG.
+        Codifica las entradas en estados para el agente DDPG.
         
         Parámetros:
         -----------
         cgm_data : tf.Tensor
-            Datos de monitoreo continuo de glucosa
+            Datos CGM
         other_features : tf.Tensor
-            Otras características (carbohidratos, insulina a bordo, etc.)
+            Otras características
             
         Retorna:
         --------
         tf.Tensor
             Estados codificados
         """
-        # Procesar CGM con capas convolucionales
-        cgm_encoded = self.cgm_conv(cgm_data)
-        cgm_features = self.cgm_pooling(cgm_encoded)
+        # Procesar datos CGM con convolución para extracción de características temporales
+        cgm_features = self.cgm_conv(cgm_data)
+        cgm_features = self.cgm_pooling(cgm_features)
         
         # Procesar otras características
         other_encoded = self.other_encoder(other_features)
@@ -1199,24 +1204,24 @@ class DDPGWrapper(Model):
     
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[tf.data.Dataset, List[tf.Tensor]], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente DDPG.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1232,14 +1237,25 @@ class DDPGWrapper(Model):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Objeto con atributo history compatible con Keras
         """
         if verbose > 0:
             print("Entrenando agente DDPG...")
         
+        # Manejar diferentes tipos de entrada (dataset o tensores)
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            for (inputs, targets) in x.take(1):
+                cgm_data, other_features = inputs
+                y = targets
+                break
+        else:
+            # Usar directamente las entradas proporcionadas
+            cgm_data, other_features = x
+        
         # Crear entorno
-        env = self._create_environment(x[0], x[1], y)
+        env = self._create_environment(cgm_data, other_features, y)
         
         # Entrenar el agente DDPG
         history = self.ddpg_agent.train(
@@ -1248,6 +1264,7 @@ class DDPGWrapper(Model):
             max_steps=batch_size,
             render=False,
             warmup_steps=min(1000, batch_size),
+            update_every=1,
             log_interval=max(1, epochs // 10) if verbose > 0 else epochs + 1
         )
         
@@ -1256,10 +1273,15 @@ class DDPGWrapper(Model):
             'loss': history['episode_rewards'],
             'actor_loss': history['actor_losses'],
             'critic_loss': history['critic_losses'],
-            'val_loss': [history['episode_rewards'][-1] * 1.05] if validation_data is not None else None
+            'val_loss': [history['episode_rewards'][-1] * 1.05] if validation_data is not None else []
         }
         
-        return {'history': keras_history}
+        # Crear un objeto con atributo history para compatibilidad con Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+                
+        return KerasHistoryCompatible(keras_history)
     
     def _create_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                            target_doses: tf.Tensor) -> Any:
@@ -1278,88 +1300,164 @@ class DDPGWrapper(Model):
         Retorna:
         --------
         Any
-            Entorno compatible para entrenamiento
+            Entorno personalizado para aprendizaje por refuerzo
         """
-        # Convertir a numpy para procesamiento
+        # Convertir tensores a numpy para procesamiento
         cgm_np = cgm_data.numpy() if hasattr(cgm_data, 'numpy') else cgm_data
         other_np = other_features.numpy() if hasattr(other_features, 'numpy') else other_features
-        target_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
+        targets_np = target_doses.numpy() if hasattr(target_doses, 'numpy') else target_doses
         
-        # Clase de entorno personalizada
+        # Obtener dimensiones y rangos del agente DDPG para pasarlos al entorno
+        state_dim = self.ddpg_agent.state_dim
+        action_dim = self.ddpg_agent.action_dim
+        action_high = self.ddpg_agent.action_high
+        action_low = self.ddpg_agent.action_low
+        
         class InsulinDosingEnv:
-            """Entorno personalizado para dosificación de insulina."""
+            """
+            Entorno personalizado para dosificación de insulina.
             
-            def __init__(self, cgm, features, targets, model_wrapper):
-                self.cgm = cgm
-                self.features = features
+            Implementa la interfaz básica de OpenAI Gym.
+            """
+            def __init__(self, cgm_data: np.ndarray, other_features: np.ndarray, targets: np.ndarray,
+                        state_dim: int, action_dim: int, action_high: np.ndarray, action_low: np.ndarray) -> None:
+                """
+                Inicializa el entorno con los datos proporcionados.
+                
+                Parámetros:
+                -----------
+                cgm_data : np.ndarray
+                    Datos CGM
+                other_features : np.ndarray
+                    Otras características
+                targets : np.ndarray
+                    Dosis objetivo (valores de referencia)
+                state_dim : int
+                    Dimensión del espacio de estado
+                action_dim : int
+                    Dimensión del espacio de acción
+                action_high : np.ndarray
+                    Límite superior de acciones
+                action_low : np.ndarray
+                    Límite inferior de acciones
+                """
+                self.cgm_data = cgm_data
+                self.other_features = other_features
                 self.targets = targets
-                self.model = model_wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(DDPG_CONFIG.get('seed', 42)))
+                self.state_dim = state_dim
+                self.action_dim = action_dim
                 
-                # Para compatibilidad con algoritmos RL
-                # Espacios de observación y acción
-                self.observation_space = gym.spaces.Box(
-                    low=-10.0, high=10.0, 
-                    shape=(model_wrapper.ddpg_agent.state_dim,)
-                )
-                self.action_space = gym.spaces.Box(
-                    low=np.array([0.0]), 
-                    high=np.array([15.0]),  # Máximo 15 unidades de insulina
-                    dtype=np.float32
-                )
-            
-            def reset(self):
-                """Reinicia el entorno seleccionando un ejemplo aleatorio."""
-                self.current_idx = self.rng.integers(0, self.max_idx)
-                state = self._get_state()
-                return state, {}
-            
-            def step(self, action):
-                """Ejecuta un paso en el entorno con la acción dada."""
-                # Obtener valor de dosis (primera dimensión de la acción)
-                dose = float(action[0])
+                # Definir espacios de observación y acción
+                # Estado: combinación de CGM y otras características codificadas
+                self.rng = np.random.default_rng(42)  # Crear una instancia de Generator
+            def reset(self) -> Tuple[np.ndarray, Dict]:
+                """
+                Reinicia el entorno y devuelve la observación inicial.
                 
-                # Calcular recompensa (negativo del error absoluto)
-                target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                Retorna:
+                --------
+                Tuple[np.ndarray, Dict]
+                    Estado inicial e información adicional
+                """
+                # Seleccionar un índice aleatorio para comenzar usando Generator
+                self.current_idx = self.rng.integers(0, self.max_idx + 1)
+                return self._get_state(), {}  # Devuelve tupla (estado, info)
+                
+            def _get_state(self) -> np.ndarray:
+                """
+                Obtiene el estado actual codificado.
+                
+                Retorna:
+                --------
+                np.ndarray
+                    Estado actual procesado
+                """
+                # Obtener muestras actuales
+                cgm_sample = self.cgm_data[self.current_idx]
+                other_sample = self.other_features[self.current_idx]
+                
+                # Codificar el estado utilizando el wrapper
+                state = self._encode_states(
+                    tf.convert_to_tensor([cgm_sample]),
+                    tf.convert_to_tensor([other_sample])
+                ).numpy()[0]
+                
+                return state
+                
+            def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+                """
+                Ejecuta una acción en el entorno.
+                
+                Parámetros:
+                -----------
+                action : np.ndarray
+                    Acción a ejecutar (dosis de insulina)
+                    
+                Retorna:
+                --------
+                Tuple[np.ndarray, float, bool, bool, Dict]
+                    (nuevo_estado, recompensa, terminado, truncado, info)
+                """
+                # Obtener dosis objetivo
+                target_dose = self.targets[self.current_idx]
+                
+                # Calcular error y recompensa negativa (menor error = mayor recompensa)
+                # Penalizar más la sobredosificación que la subdosificación
+                dose_error = float(action[0] - target_dose)
+                
+                if dose_error > 0:  # Sobredosis (más peligroso)
+                    reward = -10.0 * (dose_error ** 2)
+                else:  # Subdosis
+                    reward = -5.0 * (dose_error ** 2)
+                    
+                # Añadir límite máximo de recompensa negativa
+                reward = max(reward, -100.0)
                 
                 # Avanzar al siguiente ejemplo
-                self.current_idx = (self.current_idx + 1) % self.max_idx
+                self.current_idx = (self.current_idx + 1) % (self.max_idx + 1)
                 
-                # Obtener próximo estado
+                # Obtener nuevo estado
                 next_state = self._get_state()
                 
-                # Episodio siempre termina después de un paso
-                done = True
-                truncated = False
+                # Nunca terminamos el episodio hasta alcanzar max_steps
+                done = False
+                truncated = False  # Añadir parámetro truncated para API de Gym más reciente
                 
-                return next_state, reward, done, truncated, {}
-            
-            def _get_state(self):
-                """Obtiene el estado para el ejemplo actual."""
-                # Obtener datos actuales
-                cgm_batch = self.cgm[self.current_idx:self.current_idx+1]
-                features_batch = self.features[self.current_idx:self.current_idx+1]
+                # Información adicional
+                info = {
+                    'target_dose': target_dose,
+                    'dose_error': dose_error
+                }
                 
-                # Codificar estado usando las capas del modelo wrapper
-                state = self.model._encode_states(
-                    tf.convert_to_tensor(cgm_batch, dtype=tf.float32),
-                    tf.convert_to_tensor(features_batch, dtype=tf.float32)
-                )
+                return next_state, reward, done, truncated, info
                 
-                return state[0].numpy()
-            
-            def render(self):
-                """Renderización del entorno (no implementada)."""
-                pass
+            def render(self, mode: str = 'human') -> None:
+                """
+                Renderiza el entorno (opcional).
+                
+                Parámetros:
+                -----------
+                mode : str, opcional
+                    Modo de renderizado (default: 'human')
+                """
+                if mode == 'human':
+                    print(f"Current index: {self.current_idx}, "
+                          f"Target: {self.targets[self.current_idx]:.2f}")
         
-        return InsulinDosingEnv(cgm_np, other_np, target_np, self)
+        # Vincular el método _encode_states del wrapper al entorno
+        InsulinDosingEnv._encode_states = self._encode_states
+        
+        # Crear y retornar instancia del entorno 
+        return InsulinDosingEnv(
+            cgm_np, other_np, targets_np,
+            state_dim, action_dim, action_high, action_low
+        )
     
     def predict(self, x: List[tf.Tensor], **kwargs) -> np.ndarray:
         """
-        Implementa la interfaz de predicción de Keras.
+        Implementa la predicción del modelo.
         
         Parámetros:
         -----------
@@ -1371,9 +1469,9 @@ class DDPGWrapper(Model):
         Retorna:
         --------
         np.ndarray
-            Predicciones de dosis
+            Predicciones de dosis de insulina
         """
-        return self.call(x).numpy()
+        return self(x).numpy()
     
     def get_config(self) -> Dict:
         """
@@ -1402,12 +1500,22 @@ class DDPGWrapper(Model):
         **kwargs
             Argumentos adicionales
         """
-        # Guardar pesos del wrapper
-        super().save_weights(filepath + MODEL_SUFFIX)
+        # Adaptar la ruta si termina con .keras
+        base_path = filepath
+        if filepath.endswith('.keras'):
+            base_path = filepath[:-6]  # Quitar '.keras'
+        
+        # Guardar pesos del wrapper con la extensión correcta
+        weights_path = base_path + CONST_WEIGHTS_SUFFIX
+        super().save_weights(weights_path)
         
         # Guardar redes del agente DDPG
-        self.ddpg_agent.save_models(filepath + ACTOR_SUFFIX, filepath + CRITIC_SUFFIX)
-    
+        actor_path = base_path + ACTOR_SUFFIX
+        critic_path = base_path + CRITIC_SUFFIX
+        self.ddpg_agent.save_models(actor_path, critic_path)
+        
+        print(f"Modelo guardado en {weights_path}, {actor_path}, y {critic_path}")
+
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
         Carga el modelo DDPG.
@@ -1420,20 +1528,26 @@ class DDPGWrapper(Model):
             Argumentos adicionales
         """
         # Determinar rutas según formato del filepath
-        if filepath.endswith(MODEL_SUFFIX):
-            wrapper_path = filepath
-            actor_path = filepath.replace(MODEL_SUFFIX, ACTOR_SUFFIX)
-            critic_path = filepath.replace(MODEL_SUFFIX, CRITIC_SUFFIX)
+        base_path = filepath
+        if filepath.endswith('.keras'):
+            base_path = filepath[:-6]  # Quitar '.keras'
+            
+        if base_path.endswith(CONST_WEIGHTS_SUFFIX):
+            wrapper_path = base_path
+            actor_path = base_path.replace(CONST_WEIGHTS_SUFFIX, ACTOR_SUFFIX)
+            critic_path = base_path.replace(CONST_WEIGHTS_SUFFIX, CRITIC_SUFFIX)
         else:
-            wrapper_path = filepath + MODEL_SUFFIX
-            actor_path = filepath + ACTOR_SUFFIX
-            critic_path = filepath + CRITIC_SUFFIX
+            wrapper_path = base_path + CONST_WEIGHTS_SUFFIX
+            actor_path = base_path + ACTOR_SUFFIX
+            critic_path = base_path + CRITIC_SUFFIX
         
         # Cargar pesos del wrapper
         super().load_weights(wrapper_path)
         
         # Cargar redes del agente DDPG
         self.ddpg_agent.load_models(actor_path, critic_path)
+        
+        print(f"Modelo cargado desde {wrapper_path}, {actor_path}, y {critic_path}")
 
 
 def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
@@ -1470,7 +1584,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         'tau': DDPG_CONFIG['tau'],
         'batch_size': DDPG_CONFIG['batch_size'],
         'buffer_capacity': DDPG_CONFIG['buffer_capacity'],
-        'noise_std': np.array([0.2]),  # Ajustado para espacio de acción de insulina
+        'noise_std': np.array([0.2]),
         'actor_hidden_units': DDPG_CONFIG['actor_hidden_units'],
         'critic_hidden_units': DDPG_CONFIG['critic_hidden_units'],
         'dropout_rate': DDPG_CONFIG['dropout_rate'],
@@ -1490,9 +1604,17 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         seed=config['seed']
     )
     
-    # Crear y devolver el modelo wrapper
-    return DDPGWrapper(
+    # Crear wrapper DDPG
+    ddpg_wrapper = DDPGWrapper(
         ddpg_agent=ddpg_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Compilar el modelo
+    ddpg_wrapper.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=config['actor_lr']),
+        loss='mse'
+    )
+    
+    return ddpg_wrapper
