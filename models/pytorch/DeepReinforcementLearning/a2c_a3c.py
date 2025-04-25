@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import A2C_A3C_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
 CONST_DROPOUT = "dropout"
@@ -1356,7 +1356,8 @@ class A2CWrapper(nn.Module):
             action = self.a2c_agent.model.get_action(sample_state, deterministic=True)
             actions.append(action)
         
-        actions_tensor = torch.FloatTensor(actions).to(state.device)
+        actions_np = np.array(actions)
+        actions_tensor = torch.FloatTensor(actions_np).to(state.device)
         
         # Convertir acciones a dosis
         if self.a2c_agent.continuous:
@@ -1539,7 +1540,7 @@ class A2CWrapper(nn.Module):
                 return next_state, reward, done, truncated, {}
             
             def _get_state(self):
-                """Codifica el estado actual a partir de los datos."""
+                """Codifica el estado current al a partir de los datos."""
                 # Obtener datos actuales
                 cgm_sample = torch.tensor(
                     self.cgm[self.current_idx:self.current_idx+1],
@@ -1719,7 +1720,7 @@ class A3CWrapper(A2CWrapper):
         return history
 
 
-def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> nn.Module:
+def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapperPyTorch:
     """
     Crea un modelo basado en A2C (Advantage Actor-Critic) para predicción de dosis de insulina.
     
@@ -1732,39 +1733,50 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    nn.Module
-        Modelo A2C que implementa la interfaz de PyTorch
+    DRLModelWrapperPyTorch
+        Modelo A2C envuelto que implementa la interfaz del sistema
     """
-    # Inferir dimensión del estado a partir de las formas de entrada
-    state_dim = 64
+    # Definir creador del modelo
+    def model_creator(**kwargs) -> nn.Module:
+        """
+        Crea una instancia del modelo A2C.
+        
+        Retorna:
+        --------
+        nn.Module
+            Instancia del modelo A2C wrapper
+        """
+        # Ignorar parámetros que no necesitamos como 'algorithm'
+        state_dim = 64
+        action_dim = 1
+        continuous = True
+        
+        # Crear agente A2C
+        a2c_agent = A2C(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            continuous=continuous,
+            gamma=A2C_A3C_CONFIG['gamma'],
+            learning_rate=A2C_A3C_CONFIG['learning_rate'],
+            entropy_coef=A2C_A3C_CONFIG['entropy_coef'],
+            value_coef=A2C_A3C_CONFIG['value_coef'],
+            max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
+            hidden_units=A2C_A3C_CONFIG['hidden_units'],
+            seed=42
+        )
+        
+        # Crear y devolver el wrapper
+        return A2CWrapper(
+            a2c_agent=a2c_agent,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
     
-    # Configurar espacio de acciones (dosis de insulina)
-    action_dim = 1  # Una dimensión para dosis continua
-    continuous = True  # Usar espacio de acción continuo para dosificación precisa
-    
-    # Crear agente A2C
-    a2c_agent = A2C(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        continuous=continuous,
-        gamma=A2C_A3C_CONFIG['gamma'],
-        learning_rate=A2C_A3C_CONFIG['learning_rate'],
-        entropy_coef=A2C_A3C_CONFIG['entropy_coef'],
-        value_coef=A2C_A3C_CONFIG['value_coef'],
-        max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
-        hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
-    )
-    
-    # Crear y devolver el modelo wrapper
-    return A2CWrapper(
-        a2c_agent=a2c_agent,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
-    )
+    # Devolver DRLModelWrapperPyTorch con el creador de modelos
+    return DRLModelWrapperPyTorch(model_creator, algorithm='a2c')
 
 
-def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> nn.Module:
+def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapperPyTorch:
     """
     Crea un modelo basado en A3C (Asynchronous Advantage Actor-Critic) para predicción de dosis de insulina.
     
@@ -1777,62 +1789,71 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    nn.Module
-        Modelo A3C que implementa la interfaz de PyTorch
+    DRLModelWrapperPyTorch
+        Modelo A3C envuelto que implementa la interfaz del sistema
     """
-    # Inferir dimensión del estado a partir de las formas de entrada
-    state_dim = 64
+    # Definir creador del modelo
+    def model_creator(**kwargs) -> nn.Module:
+        """
+        Crea una instancia del modelo A3C.
+        
+        Retorna:
+        --------
+        nn.Module
+            Instancia del modelo A3C wrapper
+        """
+        # Ignorar parámetros que no necesitamos como 'algorithm'
+        state_dim = 64
+        action_dim = 1
+        continuous = True
+        n_workers = 4
+        
+        # Crear agente A3C
+        a3c_agent = A3C(
+            state_dim=state_dim,
+            action_dim=action_dim,
+            continuous=continuous,
+            n_workers=n_workers,
+            gamma=A2C_A3C_CONFIG['gamma'],
+            learning_rate=A2C_A3C_CONFIG['learning_rate'],
+            entropy_coef=A2C_A3C_CONFIG['entropy_coef'],
+            value_coef=A2C_A3C_CONFIG['value_coef'],
+            max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
+            hidden_units=A2C_A3C_CONFIG['hidden_units'],
+            seed=42
+        )
+        
+        # Crear y devolver el wrapper
+        return A3CWrapper(
+            a3c_agent=a3c_agent,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
     
-    # Configurar espacio de acciones (dosis de insulina)
-    action_dim = 1  # Una dimensión para dosis continua
-    continuous = True  # Usar espacio de acción continuo para dosificación precisa
-    
-    # Número de trabajadores para entrenamiento paralelo
-    n_workers = 4
-    
-    # Crear agente A3C
-    a3c_agent = A3C(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        continuous=continuous,
-        n_workers=n_workers,
-        gamma=A2C_A3C_CONFIG['gamma'],
-        learning_rate=A2C_A3C_CONFIG['learning_rate'],
-        entropy_coef=A2C_A3C_CONFIG['entropy_coef'],
-        value_coef=A2C_A3C_CONFIG['value_coef'],
-        max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
-        hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
-    )
-    
-    # Crear y devolver el modelo wrapper
-    return A3CWrapper(
-        a3c_agent=a3c_agent,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
-    )
+    # Devolver DRLModelWrapperPyTorch con el creador de modelos
+    return DRLModelWrapperPyTorch(model_creator, algorithm='a3c')
 
 
 # Funciones para el registro de model creators
-def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], nn.Module]:
+def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapperPyTorch]:
     """
     Retorna una función para crear un modelo A2C compatible con la API del sistema.
     
     Retorna:
     --------
-    Callable[[Tuple[int, ...], Tuple[int, ...]], nn.Module]
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapperPyTorch]
         Función para crear el modelo con las formas de entrada especificadas
     """
     return create_a2c_model
 
 
-def model_creator_a3c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], nn.Module]:
+def model_creator_a3c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapperPyTorch]:
     """
     Retorna una función para crear un modelo A3C compatible con la API del sistema.
     
     Retorna:
     --------
-    Callable[[Tuple[int, ...], Tuple[int, ...]], nn.Module]
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapperPyTorch]
         Función para crear el modelo con las formas de entrada especificadas
     """
     return create_a3c_model
