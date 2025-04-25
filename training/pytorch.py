@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from custom.dl_model_wrapper import DLModelWrapperPyTorch
-from custom.printer import print_header
+from custom.printer import print_header, print_info, print_debug, print_warning
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -194,7 +194,11 @@ def _run_train_epoch(model: nn.Module,
     model.train()
     train_loss = 0.0
     
-    for _, ((x_cgm_batch, x_other_batch), y_batch) in enumerate(train_loader):
+    # Añadir barra de progreso para los batches
+    progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), 
+                       desc="Batches", leave=False)
+    
+    for batch_idx, ((x_cgm_batch, x_other_batch), y_batch) in progress_bar:
         # Transferir datos al dispositivo
         x_cgm_batch = x_cgm_batch.to(DEVICE)
         x_other_batch = x_other_batch.to(DEVICE)
@@ -205,15 +209,24 @@ def _run_train_epoch(model: nn.Module,
         
         # Forward pass
         outputs = model(x_cgm_batch, x_other_batch)
+        
+        # Asegurar que outputs tiene forma [batch_size, 1]
+        if outputs.dim() == 1:
+            outputs = outputs.unsqueeze(1)
+            
         loss = criterion(outputs, y_batch)
         
         # Backward pass y optimización
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Recorte de gradiente
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         
         # Acumular pérdida
         train_loss += loss.item()
+        
+        # Actualizar barra de progreso con la pérdida actual
+        if batch_idx % 5 == 0:  # Actualizar cada 5 batches para no sobrecargar
+            progress_bar.set_postfix({"batch_loss": f"{loss.item():.4f}"})
     
     return train_loss / len(train_loader)
 
@@ -374,35 +387,46 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
     
     # Bucle de entrenamiento
     print(f"\nEntrenando modelo {model_name}...")
-    for epoch in range(epochs):
-        # Fase de entrenamiento
+    print_info(f"Configuración de entrenamiento: {epochs} épocas, batch size: {batch_size}, lr: {learning_rate}")
+    print_info(f"Datos: {len(x_cgm_train)} ejemplos de entrenamiento, {len(x_cgm_val) if x_cgm_val is not None else 0} ejemplos de validación")
+    
+    progress_bar = tqdm(range(epochs), desc="Entrenamiento")
+    for epoch in progress_bar:
+        # Ejecutar época de entrenamiento
         avg_train_loss = _run_train_epoch(actual_model, train_loader, optimizer, criterion)
         
         # Fase de validación
-        avg_val_loss, val_preds_np, val_targets_np = _run_validation(actual_model, val_loader, criterion)
-        
-        # Paso del scheduler basado en pérdida de validación
-        scheduler.step(avg_val_loss)
-        
-        # Calcular métricas de validación
-        val_mae = mean_absolute_error(val_targets_np, val_preds_np)
-        val_rmse = np.sqrt(mean_squared_error(val_targets_np, val_preds_np))
-        
-        # Actualizar historial
-        history['loss'].append(avg_train_loss)
-        history['val_loss'].append(avg_val_loss)
-        history[CONST_METRIC_MAE].append(val_mae)
-        history[f"val_{CONST_METRIC_MAE}"].append(val_mae)
-        history[CONST_METRIC_RMSE].append(val_rmse)
-        history[f"val_{CONST_METRIC_RMSE}"].append(val_rmse)
-        
-        # Mostrar progreso
-        print(f"Época {epoch+1}/{epochs} - loss: {avg_train_loss:.4f} - val_loss: {avg_val_loss:.4f} - val_mae: {val_mae:.4f} - val_rmse: {val_rmse:.4f}")
-        
-        # Verificar early stopping
-        if early_stopping(actual_model, avg_val_loss):
-            print(f"Early stopping en época {epoch+1}")
-            break
+        if x_cgm_val is not None:
+            avg_val_loss, val_preds_np, val_targets_np = _run_validation(actual_model, val_loader, criterion)
+            
+            # Métricas de validación
+            val_mae = mean_absolute_error(val_targets_np, val_preds_np)
+            val_rmse = np.sqrt(mean_squared_error(val_targets_np, val_preds_np))
+            
+            # Actualizar descripción de la barra de progreso
+            progress_bar.set_description(
+                f"Época {epoch+1}/{epochs} - loss: {avg_train_loss:.4f}, val_loss: {avg_val_loss:.4f}, val_mae: {val_mae:.4f}"
+            )
+            
+            # Actualizar historial
+            history['loss'].append(avg_train_loss)
+            history['val_loss'].append(avg_val_loss)
+            history['val_mae'].append(val_mae)
+            history['val_rmse'].append(val_rmse)
+            
+            # Comprobar early stopping
+            if early_stopping(actual_model, avg_val_loss):
+                print_info(f"Early stopping en época {epoch+1}")
+                break
+            
+            # Paso del scheduler basado en pérdida de validación
+            scheduler.step(avg_val_loss)
+        else:
+            # Sin validación, solo mostrar pérdida de entrenamiento
+            progress_bar.set_description(f"Época {epoch+1}/{epochs} - loss: {avg_train_loss:.4f}")
+            
+            # Actualizar historial
+            history['loss'].append(avg_train_loss)
     
     # Guardar modelo final
     torch.save(actual_model.state_dict(), os.path.join(models_dir, f'{model_name}.pt'))
@@ -712,7 +736,7 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         model_results.append(result)
     
     # Procesamiento en paralelo de los resultados
-    print_header("\nCalculando métricas en paralelo...")
+    print_header("Calculando métricas en paralelo...")
     with Parallel(n_jobs=-1, verbose=1) as parallel:
         metric_results = parallel(
             delayed(calculate_metrics)(
@@ -733,3 +757,15 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         metrics[name] = metric
     
     return histories, predictions, metrics
+
+
+def debug_tensor_info(tensor: torch.Tensor, name: str) -> None:
+    """
+    Imprime información de depuración sobre un tensor.
+    """
+    print_debug(f"{name} - Forma: {tensor.shape}, Tipo: {tensor.dtype}, Dispositivo: {tensor.device}")
+    print_debug(f"{name} - Min: {tensor.min().item():.4f}, Max: {tensor.max().item():.4f}, Media: {tensor.mean().item():.4f}")
+    if torch.isnan(tensor).any():
+        print_warning(f"{name} contiene valores NaN")
+    if torch.isinf(tensor).any():
+        print_warning(f"{name} contiene valores Inf")
