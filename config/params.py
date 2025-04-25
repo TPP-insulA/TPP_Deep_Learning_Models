@@ -153,8 +153,8 @@ USE_TF_MODELS = {
     "tf_a2c": False,
     "tf_a3c": False,
     "tf_ddpg": False,
-    "tf_dqn": True,
-    "tf_ppo": False,
+    "tf_dqn": False,
+    "tf_ppo": True,
     "tf_sac": False,
     "tf_trpo": False,
 }
