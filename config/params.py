@@ -152,8 +152,8 @@ USE_TF_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "tf_a2c": False,
     "tf_a3c": False,
-    "tf_ddpg": True,
-    "tf_dqn": False,
+    "tf_ddpg": False,
+    "tf_dqn": True,
     "tf_ppo": False,
     "tf_sac": False,
     "tf_trpo": False,
