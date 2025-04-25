@@ -1811,6 +1811,198 @@ El dataset elegido para realizar este análisis es el DiaTrend @diatrend.
 
 = Metodología de Entrenamiento <metodologia>
 
+== Comparativa de Algoritmos de Aprendizaje por Refuerzo Profundo <comparativa-drl>
+
+Los algoritmos de Aprendizaje por Refuerzo Profundo (DRL) combinan técnicas de aprendizaje profundo con aprendizaje por refuerzo para abordar problemas complejos de toma de decisiones secuenciales. Aunque pueden producir resultados similares en algunos casos, poseen diferencias arquitectónicas y algorítmicas importantes que afectan su rendimiento, eficiencia y aplicabilidad.
+
+=== Diferencias Fundamentales <diferencias-drl>
+#figure(
+  table(
+    columns: (auto, auto, auto, auto, auto),
+    align: center + horizon,
+    inset: 10pt,
+    [*Algoritmo*], [*Tipo*], [*Política*], [*Espacio de Acción*], [*Aprendizaje*],
+    [*A2C*], [Actor-Crítico], [Estocástica], [Ambos], [On-policy],
+    [*A3C*], [Actor-Crítico], [Estocástica], [Ambos], [On-policy],
+    [*DDPG*], [Actor-Crítico], [Determinística], [Continuo], [Off-policy],
+    [*DQN*], [Basado en Valor], [Implícita], [Discreto], [Off-policy],
+    [*PPO*], [Actor-Crítico], [Estocástica], [Ambos], [On-policy],
+    [*SAC*], [Actor-Crítico], [Estocástica], [Continuo], [Off-policy],
+    [*TRPO*], [Actor-Crítico], [Estocástica], [Ambos], [On-policy]
+  ),
+  caption: "Comparación entre los modelos de aprendizaje por refuerzo profundo."
+)
+
+=== Características Distintivas <caracteristicas-drl>
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "A2C (Advantage Actor-Critic)",
+  [
+    - Versión sincrónica que opera con un único entorno
+    - Actualiza los parámetros después de cada paso de tiempo 
+    - Utiliza la función de ventaja (Advantage) para reducir la varianza en la estimación del gradiente
+    - Código en `a2c_a3c.py`:
+    ```python
+    class A2C:
+        # Recolecta experiencias secuencialmente
+        def _collect_trajectories(self, env, steps_per_epoch):
+            # Procesamiento secuencial
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "A3C (Asynchronous Advantage Actor-Critic)",
+  [
+    - Extensión asíncrona de A2C con entrenamiento paralelo
+    - Utiliza múltiples trabajadores que interactúan con copias del entorno
+    - Actualiza un modelo global compartido desde múltiples fuentes
+    - Código en `a2c_a3c.py`:
+    ```python
+    class A3C(A2C):
+        def __init__(self, state_dim, action_dim, continuous=True, n_workers=4, **kwargs):
+            # Múltiples trabajadores
+        
+        def train_async(self, env_fn, n_steps=10, total_steps=1000000):
+            # Entrenamiento multi-hilo
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "DDPG (Deep Deterministic Policy Gradient)",
+  [
+    - Política determinística con exploración mediante ruido
+    - Utiliza redes objetivo con actualizaciones suaves (soft updates)
+    - Diseñado específicamente para espacios de acción continuos
+    - Código en `ddpg.py`:
+    ```python
+    class DDPG:
+        # Política determinística con ruido de exploración
+        def _select_action(self, state, step_counter, warmup_steps):
+            # Agrega ruido de exploración a acciones determinísticas
+        
+        # Actualizaciones suaves de redes objetivo
+        def update_target_networks(self, state, tau=None):
+            # Actualización gradual con parámetro tau
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "DQN (Deep Q-Network)",
+  [
+    - Basado exclusivamente en la función de valor Q
+    - Utiliza buffer de repetición de experiencias para estabilidad
+    - Solo puede manejar espacios de acción discretos
+    - Código en `dqn.py`:
+    ```python
+    class DQN:
+        # Selección de acción epsilon-greedy
+        def get_action(self, state, epsilon=0.0):
+            # Selección basada en valores Q
+        
+        # Repetición de experiencia
+        def _sample_batch(self):
+            # Muestreo aleatorio del buffer
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "PPO (Proximal Policy Optimization)",
+  [
+    - Usa recorte (clipping) del objetivo para limitar cambios de política
+    - Permite múltiples actualizaciones por lote de datos
+    - Balance entre simplicidad, estabilidad y muestra-eficiencia
+    - Código en `ppo.py`:
+    ```python
+    class PPO:
+        # Implementación de recorte PPO
+        def _train_step(self, state, states, actions, old_log_probs, returns, advantages):
+            # Cálculo de ratio y clipping
+            ratio = jnp.exp(log_probs - old_log_probs)
+            clip_adv = jnp.clip(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon) * advantages
+            policy_loss = -jnp.mean(jnp.minimum(ratio * advantages, clip_adv))
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "SAC (Soft Actor-Critic)",
+  [
+    - Maximiza tanto la recompensa como la entropía de la política
+    - Ajuste automático del parámetro de temperatura (alpha)
+    - Usa dos redes críticas para estimación de valor mínimo
+    - Código en `sac.py`:
+    ```python
+    class SAC:
+        # Regularización de entropía
+        def _update_alpha(self, log_alpha, opt_state, log_probs):
+            # Ajuste automático de temperatura
+        
+        # Críticos duales para estabilidad
+        def _update_critics(self, critic1_state, critic2_state, actor_state, log_alpha,
+                           states, actions, rewards, next_states, dones):
+            # Usa el valor Q mínimo entre ambos críticos
+    ```
+  ]
+)
+
+#resaltar(
+  color: rgb("#FFB300"),
+  fill: rgb("#FFB300").lighten(83%),
+  variant: "TRPO (Trust Region Policy Optimization)",
+  [
+    - Usa restricción de divergencia KL para actualizaciones conservadoras
+    - Implementa gradiente natural y búsqueda de línea
+    - Mayor complejidad computacional pero muy estable
+    - Código en `trpo.py`:
+    ```python
+    class TRPO:
+        # Cálculo de gradiente natural con restricción KL
+        def update_policy(self, states, actions, advantages):
+            # Restricción KL entre políticas antigua y nueva
+            # Método de gradiente conjugado para resolver sistema
+    ```
+  ]
+)
+
+// === ¿Por qué podrían mostrar resultados idénticos? <resultados-identicos>
+
+// Si estos algoritmos están produciendo métricas exactamente iguales en sus implementaciones actuales, podría deberse a alguno de los siguientes factores:
+
+// #list(
+//   marker: [⚠︎],
+//   [*Error de implementación*: Es posible que todos los modelos estén utilizando el mismo algoritmo subyacente o que el cálculo de métricas sea incorrecto.],
+//   [*Acceso a datos*: Todos los modelos podrían estar accediendo accidentalmente al mismo buffer de reproducción o datos de entrenamiento.],
+//   [*Configuración de entrenamiento*: El entrenamiento podría no estar ejecutándose el tiempo suficiente para mostrar diferencias, o los hiperparámetros podrían estar mal configurados.],
+//   [*Inicialización del modelo*: Los modelos podrían estar inicializados con parámetros idénticos.],
+//   [*Simplicidad de la tarea*: Si la tarea es muy simple, diferentes algoritmos podrían converger a soluciones similares.]
+// )
+
+// #resaltar(
+//   variant: "Recomendaciones para diagnóstico",
+//   [
+//     - Verificar que cada algoritmo tenga una implementación correcta y distintiva
+//     - Comprobar que cada modelo tenga su propio buffer de experiencias independiente
+//     - Revisar la clase `DRLModelWrapper` para asegurar que delega correctamente a los algoritmos subyacentes
+//     - Examinar el bucle de entrenamiento para confirmar que no se está utilizando un solo modelo para todas las predicciones
+//     - Ajustar los hiperparámetros específicos para cada algoritmo según sus características
+//   ]
+// )
 
 = Resultados y Análisis <resultados>
 
