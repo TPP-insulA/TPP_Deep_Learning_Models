@@ -377,6 +377,8 @@ MONTE_CARLO_CONFIG = {
     # Parámetros de entrenamiento
     'log_interval': 10,          # Cada cuántos episodios mostrar estadísticas
     'batch_size': 10,            # Tamaño de lote para batch MC
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización
     'smoothing_window': 20       # Ventana para suavizado en gráficos

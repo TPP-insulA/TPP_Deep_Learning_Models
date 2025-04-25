@@ -72,8 +72,8 @@ from models.pytorch.DeepLearning.transformer import model_creator as pt_create_t
 from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_wavenet_model
 
 ### Modelos de Aprendizaje por Refuerzo
-# from models.pytorch.ReinforcementLearning.monte_carlo_methods import create_monte_carlo_model as pt_monte_carlo_creator
-# from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
+from models.pytorch.ReinforcementLearning.monte_carlo_methods import model_creator as pt_monte_carlo_creator
+from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
 # from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
 # from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
 # from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
@@ -174,8 +174,8 @@ PT_MODELS = {
     "pt_transformer": pt_create_transformer_model,
     "pt_wavenet": pt_create_wavenet_model,
     ## Modelos de Aprendizaje por Refuerzo
-    # "pt_monte_carlo": pt_monte_carlo_creator,
-    # "pt_policy_iteration": pt_policy_iteration_creator,
+    "pt_monte_carlo": pt_monte_carlo_creator,
+    "pt_policy_iteration": pt_policy_iteration_creator,
     # "pt_q_learning": pt_q_learning_creator,
     # "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
     # "pt_sarsa": pt_sarsa_creator,
@@ -253,19 +253,19 @@ USE_JAX_MODELS = {
 # Modelos Pytorch a utilizar
 USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "pt_attention_only": True,
-    "pt_cnn": True,
-    "pt_fnn": True,
-    "pt_gru": True,
-    "pt_lstm": True,
-    "pt_rnn": True,
-    "pt_tabnet": True,
-    "pt_tcn": True,
-    "pt_transformer": True,
-    "pt_wavenet": True,
+    "pt_attention_only": False,
+    "pt_cnn": False,
+    "pt_fnn": False,
+    "pt_gru": False,
+    "pt_lstm": False,
+    "pt_rnn": False,
+    "pt_tabnet": False,
+    "pt_tcn": False,
+    "pt_transformer": False,
+    "pt_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": False,
-    "pt_policy_iteration": False,
+    "pt_policy_iteration": True,
     "pt_q_learning": False,
     "pt_reinforce_mcpg": False,
     "pt_sarsa": False,
