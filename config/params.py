@@ -148,7 +148,7 @@ USE_TF_MODELS = {
     "tf_q_learning": False,
     "tf_reinforce_mcpg": False,
     "tf_sarsa": False,
-    "tf_value_iteration": True,
+    "tf_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "tf_a2c": False,
     "tf_a3c": False,
@@ -156,7 +156,7 @@ USE_TF_MODELS = {
     "tf_dqn": False,
     "tf_ppo": False,
     "tf_sac": False,
-    "tf_trpo": False,
+    "tf_trpo": True,
 }
 
 # Modelos JAX a utilizar

@@ -85,11 +85,19 @@ class ActorCriticModel:
         if self.continuous:
             # Para acciones continuas (política gaussiana)
             mu = Dense(self.action_dim, activation='tanh', name='actor_mu')(x)
-            log_std = tf.Variable(
+            
+            # Crear variable log_std
+            log_std_param = tf.Variable(
                 initial_value=-0.5 * np.ones(shape=(self.action_dim,), dtype=np.float32),
                 trainable=True,
-                name='actor_log_std'
+                name='actor_log_std_param'
             )
+            
+            # Usar una capa Lambda para hacer broadcast de log_std para cada elemento del batch
+            log_std = tf.keras.layers.Lambda(
+                lambda x: tf.broadcast_to(tf.identity(log_std_param), [tf.shape(x)[0], self.action_dim]),
+                name='actor_log_std'
+            )(x)
             
             return tf.keras.Model(inputs=inputs, outputs=[mu, log_std])
         else:
@@ -140,14 +148,19 @@ class ActorCriticModel:
         
         if self.continuous:
             mu, log_std = self.actor(state)
-            std = tf.exp(log_std)
+            # Extraer los valores numéricos
+            mu = mu.numpy()
+            log_std = log_std.numpy()
+            std = np.exp(log_std)
             
             if deterministic:
-                return mu[0].numpy()
+                return mu[0]
             
-            # Muestrear de la distribución normal
-            action = mu + tf.random.normal(shape=mu.shape) * std
-            return action[0].numpy()
+            # Muestrear de la distribución normal usando Generator
+            seed = TRPO_CONFIG.get('seed', 42)
+            rng = np.random.default_rng(seed)
+            action = mu + rng.normal(size=mu.shape) * std
+            return action[0]
         else:
             logits = self.actor(state)
             
@@ -297,19 +310,37 @@ class ActorCriticModel:
         """
         if self.continuous:
             _, log_std = self.actor(states)
-            entropy = tf.reduce_sum(
-                log_std + 0.5 * tf.math.log(2.0 * np.pi * np.e),
-                axis=1
-            )
+            
+            # Verificar dimensiones para aplicar suma adecuadamente
+            if len(tf.shape(log_std)) > 1:
+                entropy = tf.reduce_sum(
+                    log_std + 0.5 * tf.math.log(2.0 * np.pi * np.e),
+                    axis=1
+                )
+            else:
+                # Para tensor 1D, simplemente computar sin reducción de dimensión
+                entropy = log_std + 0.5 * tf.math.log(2.0 * np.pi * np.e)
+                if self.action_dim > 1:
+                    entropy = tf.reduce_sum(entropy, axis=0)
         else:
             logits = self.actor(states)
             probs = tf.nn.softmax(logits)
-            entropy = -tf.reduce_sum(
-                probs * tf.math.log(probs + 1e-8),
-                axis=1
-            )
+            
+            # Verificar dimensiones para aplicar suma adecuadamente
+            if len(tf.shape(probs)) > 1:
+                entropy = -tf.reduce_sum(
+                    probs * tf.math.log(probs + 1e-8),
+                    axis=1
+                )
+            else:
+                # Para tensor 1D, simplemente computar sin reducción de dimensión
+                    entropy = -tf.reduce_sum(probs * tf.math.log(probs + 1e-8), axis=0)
         
-        return tf.reduce_mean(entropy, axis=0)
+        # Tomar media si hay múltiples entropías
+        if tf.rank(entropy) > 0:
+            return tf.reduce_mean(entropy, axis=0)
+        else:
+            return entropy
     
     def get_flat_params(self) -> tf.Tensor:
         """
@@ -900,10 +931,10 @@ class TRPO:
             mean_episode_length = np.mean(data['episode_lengths']) if data['episode_lengths'] else 0
             
             # Resetear métricas de keras
-            self.policy_loss_metric.reset_states()
-            self.value_loss_metric.reset_states()
-            self.kl_metric.reset_states()
-            self.entropy_metric.reset_states()
+            self.policy_loss_metric.reset_state()
+            self.value_loss_metric.reset_state()
+            self.kl_metric.reset_state()
+            self.entropy_metric.reset_state()
             
             # Guardar historia
             history['iterations'].append(i)
@@ -1167,15 +1198,15 @@ class TRPO:
         plt.show()
 
 # Constantes para evitar duplicación
-MODEL_WEIGHTS_SUFFIX = '_model_weights.h5'
-ACTOR_WEIGHTS_SUFFIX = '_actor_weights.h5'
-CRITIC_WEIGHTS_SUFFIX = '_critic_weights.h5'
+MODEL_WEIGHTS_SUFFIX = '_model.weights.h5'
+ACTOR_WEIGHTS_SUFFIX = '_actor.weights.h5'
+CRITIC_WEIGHTS_SUFFIX = '_critic.weights.h5'
 CGM_ENCODER = 'cgm_encoder'
 OTHER_ENCODER = 'other_encoder'
 COMBINED_LAYER = 'combined_layer'
 
 
-@register_keras_serializable
+@register_keras_serializable()
 class TRPOModelWrapper(Model):
     """
     Wrapper para el algoritmo TRPO que implementa la interfaz de Keras.Model.
@@ -1296,26 +1327,86 @@ class TRPOModelWrapper(Model):
         
         return states
     
+    def _extract_data_from_dataset(self, dataset: tf.data.Dataset) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Extrae datos CGM, otras características y objetivos desde un dataset de TensorFlow.
+        
+        Parámetros:
+        -----------
+        dataset : tf.data.Dataset
+            Dataset de TensorFlow
+            
+        Retorna:
+        --------
+        Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+            Tupla (cgm_data, other_features, targets)
+        """
+        for batch in dataset.take(1):
+            if isinstance(batch, tuple) and len(batch) == 2:
+                inputs, targets = batch
+                if isinstance(inputs, (list, tuple)) and len(inputs) == 2:
+                    cgm_data, other_features = inputs
+                else:
+                    raise ValueError("El dataset debe proporcionar una tupla (inputs, targets) donde inputs sea [cgm_data, other_features]")
+                return cgm_data, other_features, targets
+        
+        raise ValueError("No se pudieron extraer datos del dataset")
+    
+    def _create_history_object(self, history: Dict[str, List[float]], verbose: int) -> Any:
+        """
+        Crea un objeto de historia compatible con Keras.
+        
+        Parámetros:
+        -----------
+        history : Dict[str, List[float]]
+            Historial de entrenamiento
+        verbose : int
+            Nivel de verbosidad
+            
+        Retorna:
+        --------
+        Any
+            Objeto compatible con History de Keras
+        """
+        # Convertir historia a formato compatible con Keras
+        keras_history = {
+            'loss': history.get('policy_losses', [0.0]),
+            'val_loss': history.get('value_losses', [0.0]),
+            'kl': history.get('kl_divergences', [0.0]),
+            'entropy': history.get('entropies', [0.0]),
+            'mean_reward': history.get('mean_episode_rewards', [0.0])
+        }
+        
+        if verbose > 0:
+            print("Entrenamiento TRPO completado.")
+        
+        # Crear un objeto que emula el comportamiento de History de Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+        
+        return KerasHistoryCompatible(keras_history)
+    
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[tf.data.Dataset, List[tf.Tensor]], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente TRPO.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1331,14 +1422,25 @@ class TRPOModelWrapper(Model):
             
         Retorna:
         --------
-        Dict
+        Any
             Historia simulada de entrenamiento
         """
         if verbose > 0:
             print("Entrenando modelo TRPO...")
         
+        # Extraer datos según el tipo de entrada
+        if isinstance(x, tf.data.Dataset):
+            cgm_data, other_features, targets = self._extract_data_from_dataset(x)
+            y = targets
+        else:
+            cgm_data, other_features = x
+        
+        # Asegurarse de que y no sea None
+        if y is None:
+            raise ValueError("El parámetro 'y' (dosis objetivo) no puede ser None")
+        
         # Crear entorno personalizado para entrenamiento
-        env = self._create_training_environment(x[0], x[1], y)
+        env = self._create_training_environment(cgm_data, other_features, y)
         
         # Entrenar el agente TRPO
         history = self.trpo_agent.train(
@@ -1348,19 +1450,8 @@ class TRPOModelWrapper(Model):
             render=False
         )
         
-        # Convertir historia a formato compatible con Keras
-        keras_history = {
-            'loss': history.get('policy_losses', [0.0]),
-            'val_loss': history.get('value_losses', [0.0]),
-            'kl': history.get('kl_divergences', [0.0]),
-            'entropy': history.get('entropies', [0.0]),
-            'mean_reward': history.get('mean_episode_rewards', [0.0])
-        }
-        
-        if verbose > 0:
-            print("Entrenamiento TRPO completado.")
-        
-        return {'history': keras_history}
+        # Crear y devolver objeto de historia
+        return self._create_history_object(history, verbose)
     
     def _create_training_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                                    target_doses: tf.Tensor) -> Any:
@@ -1515,12 +1606,54 @@ class TRPOModelWrapper(Model):
         **kwargs
             Argumentos adicionales
         """
-        # Guardar pesos de las capas de codificación
+        # Construir el modelo si aún no está construido
+        if not self.built:
+            try:
+                # Crear tensores dummy con las formas adecuadas
+                batch_size = 1
+                
+                # Para datos CGM, asegurar dimensionalidad correcta (batch, time_steps, features)
+                if len(self.cgm_shape) >= 3:
+                    # Ya tiene la forma correcta
+                    time_steps = self.cgm_shape[1]
+                    cgm_features = self.cgm_shape[2]
+                elif len(self.cgm_shape) == 2:
+                    # Asumimos (batch, features)
+                    time_steps = 24  # Pasos temporales predeterminados
+                    cgm_features = self.cgm_shape[1]
+                else:
+                    # Usar valores predeterminados seguros
+                    time_steps = 24
+                    cgm_features = 1
+                    
+                dummy_cgm = tf.zeros((batch_size, time_steps, cgm_features))
+                
+                # Para otras características, asegurar (batch, features)
+                if len(self.other_features_shape) > 1:
+                    other_features = self.other_features_shape[1]
+                else:
+                    other_features = self.other_features_shape[0] if len(self.other_features_shape) > 0 else 1
+                    
+                dummy_other = tf.zeros((batch_size, other_features))
+                
+                # Llamar al modelo para construirlo
+                _ = self([dummy_cgm, dummy_other])
+                print(f"Modelo construido antes de guardar con formas: CGM {dummy_cgm.shape}, Otras {dummy_other.shape}")
+            except Exception as e:
+                print(f"Error al construir modelo antes de guardar: {e}")
+                print("Intentando construir modelo con formas simples...")
+                
+                # Usar formas predeterminadas simples como respaldo
+                dummy_cgm = tf.zeros((1, 24, 1))
+                dummy_other = tf.zeros((1, 1))
+                _ = self([dummy_cgm, dummy_other])
+        
+        # Ahora guardar pesos una vez que el modelo está construido
         self.save_weights(filepath + MODEL_WEIGHTS_SUFFIX)
         
         # Guardar modelos actor-crítico
         self.trpo_agent.save_model(filepath + ACTOR_WEIGHTS_SUFFIX, 
-                                  filepath + CRITIC_WEIGHTS_SUFFIX)
+                                   filepath + CRITIC_WEIGHTS_SUFFIX)
     
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
