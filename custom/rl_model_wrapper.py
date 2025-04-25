@@ -732,13 +732,54 @@ class RLModelWrapperPyTorch(ModelWrapper):
         super().__init__()
         self.model_cls = model_cls
         self.model_kwargs = model_kwargs
-        self.model = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Crear un modelo dummy con dimensiones mínimas para satisfacer el optimizador
+        self.model = self._create_dummy_model()
         self.optimizer = None
-        # Generador de números aleatorios para operaciones que lo requieran
-        self.rng = np.random.Generator(np.random.PCG64(model_kwargs.get('seed', 42)))
         print_info(f"Usando dispositivo: {self.device}")
-    
+
+    def __call__(self, *args, **kwargs):
+        """
+        Hace que el wrapper sea directamente invocable, delegando al método forward del modelo.
+        
+        Parámetros:
+        -----------
+        *args, **kwargs
+            Argumentos a pasar al método forward del modelo
+                
+        Retorna:
+        --------
+        torch.Tensor
+            Resultado del forward pass del modelo interno
+        """
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("llamar"))
+        return self.model(*args, **kwargs)
+
+    def _create_dummy_model(self) -> nn.Module:
+        """
+        Crea un modelo dummy con parámetros mínimos para inicialización
+        """
+        try:
+            return self.model_cls()
+        except Exception:
+            class DummyModule(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.dummy = nn.Parameter(torch.zeros(1), requires_grad=True)
+                    
+                def parameters(self, recurse=True):
+                    return iter([self.dummy])
+                    
+            # def forward(self, *args):
+            #     if len(args) == 2:
+            #         batch_size = args[0].size(0) if args[0].dim() > 0 else 1
+            #         return torch.zeros(batch_size, 1, device=args[0].device)
+            #     return torch.zeros(1)
+                
+        return DummyModule()
+
     def _get_input_shapes(self, x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[Tuple, Tuple]:
         """
         Extrae las formas de los datos de entrada.
@@ -783,9 +824,47 @@ class RLModelWrapperPyTorch(ModelWrapper):
         # Configurar optimizador si el modelo tiene parámetros entrenables
         if hasattr(self.model, 'parameters'):
             try:
-                self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-            except:
-                print_debug("No se pudo crear optimizador automáticamente")
+                self.optimizer = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
+            except (ValueError, TypeError, RuntimeError) as e:
+                print_debug(f"No se pudo crear optimizador automáticamente: {e}")
+    
+    def to(self, device):
+        """
+        Mueve el modelo al dispositivo especificado.
+        
+        Parámetros:
+        -----------
+        device : torch.device o str
+            Dispositivo al que mover el modelo (cpu, cuda, etc.)
+            
+        Retorna:
+        --------
+        RLModelWrapperPyTorch
+            El wrapper con modelo movido al dispositivo
+        """
+        if self.model is not None:
+            self.model = self.model.to(device)
+        self.device = device if isinstance(device, torch.device) else torch.device(device)
+        return self
+    
+    def parameters(self, recurse=True):
+        """
+        Devuelve un iterador sobre los parámetros del modelo.
+        
+        Parámetros:
+        -----------
+        recurse : bool, opcional
+            Si incluir parámetros de submodelos recursivamente (default: True)
+            
+        Retorna:
+        --------
+        iterator
+            Iterador sobre los parámetros entrenables del modelo
+        """
+        if self.model is not None:
+            return self.model.parameters(recurse=recurse)
+        else:
+            return iter([]) 
     
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              rng_key: Any = None) -> Any:
@@ -860,7 +939,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
         return x_cgm_val, x_other_val, y_val
     
     def _train_with_fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
-                      validation_data: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]],
+                      validation_data: Optional[Tuple[np.ndarray, np.ndarray]],
                       epochs: int, batch_size: int) -> Dict[str, List[float]]:
         """
         Entrena el modelo usando su método fit nativo si está disponible.
@@ -1052,7 +1131,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
                                    batch_y: np.ndarray) -> float:
         """
         Entrena un lote muestra por muestra cuando no hay métodos por lotes disponibles.
-        
+
         Parámetros:
         -----------
         batch_cgm : np.ndarray
@@ -1061,7 +1140,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
             Lote de otras características
         batch_y : np.ndarray
             Lote de valores objetivo
-            
+
         Retorna:
         --------
         float
@@ -1069,12 +1148,10 @@ class RLModelWrapperPyTorch(ModelWrapper):
         """
         total_loss = 0.0
         for j in range(len(batch_y)):
-            sample_cgm = batch_cgm[j:j+1]  # Mantener dimensión de batch
+            sample_cgm = batch_cgm[j:j+1] # Mantener dimensión de batch
             sample_other = batch_other[j:j+1]
             sample_y = batch_y[j:j+1]
-            
             total_loss += self._train_single_sample(sample_cgm, sample_other, sample_y)
-        
         return total_loss / len(batch_y) if len(batch_y) > 0 else 0.0
     
     def _train_single_sample(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray) -> float:
@@ -1151,7 +1228,25 @@ class RLModelWrapperPyTorch(ModelWrapper):
                 loss = criterion(outputs, y_tensor)
                 return loss.item()
     
-    def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
+    def train(self, mode=True):
+        """
+        Sets the module in training mode (standard PyTorch method).
+        
+        Parámetros:
+        -----------
+        mode : bool, opcional
+            Si True, activa el modo de entrenamiento; si False, modo de evaluación (default: True)
+            
+        Retorna:
+        --------
+        RLModelWrapperPyTorch
+            Self para encadenamiento de llamadas
+        """
+        if self.model is not None:
+            self.model.train(mode)
+        return self
+    
+    def fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
              epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
         """
@@ -1230,7 +1325,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
         if self.model is None:
             raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
         
-        # Para modelos de RL se pueden requerer predicciones deterministas
+        # Para modelos de RL se pueden requerir predicciones deterministas
         deterministic = True
         
         if hasattr(self.model, 'predict'):
@@ -1321,6 +1416,19 @@ class RLModelWrapperPyTorch(ModelWrapper):
                     return output.cpu().numpy().flatten()[0]
                 return output[0]
     
+    def eval(self):
+        """
+        Sets the module in evaluation mode (standard PyTorch method).
+        
+        Retorna:
+        --------
+        RLModelWrapperPyTorch
+            Self para encadenamiento de llamadas
+        """
+        if self.model is not None:
+            self.model.eval()
+        return self
+    
     def evaluate(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         """
         Evalúa el modelo con datos de prueba.
@@ -1375,6 +1483,33 @@ class RLModelWrapperPyTorch(ModelWrapper):
             "rmse": rmse,
             "r2": r2
         }
+    
+    def state_dict(self):
+        """
+        Returns a dictionary containing a whole state of the module.
+        
+        Retorna:
+        --------
+        Dict[str, torch.Tensor]
+            Estado del modelo (parámetros y buffers)
+        """
+        if self.model is not None:
+            return self.model.state_dict()
+        else:
+            return {}
+            
+    def load_state_dict(self, state_dict):
+        """
+        Copies parameters and buffers from state_dict into this module.
+        
+        Parámetros:
+        -----------
+        state_dict : Dict[str, torch.Tensor]
+            Estado del modelo a cargar
+        """
+        if self.model is not None:
+            self.model.load_state_dict(state_dict)
+        return self
 
 # Clase principal que selecciona el wrapper adecuado según el framework
 class RLModelWrapper(ModelWrapper):
