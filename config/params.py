@@ -58,7 +58,7 @@ from models.jax.DeepReinforcementLearning.sac import model_creator as jax_sac_cr
 from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_creator
 
 # Modo de Ejecución
-DEBUG = True 
+DEBUG = False 
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
