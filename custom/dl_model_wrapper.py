@@ -1103,7 +1103,7 @@ class DLModelWrapperPyTorch(ModelWrapper):
         self.early_stopping_config['patience'] = patience
         self.early_stopping_config['min_delta'] = min_delta
         self.early_stopping_config['restore_best_weights'] = restore_best_weights
-    
+
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              rng_key: Any = None) -> Any:
         """
@@ -1133,7 +1133,7 @@ class DLModelWrapperPyTorch(ModelWrapper):
         
         # Configurar criterio y optimizador por defecto
         self.criterion = nn.MSELoss()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
         
         # Configurar scheduler por defecto
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -1190,7 +1190,8 @@ class DLModelWrapperPyTorch(ModelWrapper):
             dataset, 
             batch_size=batch_size, 
             shuffle=shuffle,
-            pin_memory=True
+            pin_memory=True,
+            num_workers=4
         )
     
     def _check_early_stopping(self, val_loss: float) -> bool:
