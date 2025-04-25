@@ -155,8 +155,8 @@ USE_TF_MODELS = {
     "tf_ddpg": False,
     "tf_dqn": False,
     "tf_ppo": False,
-    "tf_sac": True,
-    "tf_trpo": False,
+    "tf_sac": False,
+    "tf_trpo": True,
 }
 
 # Modelos JAX a utilizar
