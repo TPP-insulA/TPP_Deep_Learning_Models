@@ -61,17 +61,17 @@ from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_
 ## Modelos PyTorch
 ### Modelos de Aprendizaje Profundo
 from models.pytorch.DeepLearning.attention_only import model_creator as pt_create_attention_model
-# from models.pytorch.DeepLearning.cnn import model_creator as pt_create_cnn_model
-# from models.pytorch.DeepLearning.fnn import model_creator as pt_create_fnn_model
-# from models.pytorch.DeepLearning.gru import model_creator as pt_create_gru_model
-# from models.pytorch.DeepLearning.lstm import model_creator as pt_create_lstm_model
-# from models.pytorch.DeepLearning.rnn import model_creator as pt_create_rnn_model
-# from models.pytorch.DeepLearning.tabnet import model_creator as pt_create_tabnet_model
-# from models.pytorch.DeepLearning.tcn import model_creator as pt_create_tcn_model
-# from models.pytorch.DeepLearning.transformer import model_creator as pt_create_transformer_model
-# from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_wavenet_model
+from models.pytorch.DeepLearning.cnn import model_creator as pt_create_cnn_model
+from models.pytorch.DeepLearning.fnn import model_creator as pt_create_fnn_model
+from models.pytorch.DeepLearning.gru import model_creator as pt_create_gru_model
+from models.pytorch.DeepLearning.lstm import model_creator as pt_create_lstm_model
+from models.pytorch.DeepLearning.rnn import model_creator as pt_create_rnn_model
+from models.pytorch.DeepLearning.tabnet import model_creator as pt_create_tabnet_model
+from models.pytorch.DeepLearning.tcn import model_creator as pt_create_tcn_model
+from models.pytorch.DeepLearning.transformer import model_creator as pt_create_transformer_model
+from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_wavenet_model
 
-# ### Modelos de Aprendizaje por Refuerzo
+### Modelos de Aprendizaje por Refuerzo
 # from models.pytorch.ReinforcementLearning.monte_carlo_methods import create_monte_carlo_model as pt_monte_carlo_creator
 # from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
 # from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
@@ -164,16 +164,16 @@ PT_MODELS = {
     # PyTorch
     ## Modelos de Aprendizaje Profundo
     "pt_attention_only": pt_create_attention_model,
-    # "pt_cnn": pt_create_cnn_model,
-    # "pt_fnn": pt_create_fnn_model,
-    # "pt_gru": pt_create_gru_model,
-    # "pt_lstm": pt_create_lstm_model,
-    # "pt_rnn": pt_create_rnn_model,
-    # "pt_tabnet": pt_create_tabnet_model,
-    # "pt_tcn": pt_create_tcn_model,
-    # "pt_transformer": pt_create_transformer_model,
-    # "pt_wavenet": pt_create_wavenet_model,
-    # ## Modelos de Aprendizaje por Refuerzo
+    "pt_cnn": pt_create_cnn_model,
+    "pt_fnn": pt_create_fnn_model,
+    "pt_gru": pt_create_gru_model,
+    "pt_lstm": pt_create_lstm_model,
+    "pt_rnn": pt_create_rnn_model,
+    "pt_tabnet": pt_create_tabnet_model,
+    "pt_tcn": pt_create_tcn_model,
+    "pt_transformer": pt_create_transformer_model,
+    "pt_wavenet": pt_create_wavenet_model,
+    ## Modelos de Aprendizaje por Refuerzo
     # "pt_monte_carlo": pt_monte_carlo_creator,
     # "pt_policy_iteration": pt_policy_iteration_creator,
     # "pt_q_learning": pt_q_learning_creator,
@@ -254,15 +254,15 @@ USE_JAX_MODELS = {
 USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
     "pt_attention_only": True,
-    "pt_cnn": False,
-    "pt_fnn": False,
-    "pt_gru": False,
-    "pt_lstm": False,
-    "pt_rnn": False,
-    "pt_tabnet": False,
-    "pt_tcn": False,
-    "pt_transformer": False,
-    "pt_wavenet": False,
+    "pt_cnn": True,
+    "pt_fnn": True,
+    "pt_gru": True,
+    "pt_lstm": True,
+    "pt_rnn": True,
+    "pt_tabnet": True,
+    "pt_tcn": True,
+    "pt_transformer": True,
+    "pt_wavenet": True,
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": False,
     "pt_policy_iteration": False,
