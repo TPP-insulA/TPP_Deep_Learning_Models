@@ -157,3 +157,12 @@ def print_log(text):
         text (str): Mensaje de log a imprimir.
     """
     print(coloured("LOG", colour='black', background='cyan', style='bold') + " " + coloured(text, colour='cyan', style='bold'))
+    
+def print_header(text):
+    """
+    Imprime un encabezado en negrita y azul.
+    
+    Args:
+        text (str): Encabezado a imprimir.
+    """
+    print(coloured(text, colour='blue', background='yellow', style='bold'))
