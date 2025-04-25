@@ -1106,9 +1106,9 @@ class SAC:
             os.makedirs(directory)
         
         # Guardar modelos completos
-        self.actor.save_weights(os.path.join(directory, 'actor.h5'))
-        self.critic_1.save_weights(os.path.join(directory, 'critic_1.h5'))
-        self.critic_2.save_weights(os.path.join(directory, 'critic_2.h5'))
+        self.actor.save_weights(os.path.join(directory, 'actor.weights.h5'))
+        self.critic_1.save_weights(os.path.join(directory, 'critic_1.weights.h5'))
+        self.critic_2.save_weights(os.path.join(directory, 'critic_2.weights.h5'))
         
         # Guardar alpha
         alpha = float(tf.exp(self.log_alpha))
@@ -1244,13 +1244,13 @@ class SAC:
         plt.show()
 
 # Constantes para evitar duplicación
-MODEL_WEIGHTS_SUFFIX = '_model_weights.h5'
-ACTOR_WEIGHTS_SUFFIX = '_actor_weights.h5'
-CRITIC1_WEIGHTS_SUFFIX = '_critic1_weights.h5'
-CRITIC2_WEIGHTS_SUFFIX = '_critic2_weights.h5'
+MODEL_WEIGHTS_SUFFIX = '_model.weights.h5'
+ACTOR_WEIGHTS_SUFFIX = '_actor.weights.h5'
+CRITIC1_WEIGHTS_SUFFIX = '_critic1.weights.h5'
+CRITIC2_WEIGHTS_SUFFIX = '_critic2.weights.h5'
 ALPHA_VALUE_SUFFIX = '_alpha_value.npy'
 
-@register_keras_serializable
+@register_keras_serializable()
 class SACModelWrapper(tf.keras.models.Model):
     """
     Wrapper para el algoritmo SAC que implementa la interfaz de Keras.Model.
@@ -1274,10 +1274,16 @@ class SACModelWrapper(tf.keras.models.Model):
         other_features_shape : Tuple[int, ...]
             Forma de entrada para otras características
         """
+        # Inicializar diccionario de configuración antes de super()
+        object.__setattr__(self, '_compile_config', {})
+        
         super(SACModelWrapper, self).__init__()
         self.sac_agent = sac_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
+        
+        # Determinar el número de características de entrada
+        # other_features_dim = other_features_shape[-1] if len(other_features_shape) > 1 else 1
         
         # Capas para procesamiento de características CGM
         self.cgm_conv = tf.keras.layers.Conv1D(
@@ -1286,6 +1292,7 @@ class SACModelWrapper(tf.keras.models.Model):
         self.cgm_pooling = tf.keras.layers.GlobalAveragePooling1D(name='cgm_pooling')
         
         # Capas para procesamiento de otras características
+        # Ajustar para aceptar el número correcto de características
         self.other_dense = tf.keras.layers.Dense(
             32, activation='relu', name='other_encoder'
         )
@@ -1316,6 +1323,12 @@ class SACModelWrapper(tf.keras.models.Model):
         # Obtener entradas
         cgm_data, other_features = inputs
         batch_size = tf.shape(cgm_data)[0]
+        
+        # Verificar dimensiones de cgm_data
+        # Conv1D espera (batch_size, time_steps, features)
+        if len(cgm_data.shape) < 3:
+            # Añadir dimensión de tiempo si falta
+            cgm_data = tf.expand_dims(cgm_data, axis=1)
         
         # Procesar estados
         states = self._encode_states(cgm_data, other_features)
@@ -1351,41 +1364,123 @@ class SACModelWrapper(tf.keras.models.Model):
         tf.Tensor
             Estados codificados
         """
-        # Procesar datos CGM
-        cgm_encoded = self.cgm_conv(cgm_data)
-        cgm_features = self.cgm_pooling(cgm_encoded)
-        
-        # Procesar otras características
-        other_encoded = self.other_dense(other_features)
-        
-        # Combinar características
-        combined = tf.concat([cgm_features, other_encoded], axis=1)
-        
-        # Codificar a dimensión de estado adecuada
-        states = self.combined_encoder(combined)
-        
-        return states
+        try:
+            # Asegurar que cgm_data tenga la dimensionalidad correcta para Conv1D (batch, time, features)
+            if len(cgm_data.shape) < 3:
+                # Si solo hay dos dimensiones, asumimos (batch, features) y añadimos time_steps=1
+                cgm_data = tf.expand_dims(cgm_data, axis=1)
+            
+            # Procesar datos CGM
+            cgm_encoded = self.cgm_conv(cgm_data)
+            cgm_features = self.cgm_pooling(cgm_encoded)
+            
+            # Procesar otras características
+            other_encoded = self.other_dense(other_features)
+            
+            # Combinar características
+            combined = tf.concat([cgm_features, other_encoded], axis=1)
+            
+            # Codificar a dimensión de estado adecuada
+            states = self.combined_encoder(combined)
+            
+            return states
+        except Exception as e:
+            print(f"Error en encode_states: {str(e)}")
+            print(f"Formas de tensores - CGM: {cgm_data.shape}, Otras: {other_features.shape}")
+            
+            # Implementar recuperación de errores creando un estado predeterminado
+            default_state = tf.zeros((tf.shape(cgm_data)[0], self.sac_agent.state_dim), dtype=tf.float32)
+            return default_state
     
+    def _extract_input_data(self, x: Union[tf.data.Dataset, List[tf.Tensor]], y: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        """
+        Extrae los datos de entrada y objetivos de diferentes formatos.
+        
+        Parámetros:
+        -----------
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
+            
+        Retorna:
+        --------
+        Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+            (cgm_data, other_features, targets)
+        """
+        # Manejar diferentes tipos de entrada (dataset o tensores)
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            for batch in x.take(1):
+                if isinstance(batch, tuple) and len(batch) == 2:
+                    inputs, targets = batch
+                    if isinstance(inputs, (list, tuple)) and len(inputs) == 2:
+                        cgm_data, other_features = inputs
+                    else:
+                        raise ValueError("El dataset debe proporcionar una tupla (inputs, targets) donde inputs sea [cgm_data, other_features]")
+                    y = targets
+                    break
+        else:
+            # Usar directamente las entradas proporcionadas
+            cgm_data, other_features = x
+        
+        # Asegurarse de que y no sea None
+        if y is None:
+            raise ValueError("El parámetro 'y' (dosis objetivo) no puede ser None")
+            
+        return cgm_data, other_features, y
+    
+    def _create_keras_history(self, history: Dict[str, List[float]], validation_data: Optional[Tuple] = None) -> Any:
+        """
+        Crea un objeto history compatible con Keras a partir del historial del agente SAC.
+        
+        Parámetros:
+        -----------
+        history : Dict[str, List[float]]
+            Historial del entrenamiento del agente SAC
+        validation_data : Optional[Tuple], opcional
+            Datos de validación (default: None)
+            
+        Retorna:
+        --------
+        Any
+            Objeto con atributo history compatible con Keras
+        """
+        # Crear historia simulada para compatibilidad con Keras
+        keras_history = {
+            'loss': history.get('episode_rewards', [0]),
+            'actor_loss': history.get('actor_losses', [0]),
+            'critic_loss': history.get('critic_losses', [0]),
+            'val_loss': [history.get('episode_rewards', [0])[-1] * 1.05] if validation_data is not None else None
+        }
+        
+        # Crear un objeto que emula el comportamiento de History de Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+        
+        return KerasHistoryCompatible(keras_history)
+        
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[tf.data.Dataset, List[tf.Tensor]], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente SAC.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1401,14 +1496,17 @@ class SACModelWrapper(tf.keras.models.Model):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Objeto con atributo history compatible con Keras
         """
         if verbose > 0:
             print("Entrenando agente SAC...")
         
+        # Extraer datos de entrada
+        cgm_data, other_features, y = self._extract_input_data(x, y)
+        
         # Crear entorno para entrenamiento
-        env = self._create_training_environment(x[0], x[1], y)
+        env = self._create_training_environment(cgm_data, other_features, y)
         
         # Entrenar el agente SAC
         history = self.sac_agent.train(
@@ -1422,15 +1520,8 @@ class SACModelWrapper(tf.keras.models.Model):
             render=False
         )
         
-        # Convertir historia a formato compatible con Keras
-        keras_history = {
-            'loss': history.get('episode_rewards', [0]),
-            'actor_loss': history.get('actor_losses', [0]),
-            'critic_loss': history.get('critic_losses', [0]),
-            'val_loss': [history.get('episode_rewards', [0])[-1] * 1.05] if validation_data else None
-        }
-        
-        return {'history': keras_history}
+        # Crear y devolver historia compatible con Keras
+        return self._create_keras_history(history, validation_data)
     
     def _create_training_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                                    target_doses: tf.Tensor) -> Any:
@@ -1571,11 +1662,55 @@ class SACModelWrapper(tf.keras.models.Model):
         **kwargs
             Argumentos adicionales
         """
+        # Verificar si el modelo ha sido construido, y si no, construirlo con datos dummy
+        if not self.built:
+            try:
+                # Crear tensores dummy con las formas adecuadas
+                # Para datos CGM
+                if len(self.cgm_shape) >= 3:  # Ya tiene la forma correcta (batch, time, features)
+                    dummy_cgm = tf.zeros((1, self.cgm_shape[1], self.cgm_shape[2]))
+                elif len(self.cgm_shape) == 2:  # Añadir dimensión de tiempo
+                    dummy_cgm = tf.zeros((1, 24, self.cgm_shape[1]))  # 24 como valor típico de time_steps
+                else:  # Para cualquier otro caso, usar una forma predeterminada
+                    dummy_cgm = tf.zeros((1, 24, 1))
+                
+                # Para otras características
+                if len(self.other_features_shape) > 1:
+                    # Tiene al menos dos dimensiones (batch_size, features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[1]))
+                elif len(self.other_features_shape) == 1:
+                    # Solo tiene una dimensión (features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[0]))
+                else:
+                    # No tiene dimensiones o es vacío, usar un valor predeterminado
+                    dummy_other = tf.zeros((1, 1))
+                
+                # Llamar al modelo para construirlo
+                _ = self([dummy_cgm, dummy_other])
+                
+                print("Modelo construido antes de guardar.")
+            except Exception as e:
+                print(f"Error al construir el modelo: {e}")
+                print("Intentando con dimensiones predeterminadas...")
+                
+                # Usar dimensiones seguras predeterminadas
+                dummy_cgm = tf.zeros((1, 24, 1))
+                dummy_other = tf.zeros((1, 1))
+                _ = self([dummy_cgm, dummy_other])
+        
+        # Adaptar la ruta si termina con .keras
+        base_path = filepath
+        if filepath.endswith('.keras'):
+            base_path = filepath[:-6]
+        
         # Guardar pesos del wrapper
-        self.save_weights(filepath + MODEL_WEIGHTS_SUFFIX)
+        weights_path = base_path + MODEL_WEIGHTS_SUFFIX
+        self.save_weights(weights_path)
         
         # Guardar modelos del agente SAC
-        self.sac_agent.save_models(filepath)
+        self.sac_agent.save_models(base_path)
+        
+        print(f"Modelo SAC guardado en {filepath}")
     
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
@@ -1601,6 +1736,78 @@ class SACModelWrapper(tf.keras.models.Model):
         # Cargar modelos del agente SAC
         self.sac_agent.load_models(base_filepath)
 
+    def compile(
+        self, 
+        optimizer: Any = 'adam',
+        loss: Any = 'mse',
+        metrics: Optional[List[str]] = None,
+        **kwargs
+    ) -> None:
+        """
+        Implementa la interfaz de compilación de Keras.
+        
+        Parámetros:
+        -----------
+        optimizer : Any, opcional
+            Optimizador (default: 'adam')
+        loss : Any, opcional
+            Función de pérdida (default: 'mse')
+        metrics : Optional[List[str]], opcional
+            Lista de métricas (default: None)
+        **kwargs
+            Argumentos adicionales
+        """
+        # Usar object.__setattr__ para evitar el rastreo de Keras
+        object.__setattr__(self, '_optimizer', optimizer)
+        object.__setattr__(self, '_loss', loss)
+        object.__setattr__(self, '_metrics_list', metrics)
+        
+        # Registrar atributos adicionales si se proporcionan
+        for key, value in kwargs.items():
+            object.__setattr__(self, f"_{key}", value)
+
+    def _calibrate_dose_predictor(self, y: tf.Tensor) -> None:
+        """
+        Calibra la capa que mapea acciones a dosis de insulina.
+        
+        Parámetros:
+        -----------
+        y : tf.Tensor
+            Dosis objetivo para calibración
+        """
+        # Verificar si ya existe la capa dose_predictor, si no, crearla
+        if not hasattr(self, 'dose_predictor'):
+            self.dose_predictor = tf.keras.layers.Dense(1, activation='linear', name='dose_predictor')
+            
+        # Asegurar que la capa esté construida antes de establecer pesos
+        dummy_input = tf.zeros((1, self.sac_agent.action_dim))
+        self.dose_predictor(dummy_input)  # Esto construirá la capa
+            
+        # Convertir a numpy si es un tensor
+        y_np = y.numpy() if hasattr(y, 'numpy') else y
+        
+        # Calcular los parámetros de escala y sesgo para la capa
+        max_dose = np.max(y_np)
+        min_dose = np.min(y_np)
+        
+        # Evitar divisiones por cero si max = min
+        if max_dose == min_dose:
+            scale = 1.0
+            bias = min_dose
+        else:
+            scale = (max_dose - min_dose) / 2.0
+            bias = (min_dose + max_dose) / 2.0
+        
+        # Establecer pesos para la capa lineal
+        try:
+            self.dose_predictor.set_weights([
+                np.ones((self.sac_agent.action_dim, 1)) * scale,
+                np.array([bias])
+            ])
+            print(f"Calibrador de dosis configurado: escala={scale:.4f}, sesgo={bias:.4f}")
+        except Exception as e:
+            print(f"Error al calibrar predictor de dosis: {str(e)}")
+            print(f"Forma de los pesos: {[(var.shape) for var in self.dose_predictor.trainable_variables]}")
 
 def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> tf.keras.models.Model:
     """
@@ -1655,9 +1862,34 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=SAC_CONFIG.get('seed', 42)
     )
     
-    # Crear y devolver el modelo wrapper
-    return SACModelWrapper(
+    # Crear el modelo wrapper
+    model = SACModelWrapper(
         sac_agent=sac_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Compilar usando el método que evita problemas de tracking
+    model.compile(
+        optimizer='adam',
+        loss='mse',
+        metrics=['mae']
+    )
+    
+    # Extraer las dimensiones reales de entrada
+    if len(other_features_shape) <= 1:
+        other_features_dim = 1
+    else:
+        other_features_dim = other_features_shape[-1]
+    
+    # Construir el modelo con formas de entrada adecuadas
+    try:
+        model.build([
+            tf.TensorShape([None, 24, 3]),  # CGM shape con dimensión de tiempo
+            tf.TensorShape([None, other_features_dim])  # Other features shape
+        ])
+        print("Modelo SAC construido correctamente")
+    except Exception as e:
+        print(f"Error al construir modelo SAC: {str(e)}")
+    
+    return model
