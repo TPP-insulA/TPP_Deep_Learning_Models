@@ -636,8 +636,8 @@ class REINFORCE(nn.Module):
         # Crear un episodio sintético corto para entrenamiento simulado
         episode_length = 5
         
-        # Generar estados aleatorios
-        states = [np.random.randn(self.state_dim) for _ in range(episode_length)]
+        # Generar estados aleatorios usando el generador con semilla
+        states = [self.rng.standard_normal(self.state_dim) for _ in range(episode_length)]
         
         # Generar acciones usando la política actual
         actions = []
@@ -645,8 +645,8 @@ class REINFORCE(nn.Module):
             action = self.policy.get_action(state)
             actions.append(action)
         
-        # Generar recompensas aleatorias
-        rewards = [np.random.randn() for _ in range(episode_length)]
+        # Generar recompensas aleatorias usando el generador con semilla
+        rewards = [self.rng.standard_normal() for _ in range(episode_length)]
         total_reward = sum(rewards)
         
         return states, actions, rewards, total_reward, episode_length
