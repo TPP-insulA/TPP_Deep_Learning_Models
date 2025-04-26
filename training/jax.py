@@ -27,7 +27,7 @@ from constants.constants import (
 from tqdm.auto import tqdm
 from config.params import DEBUG
 
-CONST_EPOCHS = 10 if DEBUG else CONST_DEFAULT_EPOCHS
+CONST_EPOCHS = 3 if DEBUG else CONST_DEFAULT_EPOCHS
 
 def create_batched_dataset(x_cgm: np.ndarray, 
                           x_other: np.ndarray, 
@@ -297,8 +297,8 @@ def _train_epoch(state: train_state.TrainState,
     # Variables para métricas de época
     epoch_loss = 0.0
     
-    # Bucle sobre batches
-    for batch in train_batches:
+    # Usar tqdm para mostrar progreso dentro de la época
+    for i, batch in enumerate(tqdm(train_batches, desc="Batches", leave=False)):
         # Desempaquetar batch
         (x_cgm_batch, x_other_batch), y_batch = batch
         
@@ -311,12 +311,23 @@ def _train_epoch(state: train_state.TrainState,
         state, metrics = train_step(state, x_cgm_batch, x_other_batch, y_batch)
         
         # Actualizar pérdida de época
-        epoch_loss += float(metrics[CONST_LOSS]) / n_train_batches
+        batch_loss = float(metrics[CONST_LOSS])
+        epoch_loss += batch_loss / n_train_batches
+        
+        # Mostrar progreso del batch actual (cada 10 batches)
+        if (i + 1) % 10 == 0 or i == 0 or i == len(train_batches) - 1:
+            print(f"  Batch {i+1}/{len(train_batches)}, Loss: {batch_loss:.4f}")
     
     # Evaluar en validación
     val_metrics = eval_step(state, x_cgm_val_array, x_other_val_array, y_val_array)
     
-    return epoch_loss, val_metrics, state
+    # Asegurarse de que CONST_METRIC_R2 existe en val_metrics
+    val_metrics_dict = {k: float(v) for k, v in val_metrics.items()}
+    if CONST_METRIC_R2 not in val_metrics_dict:
+        val_metrics_dict[CONST_METRIC_R2] = 0.0  # Valor por defecto
+    
+    return epoch_loss, val_metrics_dict, state
+
 
 def _update_history(history: Dict[str, List[float]],
                   epoch_loss: float,
@@ -477,9 +488,14 @@ def train_and_evaluate_model(model: nn.Module,
     best_state, best_params = state, state.params
     
     # Bucle de entrenamiento con early stopping
+
     print(f"\nEntrenando modelo {model_name}...")
+    print(f"Configuración: {epochs} épocas, batch size: {batch_size}")
+    print(f"Datos: {len(x_cgm_train)} ejemplos de entrenamiento, {len(x_cgm_val_array)} ejemplos de validación")
     
-    for epoch in tqdm(range(epochs), desc="Entrenando"):
+    for epoch in range(epochs):
+        print(f"\nÉpoca {epoch+1}/{epochs}")
+        
         # Mezclar datos para esta época
         rng, shuffle_rng = random.split(rng)
         train_batches, _ = create_batched_dataset(
@@ -487,15 +503,23 @@ def train_and_evaluate_model(model: nn.Module,
             batch_size=batch_size, shuffle=True, rng=shuffle_rng
         )
         
+        # Mostrar información antes de cada época
+        print(f"Procesando {n_train_batches} batches ({len(train_batches)} batches reales)")
+        
         # Entrenar una época y actualizar históricos
+        start_time = time.time()
         epoch_loss, val_metrics, state = _train_epoch(
             state, train_batches, n_train_batches, 
             x_cgm_val_array, x_other_val_array, y_val_array
         )
+        epoch_time = time.time() - start_time
         history = _update_history(history, epoch_loss, val_metrics)
         
-        # Imprimir métricas
-        print(f"Época {epoch+1}/{epochs} - loss: {epoch_loss:.4f} - val_loss: {float(val_metrics[CONST_LOSS]):.4f} - MAE: {float(val_metrics[CONST_METRIC_MAE]):.4f} - RMSE: {float(val_metrics[CONST_METRIC_RMSE]):.4f} - R2: {float(val_metrics[CONST_METRIC_R2]):.4f}")
+        # Verificar que CONST_METRIC_R2 exista
+        r2_value = val_metrics.get(CONST_METRIC_R2, 0.0)
+        
+        # Imprimir métricas con tiempo
+        print(f"Época {epoch+1}/{epochs} completada en {epoch_time:.2f}s - loss: {epoch_loss:.4f} - val_loss: {float(val_metrics[CONST_LOSS]):.4f} - MAE: {float(val_metrics[CONST_METRIC_MAE]):.4f} - RMSE: {float(val_metrics[CONST_METRIC_RMSE]):.4f} - R2: {float(r2_value):.4f}")
         
         # Manejo de early stopping
         val_loss = float(val_metrics[CONST_LOSS])

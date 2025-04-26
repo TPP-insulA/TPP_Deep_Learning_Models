@@ -434,7 +434,8 @@ class TabNetModel(nn.Module):
 
         # 2. Pasos de decisión de TabNet
         step_outputs_agg = [] # Salidas para la agregación final
-        aggregated_mask = jnp.zeros_like(features_norm)
+        if return_mask:
+            aggregated_mask = jnp.zeros_like(features_norm)
         prior_scales = jnp.ones_like(features_norm) # Inicializar prior scales (gamma)
         total_entropy_loss = 0.0
 
@@ -454,9 +455,9 @@ class TabNetModel(nn.Module):
 
             # Actualizar prior scales para el siguiente paso
             prior_scales = prior_scales_next
-
             # Acumular máscara agregada (para análisis o regularización)
-            aggregated_mask += mask # Podría necesitar escalarse por (gamma - mask) si se usa diferente
+            if return_mask:
+                aggregated_mask += mask # Podría necesitar escalarse por (gamma - mask) si se usa diferente
 
             # Calcular pérdida de entropía para regularización (opcional)
             if self.sparsity_coefficient > 0:
@@ -486,13 +487,13 @@ class TabNetModel(nn.Module):
             # Multiplicar por el coeficiente de esparcidad
             calculated_entropy_loss = avg_entropy_loss * self.sparsity_coefficient
             # Registrar la pérdida de entropía en el estado del modelo
-            entropy_loss_value_to_return = calculated_entropy_loss
-            # Registrar la pérdida para que pueda ser añadida a la pérdida principal externamente
             self.sow('losses', 'entropy_loss', calculated_entropy_loss)
-
+            
         final_output = output.squeeze(-1) # Asegurar forma (batch_size,)
         
-        return final_output, aggregated_mask, entropy_loss_value_to_return if return_mask else final_output
+        if return_mask:
+            return final_output, aggregated_mask
+        return final_output
 
 def create_tabnet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """

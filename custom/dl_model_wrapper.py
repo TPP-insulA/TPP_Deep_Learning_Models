@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 
 from custom.model_wrapper import ModelWrapper
 from custom.printer import cprint, print_debug, print_info
@@ -237,10 +238,14 @@ class DLModelWrapperJAX(ModelWrapper):
         restore_best_weights : bool, opcional
             Si restaurar los mejores pesos al finalizar (default: True)
         """
-        if hasattr(self.wrapper, 'add_early_stopping'):
-            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
-        else:
-            super().add_early_stopping(patience, min_delta, restore_best_weights)
+        self.early_stopping = {
+            'patience': patience,
+            'min_delta': min_delta,
+            'restore_best_weights': restore_best_weights,
+            'best_loss': float('inf'),
+            'wait': 0,
+            'best_params': None
+        }
 
     def initialize(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, seed: int = 0) -> None:
         """
@@ -370,9 +375,17 @@ class DLModelWrapperJAX(ModelWrapper):
         """
         entropy_loss: jnp.ndarray = jnp.array(0.0)
         
-        if isinstance(outputs, tuple) and len(outputs) == 2 and training:
-            predictions, updated_state = outputs
-            entropy_loss = self._extract_entropy_loss(updated_state)
+        if isinstance(outputs, tuple):
+            if len(outputs) == 3 and training:
+                # (final_output, aggregated_mask, entropy_loss_value)
+                predictions, _, entropy_value = outputs
+                entropy_loss = jnp.array(entropy_value)
+            elif len(outputs) == 2 and training:
+                # (predictions, updated_state)
+                predictions, updated_state = outputs
+                entropy_loss = self._extract_entropy_loss(updated_state)
+            else:
+                predictions = outputs[0]
         elif isinstance(outputs, jax.Array):
             predictions = outputs
         else:
@@ -512,7 +525,13 @@ class DLModelWrapperJAX(ModelWrapper):
         # Create a random generator with a seed for reproducibility
         rng = np.random.Generator(np.random.PCG64(42))
         rng.shuffle(indices)
-        for i in range(0, num_samples, batch_size):
+        
+        # Calculate number of batches for the progress bar
+        num_batches = (num_samples + batch_size - 1) // batch_size
+        
+        # Create a generator with progress bar
+        batch_iter = range(0, num_samples, batch_size)
+        for i in tqdm(batch_iter, desc="Procesando batches", leave=False, total=num_batches):
             batch_indices = indices[i:min(i + batch_size, num_samples)]
             batch_cgm = x_cgm_arr[batch_indices]
             batch_other = x_other_arr[batch_indices]
@@ -732,9 +751,12 @@ class DLModelWrapperJAX(ModelWrapper):
         """
         batch_losses = []
         epoch_start_time = time.time()
+        # running_loss = 0.0
         
-        for batch_idx, (batch_cgm, batch_other, batch_y) in enumerate(
-                self._get_batches(x_cgm_arr, x_other_arr, y_arr, batch_size)):
+        # Get batches with progress bar
+        batches = self._get_batches(x_cgm_arr, x_other_arr, y_arr, batch_size)
+        
+        for batch_idx, (batch_cgm, batch_other, batch_y) in enumerate(batches):
             # Generar clave RNG para este lote
             batch_rng = jax.random.fold_in(epoch_rng, batch_idx)
             
@@ -748,8 +770,17 @@ class DLModelWrapperJAX(ModelWrapper):
             if hasattr(new_train_state, 'batch_stats'):
                 self.batch_stats = new_train_state.batch_stats
                 
-            batch_losses.append(float(loss_value))
+            # Track loss
+            loss_float = float(loss_value)
+            batch_losses.append(loss_float)
             
+            # Update running loss and print every 10 batches
+            # running_loss += loss_float
+            # if (batch_idx + 1) % 10 == 0:
+                # avg_running_loss = running_loss / 10
+                # print(f"  Batch {batch_idx+1}: loss {avg_running_loss:.4f}")
+                # running_loss = 0.0
+        
         # Calcular pérdida y duración
         avg_loss = np.mean(batch_losses) if batch_losses else 0.0
         epoch_duration = time.time() - epoch_start_time
@@ -896,8 +927,13 @@ class DLModelWrapperJAX(ModelWrapper):
         master_rng = jax.random.PRNGKey(0)
         self.history = {"loss": [], "val_loss": [], "val_mae": [], "val_rmse": [], "val_r2": []}
         
-        # Bucle de entrenamiento
-        for epoch in range(epochs):
+        # Print training setup
+        num_batches = (len(x_cgm) + batch_size - 1) // batch_size
+        print_info(f"Iniciando entrenamiento para {epochs} épocas con {len(x_cgm)} ejemplos")
+        print_info(f"Tamaño de lote: {batch_size}, total batches: {num_batches}")
+        
+        # Bucle de entrenamiento con barra de progreso
+        for epoch in tqdm(range(epochs), desc="Épocas", unit="época"):
             # Generar clave RNG para esta época
             epoch_rng = jax.random.fold_in(master_rng, epoch)
             
@@ -918,7 +954,7 @@ class DLModelWrapperJAX(ModelWrapper):
             progress_msg = self._format_progress_message(
                 epoch, epochs, avg_loss, epoch_duration, val_metrics
             )
-            cprint(progress_msg, colour='yellow', background='blue', style='bold')
+            print_info(progress_msg)
             
             # Early stopping
             if self._apply_early_stopping(val_metrics[0], avg_loss, do_validation, epoch, epochs):

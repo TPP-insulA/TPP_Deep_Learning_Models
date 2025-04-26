@@ -93,7 +93,7 @@ DEBUG = True
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax", "pytorch"
-FRAMEWORK = "pytorch"
+FRAMEWORK = "jax"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -197,7 +197,7 @@ USE_TF_MODELS = {
     "tf_cnn": False,
     "tf_fnn": False,
     "tf_gru": False,
-    "tf_lstm": False,
+    "tf_lstm": True,
     "tf_rnn": False,
     "tf_tabnet": False,
     "tf_tcn": False,
@@ -207,7 +207,7 @@ USE_TF_MODELS = {
     "tf_monte_carlo": False,
     "tf_policy_iteration": False,
     "tf_q_learning": False,
-    "tf_reinforce_mcpg": False,
+    "tf_reinforce_mcpg": True,
     "tf_sarsa": False,
     "tf_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
@@ -216,30 +216,30 @@ USE_TF_MODELS = {
     "tf_ddpg": False,
     "tf_dqn": False,
     "tf_ppo": False,
-    "tf_sac": False,
+    "tf_sac": True,
     "tf_trpo": True,
 }
 
 # Modelos JAX a utilizar
 USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "jax_attention_only": False,
-    "jax_cnn": False,
-    "jax_fnn": False,
-    "jax_gru": False,
-    "jax_lstm": False,
-    "jax_rnn": False,
-    "jax_tabnet": False,
-    "jax_tcn": False,
-    "jax_transformer": False,
-    "jax_wavenet": False,
+    "jax_attention_only": True,
+    "jax_cnn": True,
+    "jax_fnn": True,
+    "jax_gru": True,
+    "jax_lstm": True,
+    "jax_rnn": True,
+    "jax_tabnet": True,
+    "jax_tcn": True,
+    "jax_transformer": True,
+    "jax_wavenet": True,
     ## Modelos de Aprendizaje por Refuerzo
-    "jax_monte_carlo": False,
-    "jax_policy_iteration": False,
-    "jax_q_learning": False,
-    "jax_reinforce_mcpg": False,
-    "jax_sarsa": False,
-    "jax_value_iteration": False,
+    "jax_monte_carlo": True,
+    "jax_policy_iteration": True,
+    "jax_q_learning": True,
+    "jax_reinforce_mcpg": True,
+    "jax_sarsa": True,
+    "jax_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "jax_a2c": True,
     "jax_a3c": True,
@@ -255,8 +255,8 @@ USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
     "pt_attention_only": False,
     "pt_cnn": False,
-    "pt_fnn": False,
-    "pt_gru": False,
+    "pt_fnn": True,
+    "pt_gru": True,
     "pt_lstm": False,
     "pt_rnn": False,
     "pt_tabnet": False,
@@ -264,17 +264,17 @@ USE_PT_MODELS = {
     "pt_transformer": False,
     "pt_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "pt_monte_carlo": False,
+    "pt_monte_carlo": True,
     "pt_policy_iteration": False,
     "pt_q_learning": False,
     "pt_reinforce_mcpg": False,
     "pt_sarsa": False,
     "pt_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "pt_a2c": False,
-    "pt_a3c": False,
-    "pt_ddpg": False,
-    "pt_dqn": False,
+    "pt_a2c": True,
+    "pt_a3c": True,
+    "pt_ddpg": True,
+    "pt_dqn": True,
     "pt_ppo": False,
     "pt_sac": False,
     "pt_trpo": True,
