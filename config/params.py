@@ -74,10 +74,10 @@ from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_waven
 ### Modelos de Aprendizaje por Refuerzo
 from models.pytorch.ReinforcementLearning.monte_carlo_methods import model_creator as pt_monte_carlo_creator
 from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
-# from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
-# from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
-# from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
-# from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
+from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
+from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
+from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
+from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
 
 ### Modelos de Aprendizaje por Refuerzo Profundo
 from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
@@ -85,7 +85,7 @@ from models.pytorch.DeepReinforcementLearning.ddpg import model_creator as pt_dd
 from models.pytorch.DeepReinforcementLearning.dqn import model_creator as pt_dqn_creator
 from models.pytorch.DeepReinforcementLearning.ppo import model_creator as pt_ppo_creator
 from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac_creator
-# from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
+from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
 DEBUG = True 
@@ -176,10 +176,10 @@ PT_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": pt_monte_carlo_creator,
     "pt_policy_iteration": pt_policy_iteration_creator,
-    # "pt_q_learning": pt_q_learning_creator,
-    # "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
-    # "pt_sarsa": pt_sarsa_creator,
-    # "pt_value_iteration": pt_value_iteration_creator,
+    "pt_q_learning": pt_q_learning_creator,
+    "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
+    "pt_sarsa": pt_sarsa_creator,
+    "pt_value_iteration": pt_value_iteration_creator,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": pt_a2c_creator,
     "pt_a3c": pt_a3c_creator,
@@ -187,7 +187,7 @@ PT_MODELS = {
     "pt_dqn": pt_dqn_creator,
     "pt_ppo": pt_ppo_creator,
     "pt_sac": pt_sac_creator,
-    # "pt_trpo": pt_trpo_creator,
+    "pt_trpo": pt_trpo_creator,
 }
 
 # Modelos TensorFlow a utilizar
@@ -276,6 +276,6 @@ USE_PT_MODELS = {
     "pt_ddpg": False,
     "pt_dqn": False,
     "pt_ppo": False,
-    "pt_sac": True,
-    "pt_trpo": False,
+    "pt_sac": False,
+    "pt_trpo": True,
 }
