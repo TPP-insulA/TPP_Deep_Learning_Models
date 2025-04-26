@@ -1811,6 +1811,429 @@ El dataset elegido para realizar este análisis es el DiaTrend @diatrend.
 
 = Metodología de Entrenamiento <metodologia>
 
+== Procesamiento de Datos <data-processing>
+
+=== `pandas.py` <pandas-py>
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "1. Carga de Datos",
+  [
+    + *Inputs*: Ruta a los datasets.
+    + *Outputs*: tupla de DataFrames `(cgm_df, bolus_df, basal_df)`, correspondientes a los datos de glucosa, bolus y basal respectivamente.
+    + *Propósito*: Extraer el monitoreo de glucosa, el bolo de insulina y la insulina basal del paciente, y almacenarlos en DataFrames separados.
+    + *Puntos a tener en cuenta*: 
+      - La lectura de los archivos es intensiva en memoria.
+    + *Posibles fuente de error*:
+      - El formato de los archivos no es el esperado.
+      - La ruta a los archivos no es correcta.
+      - Los archivos no existen.
+      - Los archivos están corruptos.
+      - Faltante de hojas en los archivos.
+      - Faltante de columnas en los archivos.
+      - Memoria insuficiente.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "2. Preparación de DataFrames",
+  [
+    + *Inputs*: DataFrames `cgm_df`, `bolus_df`, `basal_df`.
+    + *Outputs*: DataFrames procesados con el formateo esperado de las fechas.
+    + *Propósito*: Convertir las fechas al formato esperado (`datetime`).
+    + *Puntos a tener en cuenta*: 
+      - Asume una estructura específica en la columna de los archivos de entrada.
+    + *Posibles fuente de error*:
+      - Columna de fecha faltante en la entrada.
+      - Formato de fecha inválida.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "3. Extracción de las ventanas CGM",
+  [
+    + *Inputs*: Timestamp del bolo de insulina, el DataFrame `cgm_df` y ventana (en horas) de análisis.
+    + *Outputs*: Array NumPy (24) con los valores de glucosa en la ventana de tiempo especificada o `None`.
+    + *Propósito*: Crear una serie temporal de glucosa en la ventana de tiempo especificada.
+    + *Puntos a tener en cuenta*: 
+      - La ventana de tiempo fijo puede hacer que se pierdan patrones relevantes.
+    + *Posibles fuente de error*:
+      - Datos insuficientes en la ventana de tiempo especificada.
+      - Ventanas incompletas.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "4. Cálculo de IOB (Insulin On Board)",
+  [
+    + *Inputs*: Timestamps de bolos de insulina, el DataFrame `basal_df` y el tiempo de vida media de la insulina.
+    + *Outputs*: `Float` representando el valor de insulina activa.
+    + *Propósito*: Estimar la insulina activa en el cuerpo al momento de la predicción.
+    + *Puntos a tener en cuenta*: 
+      - Se usa el modelo simplificado de decaimiento exponencial.
+    + *Posibles fuente de error*:
+      - Errores en el cálculo de tiempo.
+      - Tasas basals incorrectas.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "5. Cálculo de los Valores (Medianas)",
+  [
+    + *Inputs*: Bolos de insulina y DataFrame basal.
+    + *Outputs*: Mediana de la ingesta de carbohidratos y valor de IOB. 
+    + *Propósito*: Crear valores referenciales para imputar datos faltantes.
+    + *Puntos a tener en cuenta*: 
+      - Es una aproximación estadística simple y puede no reflejar patrones individuales.
+    + *Posibles fuente de error*:
+      - Datasets vacíos pueden resultar en valores por defecto.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "6. Procesamiento Individual de Eventos de Bolo",
+  [
+    + *Inputs*: Filas de bolo, timestamp, ventana CGM, medianas y datos basales.
+    + *Outputs*: `Dict` con los features extraídos y procesados.
+    + *Propósito*: Transformar los datos en duro a features utilizables para modelo.
+    + *Puntos a tener en cuenta*: 
+      - Tiene muchas condiciones hardcodeadas y operaciones de recorte.
+    + *Posibles fuente de error*:
+      - Divisiones por 0 al momento de calcular el factor de sensitividad de insulina.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "7. Procesamiento Completo de Datos por Sujeto",
+  [
+    + *Inputs*: Ruta al archivo e index del sujeto.
+    + *Outputs*: Lista de features (diccionarios) para todos los eventos válidos de bolo.
+    + *Propósito*: Extraer todos los puntos viables de datos a partir de los registros del sujeto.
+    + *Puntos a tener en cuenta*: 
+      - Procesamiento secuencial de eventos de bolo podría ser insuficiente.
+    + *Posibles fuente de error*:
+      - Datos de CGM faltantes resultarían en eventos de bolo ignorados.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "8. Procesamiento de Todos los Sujetos",
+  [
+    + *Inputs*: Ruta a la carpeta conteniendo todos los archivos de los sujetos.
+    + *Outputs*: DataFrame combinado con todos los features.
+    + *Propósito*: Procesar el dataset entero y aplicar las transformaciones necesarias.
+    + *Puntos a tener en cuenta*: 
+      - El procesamiento en paralelo es intensivo en memoria.
+    + *Posibles fuente de error*:
+      - Permisos de acceso a archivos.
+      - Errores por memoria insuficiente en datasets grandes.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "9. Aplicación de Transformaciones Logarítmicas",
+  [
+    + *Inputs*: DataFrames procesados.
+    + *Outputs*: DataFrame con los features transformados.
+    + *Propósito*: Normalizar las distribuciones sesgadas y manejar las relaciones no lineares.
+    + *Puntos a tener en cuenta*: 
+      - Las transformaciones logarítmicas asumen valores positivos.
+    + *Posibles fuente de error*:
+      - Posibles errores de cálculo si los datos contienen valores negativos o cero.
+      - La transformación logarítmica puede no ser adecuada para todas las variables.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "10. Cálculo de las Distribuciones de Scores por Sujeto",
+  [
+    + *Inputs*: DataFrame con los valores de entrenamiento y evaluación por sujeto.
+    + *Outputs*: Scores para añadir al sujeto.
+    + *Propósito*: Cuantificar el impacto de la distribución en los datos cuando se agrega un sujeto.
+    + *Puntos a tener en cuenta*: 
+      - Función de score compleja y difícil de interpretar.
+    + *Posibles fuente de error*:
+      - Sujeto sin datos que resulte en un score indefinido.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "11. Asignación de Sujetos a Datasets",
+  [
+    + *Inputs*: DataFrame, sujetos ordenados y tamaños de división.
+    + *Outputs*: Listas de sujetos para entrenamiento, validación y prueba.
+    + *Propósito*: Crear un dataset dividido por sujeto balanceado.
+    + *Puntos a tener en cuenta*: 
+      - Prioriza al sujeto \#49 para el entrenamiento por ser una muestra problemática; puede introducir sesgos. 
+    + *Posibles fuente de error*:
+      - Sujetos insuficientes para realizar la división del dataset.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "12. Escalar y Procesar los Datos",
+  [
+    + *Inputs*: DataFrame final y dataset de máscaras.
+    + *Outputs*: Arrays estandarizados para entrenar el modelo.
+    + *Propósito*: Estandarizar los features para mejorar el entrenamiento del modelo.
+    + *Puntos a tener en cuenta*: 
+      - El escalado estandar asume distribución normal.
+    + *Posibles fuente de error*:
+      - Outliers extremos podrían afectar el escalamiento de los parmámetros.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "13. División de los Datos",
+  [
+    + *Inputs*: DataFrame final procesado.
+    + *Outputs*: Set completo de datasets para entrenamiento, validación y prueba y los escaladores ajustados.
+    + *Propósito*: Crear el dataset final con sus divisiones para el entrenamiento del modelo.
+    + *Puntos a tener en cuenta*: 
+      - Retorna una tupla compleja, con 16 elementos.
+    + *Posibles fuente de error*:
+      - Divisiones desbalanceadas pueden afectar al modelo.
+  ]
+)
+
+=== `polars.py` <polars-py>
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(83%),
+  variant: "1. Carga de Datos",
+  [
+    + *Inputs*: Ruta a los datasets.
+    + *Outputs*: tupla de DataFrames `(cgm_df, bolus_df, basal_df)`, correspondientes a los datos de glucosa, bolus y basal respectivamente.
+    + *Propósito*: Extraer datos de CGM, bolos de insulina e insulina basal 
+    + *Puntos a tener en cuenta*: 
+      - La lectura de los archivos es intensiva en memoria.
+    + *Posibles fuente de error*:
+      - El formato de los archivos no es el esperado.
+      - La ruta a los archivos no es correcta.
+      - Los archivos no existen.
+      - Los archivos están corruptos.
+      - Faltante de hojas en los archivos.
+      - Faltante de columnas en los archivos.
+      - Memoria insuficiente.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "2. Extracción de las ventanas CGM",
+  [
+    + *Inputs*: Timestamp del bolo de insulina, el DataFrame `cgm_df` y ventana (en horas) de análisis.
+    + *Outputs*: Array NumPy (24) con los valores de glucosa en la ventana de tiempo especificada o `None`.
+    + *Propósito*: Crear una serie temporal de glucosa en la ventana de tiempo especificada.
+    + *Puntos a tener en cuenta*: 
+      - La ventana de tiempo fijo puede hacer que se pierdan patrones relevantes.
+    + *Posibles fuente de error*:
+      - Datos insuficientes en la ventana de tiempo especificada.
+      - Ventanas incompletas.
+      - Retornos de `None`.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "3. Cálculo de IOB (Insulin On Board)",
+  [
+    + *Inputs*: Timestamps de bolos de insulina, el DataFrame `basal_df` y el tiempo de vida media de la insulina.
+    + *Outputs*: `Float` representando el valor de insulina activa.
+    + *Propósito*: Estimar la insulina activa en el cuerpo al momento de la predicción.
+    + *Puntos a tener en cuenta*: 
+      - Se usa el modelo simplificado de decaimiento exponencial.
+    + *Posibles fuente de error*:
+      - Errores en el cálculo de tiempo.
+      - Tasas basals incorrectas.
+      - Errores `NoneType` si `basal_df` es `None`.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "4. Cálculo de los Valores (Medianas)",
+  [
+    + *Inputs*: Bolos de insulina y DataFrame basal.
+    + *Outputs*: Mediana de la ingesta de carbohidratos y valor de IOB. 
+    + *Propósito*: Crear valores referenciales para imputar datos faltantes.
+    + *Puntos a tener en cuenta*: 
+      - Es una aproximación estadística simple y puede no reflejar patrones individuales.
+    + *Posibles fuente de error*:
+      - Datasets vacíos pueden resultar en valores por defecto.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "5. Extracción de Features",
+  [
+    + *Inputs*: Fila de bolo, ventana CGM, valores medianos, datos basales e índice del sujeto.
+    + *Outputs*: `Dict` de features extraídos o `None`. 
+    + *Propósito*: Transformar datos en duro a features estructurados utilizables para modelo.
+    + *Puntos a tener en cuenta*: 
+      - Muchas constantes hardcodeadas y operaciones de recorte que limitan el rango de valores.
+    + *Posibles fuente de error*:
+      - División por 0 al calcular el factor de sensibilidad de insulina.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "6. Procesamiento Individual de los Sujetos",
+  [
+    + *Inputs*: Ruta al archivo e index del sujeto.
+    + *Outputs*: Lista de features (diccionarios) para todos los eventos válidos de bolo.
+    + *Propósito*: Extraer todos los puntos válidos de datos a partir de los registros del sujeto.
+    + *Puntos a tener en cuenta*: 
+      - Procesamiento secuencial de eventos de bolo podría ser insuficiente.
+    + *Posibles fuente de error*:
+      - Datos de CGM faltantes resultarían en eventos de bolo ignorados.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "7. Procesamiento de Todos los Sujetos",
+  [
+    + *Inputs*: Ruta a la carpeta conteniendo todos los archivos de los sujetos.
+    + *Outputs*: DataFrame combinado con todos los features.
+    + *Propósito*: Procesar el dataset entero y aplicar las transformaciones necesarias.
+    + *Puntos a tener en cuenta*: 
+      - El procesamiento en paralelo es intensivo en memoria.
+    + *Posibles fuente de error*:
+      - Permisos de acceso a archivos.
+      - Errores por memoria insuficiente en datasets grandes.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "8. Transformaciones Logarítmicas",
+  [
+    + *Inputs*: DataFrames procesados.
+    + *Outputs*: DataFrame con los features transformados.
+    + *Propósito*: Normalizar las distribuciones sesgadas y manejar las relaciones no lineares.
+    + *Puntos a tener en cuenta*: 
+      - Las transformaciones logarítmicas asumen valores positivos.
+    + *Posibles fuente de error*:
+      - Posibles errores de cálculo si los datos contienen valores negativos o cero.
+      - La transformación logarítmica puede no ser adecuada para todas las variables.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "9. Reestructuración de los Datos CGM",
+  [
+    + *Inputs*: DataFrame con los arrays de las ventanas CGM.
+    + *Outputs*: DataFrame con columnas individuales de CGM.
+    + *Propósito*: Convertir la estructura de arrays a una forma de columnas para poder modelarlo.
+    + *Puntos a tener en cuenta*: 
+      - Crea un dataframe ancho con 24 columnas separadas.
+    + *Posibles fuente de error*:
+      - Problemas de memoria con datasets grandes.
+      - Arrays de tamaños inconsistentes.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "10. Cálculo de las Distribuciones Estadísticas",
+  [
+    + *Inputs*: DataFrame y lista de IDs de los sujetos.
+    + *Outputs*: Tupla con promedio y desviación estándar.
+    + *Propósito*: Calcular las estadísticas para evaluar el balance del dataset.
+    + *Puntos a tener en cuenta*: 
+      - Convierte a `pandas` temporalmente, reduciendo las ventajas de `polars`.
+    + *Posibles fuente de error*:
+      - Grupo de sujetos vacíos, resultando en retornos default.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "11. Asignación de Grupos al Sujeto",
+  [
+    + *Inputs*: DataFrame, ID del sujeto, grupo actual de asignación, límite del tamaño del grupo.
+    + *Outputs*: Asignación del grupo actualizado.
+    + *Propósito*: Asignar sujetos a grupos de entrenamiento, validación y prueba.
+    + *Puntos a tener en cuenta*: 
+      - Cálculo complejo de scores para asignar el sujeto al grupo correcto; difícil de interpretar y tunear.
+    + *Posibles fuente de error*:
+      - Por decisiones de scoring locales, las asignaciones pueden no ser óptimas.
+  ]
+)
+
+#resaltar(
+  color: rgb("#2A80FE"),
+  fill: rgb("#2A80FE").lighten(93%),
+  variant: "12. División de los Datos",
+  [
+    + *Inputs*: DataFrame final procesado.
+    + *Outputs*: Set completo de datasets para entrenamiento, validación y prueba y los escaladores ajustados.
+    + *Propósito*: Crear el dataset final con sus divisiones para el entrenamiento del modelo.
+    + *Puntos a tener en cuenta*: 
+      - Retorna una tupla compleja, con 16 elementos.
+    + *Posibles fuente de error*:
+      - Divisiones desbalanceadas pueden afectar al modelo.
+  ]
+)
+
+#resaltar(
+  color: rgb("#0B0153"),
+  fill: rgb("#0b0153").lighten(93%),
+  variant: "13. Escalar los Datos",
+  [
+    + *Inputs*: Subset de DataFrame y escaladores.
+    + *Outputs*: Arrays NumPy estandarizados.
+    + *Propósito*: Normalizar los features para mejor convergencia del modelo.
+    + *Puntos a tener en cuenta*: 
+      - Conversión temporaria a `pandas`, puede perderse información.
+    + *Posibles fuente de error*:
+      - Outliers extremos podrían afectar el escalamiento de los parmámetros.
+  ]
+)
+
+== Entrenamiento de Modelos <training>
+
+
 == Comparativa de Algoritmos de Aprendizaje por Refuerzo Profundo <comparativa-drl>
 
 Los algoritmos de Aprendizaje por Refuerzo Profundo (DRL) combinan técnicas de aprendizaje profundo con aprendizaje por refuerzo para abordar problemas complejos de toma de decisiones secuenciales. Aunque pueden producir resultados similares en algunos casos, poseen diferencias arquitectónicas y algorítmicas importantes que afectan su rendimiento, eficiencia y aplicabilidad.
