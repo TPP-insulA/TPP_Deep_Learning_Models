@@ -93,7 +93,7 @@ DEBUG = True
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax", "pytorch"
-FRAMEWORK = "jax"
+FRAMEWORK = "pytorch"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -253,29 +253,29 @@ USE_JAX_MODELS = {
 # Modelos Pytorch a utilizar
 USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "pt_attention_only": False,
-    "pt_cnn": False,
+    "pt_attention_only": True,
+    "pt_cnn": True,
     "pt_fnn": True,
     "pt_gru": True,
-    "pt_lstm": False,
-    "pt_rnn": False,
-    "pt_tabnet": False,
-    "pt_tcn": False,
-    "pt_transformer": False,
-    "pt_wavenet": False,
+    "pt_lstm": True,
+    "pt_rnn": True,
+    "pt_tabnet": True,
+    "pt_tcn": True,
+    "pt_transformer": True,
+    "pt_wavenet": True,
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": True,
-    "pt_policy_iteration": False,
-    "pt_q_learning": False,
-    "pt_reinforce_mcpg": False,
-    "pt_sarsa": False,
+    "pt_policy_iteration": True,
+    "pt_q_learning": True,
+    "pt_reinforce_mcpg": True,
+    "pt_sarsa": True,
     "pt_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": True,
     "pt_a3c": True,
     "pt_ddpg": True,
     "pt_dqn": True,
-    "pt_ppo": False,
-    "pt_sac": False,
+    "pt_ppo": True,
+    "pt_sac": True,
     "pt_trpo": True,
 }
