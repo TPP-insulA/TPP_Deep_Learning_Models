@@ -18,8 +18,8 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import DQN_CONFIG
-
+from config.models_config import DQN_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper, DRLModelWrapperTF
 
 class ReplayBuffer:
     """
@@ -1018,11 +1018,11 @@ STATE_ENCODER = 'state_encoder'
 Q_OUTPUT = 'q_output'
 VALUE_OUTPUT = 'value_output'
 ADVANTAGE_OUTPUT = 'advantage_output'
-MODEL_WEIGHTS_SUFFIX = '_model_weights.h5'
-QTABLE_WEIGHTS_SUFFIX = '_qtable_weights.h5'
+MODEL_WEIGHTS_SUFFIX = '_model.weights.h5'
+QTABLE_WEIGHTS_SUFFIX = '_qtable.weights.h5'
 
 
-@register_keras_serializable
+@register_keras_serializable()
 class DQNModelWrapper(Model):
     """
     Wrapper para el algoritmo DQN que implementa la interfaz de Keras.Model.
@@ -1160,24 +1160,24 @@ class DQNModelWrapper(Model):
     
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[tf.data.Dataset, List[tf.Tensor]], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente DQN.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -1193,22 +1193,33 @@ class DQNModelWrapper(Model):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Objeto con atributo history compatible con Keras
         """
         if verbose > 0:
             print("Entrenando agente DQN...")
         
+        # Manejar diferentes tipos de entrada (dataset o tensores)
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            for (inputs, targets) in x.take(1):
+                cgm_data, other_features = inputs
+                y = targets
+                break
+        else:
+            # Usar directamente las entradas proporcionadas
+            cgm_data, other_features = x
+        
         # Crear entorno para entrenamiento
-        env = self._create_training_environment(x[0], x[1], y)
+        env = self._create_training_environment(cgm_data, other_features, y)
         
         # Entrenar el agente DQN
         train_history = self.dqn_agent.train(
             env=env,
             episodes=epochs,
             max_steps=batch_size,
-            update_after=min(1000, batch_size),  # Empezar a actualizar después de acumular suficientes experiencias
-            update_every=4,  # Actualizar red cada 4 pasos
+            update_after=min(1000, batch_size),
+            update_every=4,
             render=False,
             log_interval=max(1, epochs // 10) if verbose > 0 else epochs + 1
         )
@@ -1226,7 +1237,12 @@ class DQNModelWrapper(Model):
         if verbose > 0:
             print("Entrenamiento DQN completado.")
         
-        return {'history': keras_history}
+        # Crear un objeto que emula el comportamiento de History de Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+        
+        return KerasHistoryCompatible(keras_history)
     
     def _create_training_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                                    target_doses: tf.Tensor) -> Any:
@@ -1332,7 +1348,12 @@ class DQNModelWrapper(Model):
         max_dose = np.max(y_np)
         min_dose = np.min(y_np)
         
-        # Configurar pesos para convertir índices discretos a dosis continuas
+        # Asegurar que la capa esté construida antes de establecer pesos
+        # Crear entrada dummy con la forma correcta y llamar a la capa
+        dummy_input = tf.zeros((1, self.dqn_agent.action_dim))
+        self.dose_predictor(dummy_input)  # Esto construirá la capa
+        
+        # Ahora podemos establecer los pesos
         self.dose_predictor.set_weights([
             np.ones((self.dqn_agent.action_dim, 1)) * (max_dose - min_dose) / self.dqn_agent.action_dim,
             np.array([min_dose])
@@ -1383,12 +1404,52 @@ class DQNModelWrapper(Model):
         **kwargs
             Argumentos adicionales
         """
+        # Verificar si el modelo ha sido construido, y si no, construirlo con datos dummy
+        if not self.built:
+            try:
+                # Crear tensores dummy con las formas adecuadas
+                # Para datos CGM
+                if len(self.cgm_shape) >= 3:  # Ya tiene la forma correcta (batch, time, features)
+                    dummy_cgm = tf.zeros((1, self.cgm_shape[1], self.cgm_shape[2]))
+                elif len(self.cgm_shape) == 2:  # Añadir dimensión de tiempo
+                    dummy_cgm = tf.zeros((1, 24, self.cgm_shape[1]))  # 24 como valor típico de time_steps
+                else:  # Para cualquier otro caso, usar una forma predeterminada
+                    dummy_cgm = tf.zeros((1, 24, 1))
+                
+                # Para otras características
+                if len(self.other_features_shape) > 1:
+                    # Tiene al menos dos dimensiones (batch_size, features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[1]))
+                elif len(self.other_features_shape) == 1:
+                    # Solo tiene una dimensión (features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[0]))
+                else:
+                    # No tiene dimensiones o es vacío, usar un valor predeterminado
+                    dummy_other = tf.zeros((1, 1))
+                
+                # Llamar al modelo para construirlo
+                _ = self([dummy_cgm, dummy_other])
+                
+                print("Modelo construido antes de guardar.")
+            except Exception as e:
+                print(f"Error al construir el modelo: {e}")
+                print("Intentando con dimensiones predeterminadas...")
+                # Usar dimensiones seguras predeterminadas
+                dummy_cgm = tf.zeros((1, 24, 1))
+                dummy_other = tf.zeros((1, 1))
+                _ = self([dummy_cgm, dummy_other])
+        
+        # Adaptar la ruta si termina con .keras
+        base_path = filepath
+        if filepath.endswith('.keras'):
+            base_path = filepath[:-6]  # Quitar '.keras'
+        
         # Guardar pesos del wrapper
-        self.save_weights(filepath + MODEL_WEIGHTS_SUFFIX)
+        self.save_weights(base_path + MODEL_WEIGHTS_SUFFIX)
         
         # Guardar pesos de la red Q
-        self.dqn_agent.save_model(filepath + QTABLE_WEIGHTS_SUFFIX)
-        
+        self.dqn_agent.save_model(base_path + QTABLE_WEIGHTS_SUFFIX)
+    
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
         Carga el modelo DQN.
@@ -1415,7 +1476,7 @@ class DQNModelWrapper(Model):
         self.dqn_agent.load_model(qtable_path)
 
 
-def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
+def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> tf.keras.models.Model:
     """
     Crea un modelo basado en DQN (Deep Q-Network) para predicción de dosis de insulina.
     
@@ -1428,7 +1489,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
-    Model
+    tf.keras.models.Model
         Modelo DQN que implementa la interfaz de Keras
     """
     # Calcular dimensión del espacio de estados combinado
@@ -1464,9 +1525,18 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=DQN_CONFIG.get('seed', 42)
     )
     
-    # Crear y devolver el modelo wrapper
-    return DQNModelWrapper(
+    # Crear wrapper DQN directamente sin usar DRLModelWrapperTF
+    # Esto asegura que tengamos todos los métodos de Keras, incluido compile()
+    dqn_model = DQNModelWrapper(
         dqn_agent=dqn_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Pre-compilar el modelo con una configuración estándar
+    dqn_model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=config['learning_rate']),
+        loss='mse'  # Mean Squared Error para regresión
+    )
+    
+    return dqn_model

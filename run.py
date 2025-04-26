@@ -14,7 +14,7 @@ sys.path.append(PROJECT_ROOT)
 from custom.printer import cprint, coloured
 
 # Configuración 
-from config.params import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, TF_MODELS, JAX_MODELS
+from config.params import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, USE_PT_MODELS, TF_MODELS, JAX_MODELS, PT_MODELS
 
 # Procesamiento
 from processing.pandas import preprocess_data as pd_preprocess, split_data as pd_split
@@ -31,6 +31,33 @@ CONST_MODELS_DIR = "models"
 CONST_RESULTS_DIR = "results"
 CONST_ENSEMBLE = "ensemble"
 
+# Auxiliary Functions
+def is_model_creator(fn: Any) -> bool:
+    """
+    Verifica si una función es un model creator que debe ser llamada para obtener
+    la función de creación del modelo.
+    
+    Parámetros:
+    -----------
+    fn : Any
+        Función a verificar
+        
+    Retorna:
+    --------
+    bool
+        True si es un model creator, False si ya es una función de creación de modelo
+    """
+    if callable(fn):
+        try:
+            import inspect
+            sig = inspect.signature(fn)
+            # Si no tiene parámetros, es probable que sea un model creator
+            # que debe llamarse para obtener la función de creación real
+            return len(sig.parameters) == 0
+        except Exception:
+            pass
+    return False
+
 # Importación dinámica de módulos de entrenamiento según el framework seleccionado
 cprint(f"Framework seleccionado: {FRAMEWORK}", 'blue', 'bold')
 
@@ -43,7 +70,7 @@ if FRAMEWORK == "tensorflow":
     # Configurar TensorFlow para uso eficiente de memoria GPU
     import tensorflow as tf
     gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
+    if (gpus):
         try:
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
@@ -65,21 +92,54 @@ elif FRAMEWORK == "jax":
     import jax
     cprint(f"Dispositivos JAX disponibles: {jax.devices()}", 'green')
     cprint("Usando backend de JAX para entrenamiento", 'green', 'bold')
+elif FRAMEWORK == "pytorch":
+    from training.pytorch import (
+        train_multiple_models, calculate_metrics, create_ensemble_prediction, 
+        optimize_ensemble_weights, enhance_features
+    )
+    
+    # Configure PyTorch
+    import torch
+    if torch.cuda.is_available():
+        cprint(f"GPU available: {torch.cuda.device_count()} devices", 'green')
+        cprint(f"Using: {torch.cuda.get_device_name(0)}", 'green')
+    else:
+        cprint("No GPUs detected, using CPU", 'yellow')
+        
+    cprint("Using PyTorch backend for training", 'green', 'bold')
 else:
-    cprint(f"Error: Framework no soportado: {FRAMEWORK}. Debe ser 'tensorflow' o 'jax'.", 'red', 'bold')
+    cprint(f"Error: Framework not supported: {FRAMEWORK}. Must be 'tensorflow', 'jax', or 'pytorch'.", 'red', 'bold')
     sys.exit(1)
 
-use_models = {}
+# Constante para mensaje repetido
+CONST_MODEL_ACTIVATED = "Modelo {} activado."
+CONST_MODEL_DEACTIVATED = "Modelo {} desactivado."
 
-MODELS_TO_USE = USE_JAX_MODELS if FRAMEWORK == "jax" else USE_TF_MODELS
-AVAILABLE_MODELS = JAX_MODELS if FRAMEWORK == "jax" else TF_MODELS
+use_models = {}
+if FRAMEWORK == "tensorflow":
+    MODELS_TO_USE = USE_TF_MODELS
+    AVAILABLE_MODELS = TF_MODELS
+elif FRAMEWORK == "jax":
+    MODELS_TO_USE = USE_JAX_MODELS
+    AVAILABLE_MODELS = JAX_MODELS
+elif FRAMEWORK == "pytorch":
+    MODELS_TO_USE = USE_PT_MODELS
+    AVAILABLE_MODELS = PT_MODELS
 
 for model_name, use in MODELS_TO_USE.items():
     if use:
-        use_models[model_name] = AVAILABLE_MODELS[model_name]
-        cprint(f"Modelo {model_name} activado.", 'green', 'bold')
+        model_fn = AVAILABLE_MODELS[model_name]
+        
+        # Si estamos usando JAX o PyTorch, asegurar que todos los modelos estén en formato uniforme
+        if FRAMEWORK == "jax" or FRAMEWORK == "pytorch":
+            # Verificar si es un model creator que necesita ser llamado
+            if is_model_creator(model_fn):
+                model_fn = model_fn()
+        
+        use_models[model_name] = model_fn
+        cprint(CONST_MODEL_ACTIVATED.format(model_name), 'green', 'bold')
     else:
-        cprint(f"Modelo {model_name} desactivado.", 'red', 'bold')
+        cprint(CONST_MODEL_DEACTIVATED.format(model_name), 'red', 'bold')
 
 # Validaciones Previas
 if PROCESSING not in ["pandas", "polars"]:
@@ -288,10 +348,12 @@ plt.figure(figsize=(12, 6))
 for model_name, history in histories.items():
     plt.plot(history['loss'], label=f'{model_name} (Train)')
     plt.plot(history['val_loss'], label=f'{model_name} (Val)')
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Comparación de Pérdida Durante Entrenamiento')
 plt.xlabel('Época')
 plt.ylabel('Pérdida (MSE)')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'loss_comparison.png'), dpi=300)
@@ -302,10 +364,12 @@ for model_name, history in histories.items():
     if 'mae' in history:
         plt.plot(history['mae'], label=f'{model_name} (Train)')
         plt.plot(history['val_mae'], label=f'{model_name} (Val)')
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Comparación de MAE Durante Entrenamiento')
 plt.xlabel('Época')
 plt.ylabel('MAE')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'mae_comparison.png'), dpi=300)
@@ -320,11 +384,12 @@ plt.plot(indices, y_test[:sample_size], 'o-', label='Real', color='black', alpha
 for model_name, pred in predictions.items():
     plt.plot(indices, pred[:sample_size], 'o-', label=model_name, alpha=0.5)
 plt.plot(indices, ensemble_pred[:sample_size], 'o-', label='Ensemble', linewidth=2)
-
+# Verificar si hay elementos etiquetados en la figura actual antes de agregar leyenda
+if len(plt.gca().get_legend_handles_labels()[0]) > 0:
+    plt.legend()
 plt.title('Predicciones vs Valores Reales')
 plt.xlabel('Índice de Muestra')
 plt.ylabel('Dosis de Insulina')
-plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.savefig(os.path.join(FIGURES_DIR, 'predictions_comparison.png'), dpi=300)
@@ -380,25 +445,25 @@ cprint(f"Visualizaciones guardadas en: {FIGURES_DIR}", 'green')
 cprint("\n==== GENERANDO REPORTE EN TYPST ====", 'cyan', 'bold')
 
 # Crear reporte Typst
-typst_report_path = create_report(
-    model_figures=model_figures,
-    ensemble_metrics=ensemble_metrics,
-    framework=FRAMEWORK,
-    project_root=PROJECT_ROOT,
-    figures_dir=FIGURES_DIR,
-    metrics=metrics
+report_path = create_report(
+    model_figures=model_figures,            # Diccionario con rutas a figuras por modelo
+    ensemble_metrics=ensemble_metrics,      # Métricas del modelo ensemble
+    framework=FRAMEWORK,                    # 'tensorflow' o 'jax'
+    project_root=PROJECT_ROOT,              # Ruta base del proyecto
+    figures_dir=FIGURES_DIR,                # Directorio de figuras (constante definida)
+    metrics=metrics                         # Métricas de todos los modelos
 )
 
-cprint(f"Reporte Typst generado: {typst_report_path}", 'green')
+cprint(f"Reporte Typst generado: {report_path}", 'green')
 
 # Intentar renderizar el PDF
-pdf_path = render_to_pdf(typst_report_path)
+pdf_path = render_to_pdf(report_path)
 if pdf_path:
     cprint(f"PDF generado: {pdf_path}", 'green')
 
 cprint("\n==== PROCESO COMPLETADO ====", 'cyan', 'bold')
 cprint(f"Resultados guardados en: {RESULTS_SAVE_DIR}", 'green')
 cprint(f"Visualizaciones guardadas en: {FIGURES_DIR}", 'green')
-cprint(f"Reporte guardado en: {typst_report_path}", 'green')
+cprint(f"Reporte guardado en: {report_path}", 'green')
 if pdf_path:
     cprint(f"PDF guardado en: {pdf_path}", 'green')

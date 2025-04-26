@@ -17,7 +17,7 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import PPO_CONFIG
+from config.models_config import PPO_CONFIG
 
 
 class ActorCriticModel(Model):
@@ -511,10 +511,10 @@ class PPO:
         dataset = dataset.shuffle(buffer_size=states.shape[0]).batch(batch_size)
         
         # Resetear métricas
-        self.policy_loss_metric.reset_states()
-        self.value_loss_metric.reset_states()
-        self.entropy_metric.reset_states()
-        self.total_loss_metric.reset_states()
+        self.policy_loss_metric.reset_state()
+        self.value_loss_metric.reset_state()
+        self.entropy_metric.reset_state()
+        self.total_loss_metric.reset_state()
         
         # Entrenar durante varias iteraciones
         for _ in range(update_iters):
@@ -753,14 +753,13 @@ class PPO:
         plt.show()
 
 # Constantes para evitar duplicación
-MODEL_WEIGHTS_SUFFIX = '_model_weights.h5'
-ACTOR_CRITIC_WEIGHTS_SUFFIX = '_actor_critic_weights.h5'
+MODEL_WEIGHTS_SUFFIX = '_model.weights.h5'
+ACTOR_CRITIC_WEIGHTS_SUFFIX = '_actor_critic.weights.h5'
 CGM_ENCODER = 'cgm_encoder'
 OTHER_ENCODER = 'other_encoder'
 COMBINED_LAYER = 'combined_layer'
 
-
-@register_keras_serializable
+@register_keras_serializable()
 class PPOModelWrapper(tf.keras.models.Model):
     """
     Wrapper para el algoritmo PPO que implementa la interfaz de Keras.Model.
@@ -876,24 +875,24 @@ class PPOModelWrapper(tf.keras.models.Model):
     
     def fit(
         self, 
-        x: List[tf.Tensor], 
-        y: tf.Tensor, 
+        x: Union[tf.data.Dataset, List[tf.Tensor]], 
+        y: Optional[tf.Tensor] = None, 
         batch_size: int = 32, 
         epochs: int = 1, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
         **kwargs
-    ) -> Dict:
+    ) -> Any:
         """
         Simula la interfaz de entrenamiento de Keras para el agente PPO.
         
         Parámetros:
         -----------
-        x : List[tf.Tensor]
-            Lista con [cgm_data, other_features]
-        y : tf.Tensor
-            Etiquetas (dosis objetivo)
+        x : Union[tf.data.Dataset, List[tf.Tensor]]
+            Dataset o lista con [cgm_data, other_features]
+        y : Optional[tf.Tensor], opcional
+            Etiquetas (dosis objetivo) (default: None)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
@@ -909,14 +908,25 @@ class PPOModelWrapper(tf.keras.models.Model):
             
         Retorna:
         --------
-        Dict
-            Historia simulada de entrenamiento
+        Any
+            Objeto con atributo history compatible con Keras
         """
         if verbose > 0:
             print("Entrenando agente PPO...")
         
+        # Manejar diferentes tipos de entrada (dataset o tensores)
+        if isinstance(x, tf.data.Dataset):
+            # Extraer datos del dataset
+            for (inputs, targets) in x.take(1):
+                cgm_data, other_features = inputs
+                y = targets
+                break
+        else:
+            # Usar directamente las entradas proporcionadas
+            cgm_data, other_features = x
+        
         # Crear entorno personalizado para RL a partir de los datos
-        env = self._create_training_environment(x[0], x[1], y)
+        env = self._create_training_environment(cgm_data, other_features, y)
         
         # Entrenar el agente PPO
         history = self.ppo_agent.train(
@@ -939,7 +949,12 @@ class PPOModelWrapper(tf.keras.models.Model):
             'val_loss': [history.get('total_loss', [0.0])[-1]] if validation_data is not None else None
         }
         
-        return {'history': keras_history}
+        # Crear un objeto que emula el comportamiento de History de Keras
+        class KerasHistoryCompatible:
+            def __init__(self, history_dict):
+                self.history = history_dict
+        
+        return KerasHistoryCompatible(keras_history)
     
     def _create_training_environment(self, cgm_data: tf.Tensor, other_features: tf.Tensor, 
                                    target_doses: tf.Tensor) -> Any:
@@ -1044,13 +1059,18 @@ class PPOModelWrapper(tf.keras.models.Model):
         max_dose = np.max(y_np)
         min_dose = np.min(y_np)
         
+        # Asegurar que la capa esté construida antes de establecer pesos
+        # Crear entrada dummy con la forma correcta y llamar a la capa
+        dummy_input = tf.zeros((1, self.ppo_agent.action_dim))
+        self.dose_predictor(dummy_input)  # Esto construirá la capa
+        
         # Configurar pesos para convertir acciones a dosis apropiadas
         # Suponemos acciones en [-1, 1] que se escalan a [min_dose, max_dose]
         scale = (max_dose - min_dose) / 2.0
         bias = (min_dose + max_dose) / 2.0
         
         self.dose_predictor.set_weights([
-            np.ones((1, 1)) * scale,
+            np.ones((self.ppo_agent.action_dim, 1)) * scale,
             np.array([bias])
         ])
     
@@ -1102,11 +1122,51 @@ class PPOModelWrapper(tf.keras.models.Model):
         **kwargs
             Argumentos adicionales
         """
+        # Verificar si el modelo ha sido construido, y si no, construirlo con datos dummy
+        if not self.built:
+            try:
+                # Crear tensores dummy con las formas adecuadas
+                # Para datos CGM
+                if len(self.cgm_shape) >= 3:  # Ya tiene la forma correcta (batch, time, features)
+                    dummy_cgm = tf.zeros((1, self.cgm_shape[1], self.cgm_shape[2]))
+                elif len(self.cgm_shape) == 2:  # Añadir dimensión de tiempo
+                    dummy_cgm = tf.zeros((1, 24, self.cgm_shape[1]))  # 24 como valor típico de time_steps
+                else:  # Para cualquier otro caso, usar una forma predeterminada
+                    dummy_cgm = tf.zeros((1, 24, 1))
+                
+                # Para otras características
+                if len(self.other_features_shape) > 1:
+                    # Tiene al menos dos dimensiones (batch_size, features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[1]))
+                elif len(self.other_features_shape) == 1:
+                    # Solo tiene una dimensión (features)
+                    dummy_other = tf.zeros((1, self.other_features_shape[0]))
+                else:
+                    # No tiene dimensiones o es vacío, usar un valor predeterminado
+                    dummy_other = tf.zeros((1, 1))
+                
+                # Llamar al modelo para construirlo
+                _ = self([dummy_cgm, dummy_other])
+                
+                print("Modelo construido antes de guardar.")
+            except Exception as e:
+                print(f"Error al construir el modelo: {e}")
+                print("Intentando con dimensiones predeterminadas...")
+                # Usar dimensiones seguras predeterminadas
+                dummy_cgm = tf.zeros((1, 24, 1))
+                dummy_other = tf.zeros((1, 1))
+                _ = self([dummy_cgm, dummy_other])
+        
+        # Adaptar la ruta si termina con .keras
+        base_path = filepath
+        if filepath.endswith('.keras'):
+            base_path = filepath[:-6]  # Quitar '.keras'
+        
         # Guardar pesos del wrapper
-        self.save_weights(filepath + MODEL_WEIGHTS_SUFFIX)
+        self.save_weights(base_path + MODEL_WEIGHTS_SUFFIX)
         
         # Guardar modelo actor-crítico del agente PPO
-        self.ppo_agent.save_model(filepath + ACTOR_CRITIC_WEIGHTS_SUFFIX)
+        self.ppo_agent.save_model(base_path + ACTOR_CRITIC_WEIGHTS_SUFFIX)
     
     def load_weights(self, filepath: str, **kwargs) -> None:
         """
@@ -1170,9 +1230,17 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=42
     )
     
-    # Crear y devolver el modelo wrapper
-    return PPOModelWrapper(
+    # Crear el wrapper - usamos directamente PPOModelWrapper en lugar de DRLModelWrapperTF
+    ppo_model = PPOModelWrapper(
         ppo_agent=ppo_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
+    
+    # Pre-compilar el modelo
+    ppo_model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=PPO_CONFIG['learning_rate']),
+        loss='mse'  # Loss dummy, no se usa realmente para el entrenamiento RL
+    )
+    
+    return ppo_model

@@ -2,12 +2,21 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import numpy as np
 from typing import Tuple, Dict, Any, Optional, Callable
+from models.early_stopping import get_early_stopping, get_early_stopping_config
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import CNN_CONFIG
+from config.models_config import CNN_CONFIG, EARLY_STOPPING_POLICY
+from custom.dl_model_wrapper import DLModelWrapper
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_GELU = "gelu"
+CONST_SWISH = "swish"
+CONST_SILU = "silu"
 
 class SqueezeExcitationBlock(nn.Module):
     """
@@ -55,8 +64,8 @@ def create_residual_block(x: jnp.ndarray, filters: int, dilation_rate: int = 1) 
         Tensor de entrada
     filters : int
         Número de filtros para la convolución
-    dilation_rate : int
-        Tasa de dilatación para las convoluciones
+    dilation_rate : int, opcional
+        Tasa de dilatación para las convoluciones (default: 1)
         
     Retorna:
     --------
@@ -105,13 +114,13 @@ def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     jnp.ndarray
         Tensor con la activación aplicada
     """
-    if activation_name == 'relu':
+    if activation_name == CONST_RELU:
         return nn.relu(x)
-    elif activation_name == 'gelu':
+    elif activation_name == CONST_GELU:
         return nn.gelu(x)
-    elif activation_name == 'swish':
+    elif activation_name == CONST_SWISH:
         return nn.swish(x)
-    elif activation_name == 'silu':
+    elif activation_name == CONST_SILU:
         return nn.silu(x)
     else:
         return nn.relu(x)  # Valor por defecto
@@ -134,9 +143,24 @@ class CNNModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
-        cgm_input, other_input = inputs
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
+        """
+        Ejecuta el modelo CNN sobre las entradas.
         
+        Parámetros:
+        -----------
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM
+        other_input : jnp.ndarray
+            Otras características de entrada
+        training : bool, opcional
+            Indica si está en modo entrenamiento (default: True)
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones del modelo
+        """
         # Proyección inicial
         x = nn.Conv(
             features=self.config['filters'][0],
@@ -177,7 +201,13 @@ class CNNModel(nn.Module):
         else:
             dense = nn.BatchNorm(use_running_average=not training)(dense)
             
-        dense = nn.Dropout(rate=self.config['dropout_rate'], deterministic=not training)(dense)
+        # Usar el método `dropout` para permitir a Flax manejar la generación PRNG internamente
+        dense = nn.Dropout(
+            rate=self.config['dropout_rate'], 
+            deterministic=not training,
+            rng_collection='dropout'
+        )(dense)
+        
         dense = nn.Dense(features=256)(dense)
         dense = get_activation(dense, self.config['activation'])
         
@@ -195,32 +225,62 @@ class CNNModel(nn.Module):
         else:
             dense = nn.BatchNorm(use_running_average=not training)(dense)
             
-        dense = nn.Dropout(rate=self.config['dropout_rate'] / 2, deterministic=not training)(dense)
+        # Usar el método `dropout` nuevamente
+        dense = nn.Dropout(
+            rate=self.config['dropout_rate'] / 2, 
+            deterministic=not training,
+            rng_collection='dropout'
+        )(dense)
         
         output = nn.Dense(features=1)(dense)
         
         return output
 
-def create_cnn_model(cgm_shape: tuple, other_features_shape: tuple) -> CNNModel:
+def create_cnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
     Crea un modelo CNN (Red Neuronal Convolucional) con JAX/Flax.
     
     Parámetros:
     -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (muestras, pasos_temporales, características)
-    other_features_shape : tuple
-        Forma de otras características (muestras, características)
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    cnn_model
-        Modelo Flax inicializado
+    DLModelWrapper
+        Modelo envuelto en DLModelWrapper para compatibilidad con el sistema
     """
-    model = CNNModel(
-        config=CNN_CONFIG,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
+    
+    # Función de creación del modelo
+    def model_creator():
+        return CNNModel(
+            config=CNN_CONFIG,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
+    
+    # Crear wrapper con framework JAX
+    model_wrapper = DLModelWrapper(model_creator, 'jax')
+    
+    # Configurar early stopping
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
+    model_wrapper.add_early_stopping(
+        patience=es_patience,
+        min_delta=es_min_delta,
+        restore_best_weights=es_restore_best
     )
     
-    return model
+    return model_wrapper
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo CNN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_cnn_model

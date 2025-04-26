@@ -13,7 +13,10 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import TRPO_CONFIG
+from config.models_config import TRPO_CONFIG
+from custom.drl_model_wrapper import DRLModelWrapper
+
+FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'trpo')
 
 
 class ActorNetwork(nn.Module):
@@ -191,10 +194,10 @@ class TRPO:
         backtrack_iters: int = TRPO_CONFIG['backtrack_iters'],
         backtrack_coeff: float = TRPO_CONFIG['backtrack_coeff'],
         cg_iters: int = TRPO_CONFIG['cg_iters'],
-        damping: float = TRPO_CONFIG['damping']
+        damping: float = TRPO_CONFIG['damping'],
+        seed: int = 42
     ) -> None:
-        # Configurar semilla para reproducibilidad
-        seed = TRPO_CONFIG.get('seed', 42)
+        # En lugar de obtener la semilla de la configuración, usar el parámetro
         key = jax.random.PRNGKey(seed)
         np.random.seed(seed)
         
@@ -248,6 +251,9 @@ class TRPO:
             'kl_divergence': 0.0,
             'entropy': 0.0
         }
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(FIGURES_DIR, exist_ok=True)
         
         # JIT-compilar funciones clave
         self.get_action_and_log_prob = jax.jit(self._get_action_and_log_prob)
@@ -323,7 +329,8 @@ class TRPO:
         logits = self.actor.apply(params, state)
         
         if deterministic:
-            return jnp.argmax(logits, axis=-1), key
+            action = jnp.argmax(logits, axis=-1)
+            return action, key
         
         key, subkey = jax.random.split(key)
         action = jax.random.categorical(subkey, logits)
@@ -338,7 +345,7 @@ class TRPO:
         deterministic: bool = False
     ) -> Tuple[jnp.ndarray, jnp.ndarray]:
         """
-        Obtiene una acción basada en el estado actual.
+        Selecciona el método de obtención de acción según el tipo de espacio.
         
         Parámetros:
         -----------
@@ -349,7 +356,7 @@ class TRPO:
         key : jnp.ndarray
             Llave PRNG
         deterministic : bool, opcional
-            Si es True, devuelve la acción con máxima probabilidad (default: False)
+            Si es True, selecciona la acción óptima sin exploración (default: False)
             
         Retorna:
         --------
@@ -368,7 +375,7 @@ class TRPO:
         key: jnp.ndarray
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
-        Obtiene acción y log-probabilidad para un estado dado.
+        Obtiene acción y su log-probabilidad para un estado dado.
         
         Parámetros:
         -----------
@@ -384,14 +391,21 @@ class TRPO:
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
             (acción, log_prob, nueva_llave)
         """
-        action, key = self._get_action(params, state, key)
-        log_prob = self._get_log_prob(params, state, action)
+        action, key = self._get_action(params, state, key, deterministic=False)
+        
+        if self.continuous:
+            mu, log_std = self.actor.apply(params, state)
+            std = jnp.exp(log_std)
+            log_prob = -0.5 * (((action - mu) / std) ** 2).sum(axis=-1) - log_std.sum(axis=-1) - 0.5 * jnp.log(2 * jnp.pi) * action.shape[-1]
+        else:
+            logits = self.actor.apply(params, state)
+            log_prob = jax.nn.log_softmax(logits)[action]
         
         return action, log_prob, key
     
     def _get_value(self, params: flax.core.FrozenDict, state: jnp.ndarray) -> jnp.ndarray:
         """
-        Obtiene el valor estimado para un estado.
+        Calcula el valor del estado usando la red crítica.
         
         Parámetros:
         -----------
@@ -405,8 +419,7 @@ class TRPO:
         jnp.ndarray
             Valor estimado del estado
         """
-        value = self.critic.apply(params, state)
-        return value.squeeze()
+        return self.critic.apply(params, state).squeeze(-1)
     
     def _get_log_prob_continuous(
         self, 
@@ -1157,7 +1170,7 @@ class TRPO:
         min_steps : int, opcional
             Mínimo número de pasos antes de actualizar (default: TRPO_CONFIG['min_steps_per_update'])
         render : bool, opcional
-            Si renderizar el entorno o no (default: False)
+            Si el entorno debe ser renderizado (default: False)
             
         Retorna:
         --------
@@ -1256,7 +1269,7 @@ class TRPO:
         iterations : int, opcional
             Número de iteraciones de entrenamiento (default: TRPO_CONFIG['iterations'])
         min_steps_per_update : int, opcional
-            Mínimo de pasos antes de actualizar la política (default: TRPO_CONFIG['min_steps_per_update'])
+            Mínimo número de pasos antes de actualizar la política (default: TRPO_CONFIG['min_steps_per_update'])
         render : bool, opcional
             Si renderizar el entorno o no (default: False)
         evaluate_interval : int, opcional
@@ -1534,9 +1547,9 @@ class TRPO:
         axs[2, 1].set_ylabel(LABEL_ENTROPY)
         axs[2, 1].grid(alpha=0.3)
         axs[2, 1].legend()
-        axs[2, 1].legend()
         
         plt.tight_layout()
+        plt.savefig(os.path.join(FIGURES_DIR, 'training_history.png'))
         plt.show()
 class TRPOWrapper:
     """
@@ -1591,22 +1604,40 @@ class TRPOWrapper:
         # Funciones de codificación con hparams
         def init_encoder_params(key, input_shape, hidden_sizes):
             """Inicializa parámetros para un codificador MLP."""
-            sizes = [np.prod(input_shape)] + hidden_sizes
+            # Calcular el tamaño de entrada de forma segura
+            if not input_shape or input_shape == (1,):
+                input_size = 1
+            else:
+                input_size = int(np.prod(input_shape))
+            
+            sizes = [input_size] + hidden_sizes
             keys = jax.random.split(key, len(sizes))
             
             params = []
             for i in range(len(sizes) - 1):
                 w_key, b_key = jax.random.split(keys[i])
-                w = jax.random.normal(w_key, (sizes[i], sizes[i + 1])) * 0.01
-                b = jax.random.normal(b_key, (sizes[i + 1],)) * 0.01
+                w = jax.random.normal(w_key, (int(sizes[i]), int(sizes[i + 1]))) * 0.01
+                b = jax.random.normal(b_key, (int(sizes[i + 1]),)) * 0.01
                 params.append((w, b))
             
             return params
         
         # Inicializar parámetros para ambos codificadores
         self.key, key1, key2 = jax.random.split(self.key, 3)
-        self.cgm_params = init_encoder_params(key1, self.cgm_shape[1:], [32, 16])
-        self.other_params = init_encoder_params(key2, self.other_features_shape[1:], [16, 8])
+        
+        # Manejar posibles dimensiones vacías o unitarias
+        if len(self.cgm_shape) <= 1:
+            cgm_input_shape = (1,)
+        else:
+            cgm_input_shape = self.cgm_shape[1:]
+            
+        if len(self.other_features_shape) <= 1:
+            other_input_shape = (1,)
+        else:
+            other_input_shape = self.other_features_shape[1:]
+        
+        self.cgm_params = init_encoder_params(key1, cgm_input_shape, [32, 16])
+        self.other_params = init_encoder_params(key2, other_input_shape, [16, 8])
         
         # Compilar funciones con JIT para mayor rendimiento
         self.cgm_encoder = jax.jit(self._create_encoder_fn(self.cgm_params))
@@ -1908,8 +1939,26 @@ class TRPOWrapper:
             'action_dim': self.trpo_agent.action_dim,
             'continuous': self.trpo_agent.continuous
         }
+    
+    def get_params(self) -> Dict:
+        """
+        Obtiene los parámetros actuales del agente TRPO.
+        
+        Retorna:
+        --------
+        Dict
+            Diccionario con los parámetros del actor y crítico
+        """
+        return {
+            'actor_params': self.state.actor_params,
+            'critic_params': self.state.critic_state.params,
+            'hidden_units': self.hidden_units,
+            'state_dim': self.state_dim,
+            'action_dim': self.action_dim,
+            'continuous': self.continuous
+        }
 
-def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> TRPOWrapper:
+def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapper:
     """
     Crea un modelo basado en TRPO (Trust Region Policy Optimization) para predicción de dosis de insulina.
     
@@ -1922,8 +1971,8 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         
     Retorna:
     --------
-    TRPOWrapper
-        Modelo TRPO que implementa la interfaz compatible con modelos de aprendizaje profundo
+    DRLModelWrapper
+        Wrapper de TRPO que implementa la interfaz compatible con el sistema
     """
     # Configurar el espacio de estados y acciones
     state_dim = 64  # Dimensión del espacio de estado latente
@@ -1936,14 +1985,29 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         action_dim=action_dim,
         continuous=continuous,
         gamma=TRPO_CONFIG['gamma'],
-        delta=TRPO_CONFIG['delta'],  # Restricción KL para la región de confianza
-        vf_coeff=TRPO_CONFIG['vf_coeff'],
+        delta=TRPO_CONFIG['delta'],
+        hidden_units=TRPO_CONFIG['hidden_units'],
+        backtrack_iters=TRPO_CONFIG['backtrack_iters'],
+        backtrack_coeff=TRPO_CONFIG['backtrack_coeff'],
         cg_iters=TRPO_CONFIG['cg_iters'],
-        max_backtrack=TRPO_CONFIG['max_backtrack'],
-        backtrack_ratio=TRPO_CONFIG['backtrack_ratio'],
-        hidden_sizes=TRPO_CONFIG['hidden_units'],
+        damping=TRPO_CONFIG['damping'],
         seed=TRPO_CONFIG.get('seed', 42)
     )
     
-    # Crear y devolver wrapper para compatibilidad con la interfaz de modelos
-    return TRPOWrapper(trpo_agent, cgm_shape, other_features_shape)
+    # Crear y devolver modelo wrapper
+    return DRLModelWrapper(
+        lambda **kwargs: TRPOWrapper(trpo_agent, cgm_shape, other_features_shape),
+        framework="jax", 
+        algorithm="trpo"
+    )
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], TRPOWrapper]:
+    """
+    Retorna una función para crear un modelo TRPO compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], TRPOWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_trpo_model

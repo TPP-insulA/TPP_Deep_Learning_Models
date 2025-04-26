@@ -1,6 +1,19 @@
 """Model configuration parameters"""
 
 ###########################################################
+###                Global Configuration                 ###
+###########################################################
+EARLY_STOPPING_POLICY = {
+    'early_stopping': True,              # Activar/desactivar early stopping
+    'early_stopping_patience': 10,       # Épocas a esperar antes de detener
+    'early_stopping_min_delta': 0.001,   # Mejora mínima considerada significativa
+    'early_stopping_restore_best_weights': True, # Restaurar mejores pesos al finalizar
+    'early_stopping_best_val_loss': float('inf'), # Mejor pérdida de validación
+    'early_stopping_counter': 0,         # Contador de épocas sin mejora
+    'early_stopping_best_epoch': 0,      # Época con mejor pérdida de validación
+    'early_stopping_best_weights': None, # Mejores pesos del modelo
+}
+###########################################################
 ###                Deep Learning Models                 ###
 ###########################################################
 ATTENTION_CONFIG = {
@@ -10,6 +23,12 @@ ATTENTION_CONFIG = {
     'head_size': 32,              # Tamaño de salida de cada cabeza de atención
     'num_layers': 4,              # Número de capas de atención apiladas
     'ff_dim': 256,                # Dimensión de la capa feed-forward después de la atención
+    'num_blocks': 2,              # Número de bloques de atención
+    'use_bias': True,             # Si incluir términos de sesgo en las capas
+    'use_layer_norm': True,       # Si usar normalización de capa
+    'use_pos_encoding': True,     # Si usar codificación posicional
+    'embed_dim': 128,             # Dimensión de la codificación de entrada
+    'dense_units': [128, 64],     # Unidades en capas densas finales
     
     # Regularización
     'dropout_rate': 0.1,          # Tasa de dropout para regularización
@@ -287,7 +306,8 @@ PPO_CONFIG = {
     'clip_epsilon': 0.2,                 # Parámetro epsilon para recorte del ratio de probabilidades
     'entropy_coef': 0.01,                # Coeficiente para el término de entropía en la función de pérdida
     'value_coef': 0.5,                   # Coeficiente para la pérdida de la función de valor
-    'max_grad_norm': 0.5                 # Valor máximo para recorte de norma del gradiente
+    'max_grad_norm': 0.5,                # Valor máximo para recorte de norma del gradiente
+    'lambda': 0.95,                      # Factor lambda para cálculo de ventaja generalizada (GAE)
 }
 
 SAC_CONFIG = {
@@ -361,6 +381,8 @@ MONTE_CARLO_CONFIG = {
     # Parámetros de entrenamiento
     'log_interval': 10,          # Cada cuántos episodios mostrar estadísticas
     'batch_size': 10,            # Tamaño de lote para batch MC
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización
     'smoothing_window': 20       # Ventana para suavizado en gráficos
@@ -372,6 +394,13 @@ POLICY_ITERATION_CONFIG = {
     'theta': 1e-6,                # Umbral de convergencia para detener iteraciones
     'max_iterations': 100,        # Número máximo de bucles de iteración de política
     'max_iterations_eval': 1000,  # Iteraciones máximas para evaluación de política
+    
+    # Discretización
+    'bins': 10,                  # Número de bins por dimensión para discretización
+    'state_bounds': None,        # Límites para cada dimensión del espacio de estados [(min1, max1), (min2, max2), ...]
+    'action_bounds': None,       # Límites para cada dimensión del espacio de acciones [(min1, max1), (min2, max2), ...]
+    'num_actions': None,        # Número de acciones posibles (si no se especifica, se calcula automáticamente)
+    'discretization': 'uniform', # Método de discretización: 'uniform' o 'adaptive'
     
     # Visualización
     'visualization_interval': 5   # Intervalo de iteraciones para mostrar visualizaciones
@@ -398,6 +427,8 @@ QLEARNING_CONFIG = {
     'max_steps_per_episode': 500,               # Máximo de pasos por episodio
     'eval_interval': 100,           # Intervalo de episodios para evaluación
     'eval_episodes': 10,            # Número de episodios para evaluación
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización y registro
     'render_train': False,          # Si renderizar durante entrenamiento
@@ -428,7 +459,11 @@ REINFORCE_CONFIG = {
     
     # Visualización y registro
     'log_interval': 10,               # Intervalo para mostrar métricas
-    'smoothing_window': 10            # Ventana para suavizado de gráficos
+    'smoothing_window': 10,            # Ventana para suavizado de gráficos
+
+    'policy_lr': 1e-3,               # Tasa de aprendizaje para la política
+    'value_lr': 1e-3,             # Tasa de aprendizaje para la función de valor
+    'continuous': False,             # Si la acción es continua (True) o discreta (False)
 }
 
 SARSA_CONFIG = {

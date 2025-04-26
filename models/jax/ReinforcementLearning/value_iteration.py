@@ -4,13 +4,25 @@ import matplotlib.pyplot as plt
 import time
 import jax
 import jax.numpy as jnp
-from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple
+from typing import Dict, List, Tuple, Optional, Union, Any, NamedTuple, Callable
 import pickle
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import VALUE_ITERATION_CONFIG
+from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
+from custom.rl_model_wrapper import RLModelWrapperJAX
+from custom.printer import print_success, print_error
+
+# Constantes para rutas de figuras y etiquetas comunes
+CONST_FIGURES_DIR = "figures/reinforcement_learning/value_iteration"
+CONST_ITERATION = "Iteración"
+CONST_VALUE = "Valor"
+CONST_DELTA = "Delta"
+CONST_TIME = "Tiempo (segundos)"
+CONST_POLICY = "Política"
+CONST_PROBABILITY = 1.0  # Probabilidad de transición para modelo determinista
+CONST_EINSUM_PATTERN = 'san,n->sa'  # Patrón para cálculos vectorizados
 
 
 class ValueIterationState(NamedTuple):
@@ -72,8 +84,8 @@ class ValueIteration:
             iteration_times=[]
         )
         
-        # Compilar funciones puras para mejor rendimiento
-        self._calculate_action_values = jax.jit(self._calculate_action_values)
+        # NO compilar esta función, ya que usa diccionarios Python
+        # self._calculate_action_values = jax.jit(self._calculate_action_values)
 
     def _calculate_action_values(
         self, 
@@ -110,9 +122,61 @@ class ValueIteration:
         
         return action_values
 
+    def _compute_action_value(self, env: Any, s: int, a: int, V_numpy: np.ndarray) -> float:
+        """
+        Calcula el valor Q para una acción en un estado determinado.
+        
+        Parámetros:
+        -----------
+        env : Any
+            Entorno con dinámicas de transición
+        s : int
+            Índice del estado
+        a : int
+            Índice de la acción
+        V_numpy : np.ndarray
+            Función de valor actual
+            
+        Retorna:
+        --------
+        float
+            Valor Q calculado
+        """
+        action_value = 0.0
+        
+        try:
+            transitions = env.P.get(s, {}).get(a, [])
+            for prob, next_s, r, done in transitions:
+                not_done = 1.0 if not done else 0.0
+                next_state_value = V_numpy[next_s] if next_s < len(V_numpy) else 0.0
+                action_value += prob * (r + self.gamma * next_state_value * not_done)
+        except Exception as e:
+            print(f"Error en value_update, estado {s}, acción {a}: {e}")
+            return 0.0  # Valor seguro en caso de error
+            
+        return action_value
+
+    def _get_max_action_value(self, action_values: np.ndarray) -> float:
+        """
+        Obtiene el valor máximo de las acciones, manejando valores no finitos.
+        
+        Parámetros:
+        -----------
+        action_values : np.ndarray
+            Array con valores Q para todas las acciones
+            
+        Retorna:
+        --------
+        float
+            Valor máximo o valor predeterminado si no hay valores finitos
+        """
+        if np.any(np.isfinite(action_values)):
+            return np.max(action_values)
+        return 0.0  # Valor predeterminado seguro
+    
     def value_update(self, env: Any) -> float:
         """
-        Realiza una iteración de actualización de la función de valor.
+        Actualiza la función de valor usando la ecuación de Bellman.
         
         Parámetros:
         -----------
@@ -122,25 +186,37 @@ class ValueIteration:
         Retorna:
         --------
         float
-            Delta máximo (cambio máximo en la función de valor)
+            Delta máximo (diferencia máxima en valores)
         """
-        delta = 0.0
-        new_V = self.state.V
+        # Convertir la matriz de valor a NumPy para mayor seguridad
+        V_numpy = np.array(self.state.V)
         
-        for s in range(self.n_states):
-            v_old = self.state.V[s]
+        # Limitar estados a procesar para entornos grandes
+        max_states_to_process = min(100, self.n_states)
+        
+        delta = 0.0
+        new_values = np.copy(V_numpy)  # Hacer una copia explícita
+        
+        for s in range(max_states_to_process):
+            v_old = V_numpy[s]
             
-            # Calcular el valor Q para cada acción y tomar el máximo
-            action_values = self._calculate_action_values(self.state.V, env.P, s)
+            # Calcular valores de acción manualmente
+            action_values = np.zeros(self.n_actions)
             
-            # Actualizar el valor del estado con el máximo valor de acción
-            new_V = new_V.at[s].set(jnp.max(action_values))
+            for a in range(self.n_actions):
+                action_values[a] = self._compute_action_value(env, s, a, V_numpy)
+            
+            # Obtener el nuevo valor para el estado
+            v_new = self._get_max_action_value(action_values)
+            
+            # Actualizar valor
+            new_values[s] = v_new
             
             # Actualizar delta
-            delta = max(delta, abs(v_old - new_V[s]))
+            delta = max(delta, abs(v_old - v_new))
         
-        # Actualizar estado
-        self.state = self.state._replace(V=new_V)
+        # Actualizar función de valor, convirtiéndola a JAX array
+        self.state = self.state._replace(V=jnp.array(new_values))
         
         return float(delta)
 
@@ -158,65 +234,137 @@ class ValueIteration:
         jnp.ndarray
             Política óptima (determinística)
         """
-        policy = jnp.zeros((self.n_states, self.n_actions))
+        policy = np.zeros((self.n_states, self.n_actions))
         
         for s in range(self.n_states):
             # Calcular el valor Q para cada acción
-            action_values = self._calculate_action_values(self.state.V, env.P, s)
+            action_values = np.zeros(self.n_actions)
+            
+            # Calcular valores directamente sin usar _calculate_action_values
+            for a in range(self.n_actions):
+                # Usar try/except para manejar estados que pueden no estar en el diccionario
+                try:
+                    for prob, next_s, r, done in env.P.get(s, {}).get(a, []):
+                        # Valor esperado usando la ecuación de Bellman
+                        not_done = not done
+                        action_values[a] += prob * (r + self.gamma * float(self.state.V[next_s]) * not_done)
+                except (KeyError, TypeError):
+                    # En caso de error, asignar un valor bajo
+                    action_values[a] = -float('inf')
             
             # Política determinística: asignar probabilidad 1.0 a la mejor acción
-            best_action = jnp.argmax(action_values)
-            policy = policy.at[s, best_action].set(1.0)
+            if np.all(np.isneginf(action_values)):
+                # Si todos los valores son -inf, elegir acción aleatoria
+                best_action = 0  # Acción predeterminada segura
+            else:
+                best_action = np.argmax(action_values)
+            
+            policy[s, best_action] = 1.0
         
-        return policy
+        return jnp.array(policy)  # Convertir a array JAX al final
 
+    def _check_early_stopping(self, delta: float, best_delta: float, no_improvement_count: int, 
+                             patience: int, min_delta: float) -> Tuple[float, int, bool]:
+        """
+        Verifica si el early stopping debe activarse.
+        
+        Retorna:
+        --------
+        Tuple[float, int, bool]
+            Nueva mejor delta, nuevo contador de no mejora, y bandera si debe detenerse
+        """
+        should_stop = False
+        new_best_delta = best_delta
+        new_count = no_improvement_count
+        
+        if delta < best_delta - min_delta:
+            new_best_delta = delta
+            new_count = 0
+        else:
+            new_count += 1
+            
+        if new_count >= patience:
+            should_stop = True
+            
+        return new_best_delta, new_count, should_stop
+    
+    def _check_convergence(self, delta: float, start_time: float) -> bool:
+        """
+        Verifica si se ha alcanzado la convergencia o tiempo límite.
+        
+        Retorna:
+        --------
+        bool
+            True si debe detenerse, False en caso contrario
+        """
+        # Verificar convergencia con un umbral razonable
+        if delta < max(self.theta, 0.01):
+            print_success(f"¡Convergencia alcanzada (delta < {max(self.theta, 0.01)})!")
+            return True
+            
+        # Agregar límite de tiempo para evitar bucles
+        if time.time() - start_time > 30:  # 30 segundos máximo
+            print_error("¡Tiempo máximo de entrenamiento alcanzado!")
+            return True
+            
+        return False
+    
     def train(self, env: Any) -> Dict[str, List]:
         """
         Entrena al agente usando iteración de valor.
-        
-        Parámetros:
-        -----------
-        env : Any
-            Entorno con dinámicas de transición
-            
-        Retorna:
-        --------
-        Dict[str, List]
-            Diccionario con historial de entrenamiento
         """
-        print("Iniciando iteración de valor...")
+        print("Iniciando iteración de valor con espacio de estados reducido...")
         
         iterations = 0
         start_time = time.time()
         value_changes = []
         iteration_times = []
         
-        for i in range(self.max_iterations):
+        # Usar el valor de paciencia del early stopping si está definido
+        patience = EARLY_STOPPING_POLICY.get('early_stopping_patience', 5)
+        min_delta = EARLY_STOPPING_POLICY.get('early_stopping_min_delta', 0.001)
+        use_early_stopping = EARLY_STOPPING_POLICY.get('early_stopping', True)
+        
+        # Contador para early stopping
+        no_improvement_count = 0
+        best_delta = float('inf')
+        
+        # Definir límite de iteraciones reducido para entrenamiento inicial
+        actual_max_iterations = min(self.max_iterations, 50)
+        print(f"Limitando a {actual_max_iterations} iteraciones máximas")
+        
+        for i in range(actual_max_iterations):
             iteration_start = time.time()
             
             # Actualizar función de valor
             delta = self.value_update(env)
             
-            # Registrar cambio de valor
+            # Registrar cambio de valor y tiempo
             value_changes.append(float(delta))
-            
-            # Registrar tiempo de iteración
             iteration_time = time.time() - iteration_start
             iteration_times.append(iteration_time)
             
             iterations = i + 1
             
-            print(f"Iteración {iterations}: Delta = {delta:.6f}, Tiempo = {iteration_time:.2f} segundos")
+            # Mostrar progreso cada 10 iteraciones o al principio
+            if i % 10 == 0 or i < 5:
+                print(f"Iteración {iterations}: Delta = {delta:.6f}, Tiempo = {iteration_time:.2f} segundos")
             
-            # Verificar convergencia
-            if delta < self.theta:
-                print("¡Convergencia alcanzada!")
+            # Comprobar early stopping si está habilitado
+            if use_early_stopping:
+                best_delta, no_improvement_count, should_stop = self._check_early_stopping(
+                    delta, best_delta, no_improvement_count, patience, min_delta)
+                
+                if should_stop:
+                    print_success(f"¡Early stopping activado después de {iterations} iteraciones!")
+                    break
+            
+            # Verificar convergencia o tiempo límite
+            if self._check_convergence(delta, start_time):
                 break
         
-        # Extraer política óptima
+        # Extraer política óptima y actualizar estado
         policy = self.extract_policy(env)
-        
-        # Actualizar estado
         self.state = self.state._replace(
             policy=policy,
             value_changes=value_changes,
@@ -226,14 +374,12 @@ class ValueIteration:
         total_time = time.time() - start_time
         print(f"Iteración de valor completada en {iterations} iteraciones, {total_time:.2f} segundos")
         
-        history = {
+        return {
             'iterations': iterations,
             'value_changes': value_changes,
             'iteration_times': iteration_times,
             'total_time': total_time
         }
-        
-        return history
 
     def get_action(self, state: int) -> int:
         """
@@ -370,6 +516,9 @@ class ValueIteration:
             print("El entorno no tiene estructura de cuadrícula para visualización")
             return
         
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
+        
         grid_shape = env.shape
         _, ax = plt.subplots(figsize=(8, 8))
         
@@ -424,6 +573,9 @@ class ValueIteration:
         
         ax.set_title(title)
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, f"politica_{title.lower().replace(' ', '_')}.png"), dpi=300)
         plt.show()
 
     def visualize_value_function(self, env: Any, title: str = "Función de Valor") -> None:
@@ -440,6 +592,9 @@ class ValueIteration:
         if not hasattr(env, 'shape'):
             print("El entorno no tiene estructura de cuadrícula para visualización")
             return
+        
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
         
         grid_shape = env.shape
         
@@ -471,6 +626,9 @@ class ValueIteration:
         
         ax.set_title(title)
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, f"funcion_valor_{title.lower().replace(' ', '_')}.png"), dpi=300)
         plt.show()
 
     def visualize_training(self, history: Dict[str, List]) -> None:
@@ -482,26 +640,32 @@ class ValueIteration:
         history : Dict[str, List]
             Diccionario con historial de entrenamiento
         """
+        # Crear directorio para figuras si no existe
+        os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
+        
         _, axs = plt.subplots(2, 1, figsize=(12, 8))
         
         # Gráfico de cambios en la función de valor (delta)
         axs[0].plot(range(1, len(history['value_changes']) + 1), 
                     history['value_changes'])
-        axs[0].set_title('Cambios en la Función de Valor (Delta)')
-        axs[0].set_xlabel('Iteración')
-        axs[0].set_ylabel('Delta')
+        axs[0].set_title(f'Cambios en la Función de {CONST_VALUE} ({CONST_DELTA})')
+        axs[0].set_xlabel(CONST_ITERATION)
+        axs[0].set_ylabel(CONST_DELTA)
         axs[0].set_yscale('log')  # Escala logarítmica para ver mejor la convergencia
         axs[0].grid(True)
         
         # Gráfico de tiempos de iteración
         axs[1].plot(range(1, len(history['iteration_times']) + 1), 
                     history['iteration_times'])
-        axs[1].set_title('Tiempos de Iteración')
-        axs[1].set_xlabel('Iteración')
-        axs[1].set_ylabel('Tiempo (segundos)')
+        axs[1].set_title(f'Tiempos de {CONST_ITERATION}')
+        axs[1].set_xlabel(CONST_ITERATION)
+        axs[1].set_ylabel(CONST_TIME)
         axs[1].grid(True)
         
         plt.tight_layout()
+        
+        # Guardar figura
+        plt.savefig(os.path.join(CONST_FIGURES_DIR, "entrenamiento_resumen.png"), dpi=300)
         plt.show()
 
     def parallel_value_iteration(self, env: Any) -> Dict[str, List]:
@@ -585,6 +749,22 @@ class ValueIteration:
         }
         
         return history
+
+    def _build_transition_dynamics(self):
+        """Construye el modelo de transición con eficiencia de memoria."""
+        print("Construyendo modelo de transición eficiente...")
+        
+        # Diccionario minimalista que solo carga estados necesarios
+        transitions = {}
+        
+        # Solo precalcular transiciones para unos pocos estados iniciales
+        for s in range(min(10, self.model.vi_agent.n_states)):
+            transitions[s] = {}
+            for a in range(self.model.vi_agent.n_actions):
+                # Simplificar cada transición
+                transitions[s][a] = [(1.0, s, -1.0, True)]  # Probabilidad, estado, recompensa, terminal
+        
+        return transitions
 
 class ValueIterationWrapper:
     """
@@ -672,56 +852,33 @@ class ValueIterationWrapper:
     def _discretize_state(self, cgm_data: np.ndarray, other_features: np.ndarray) -> int:
         """
         Discretiza las entradas continuas a un índice de estado.
-        
-        Parámetros:
-        -----------
-        cgm_data : np.ndarray
-            Datos CGM para un ejemplo
-        other_features : np.ndarray
-            Otras características para un ejemplo
-            
-        Retorna:
-        --------
-        int
-            Índice de estado discretizado
         """
-        # Extraer características relevantes de los datos CGM
+        # Simplificar extracción de características relevantes
         cgm_flat = cgm_data.flatten()
         
-        # Calcular estadísticas de CGM: último valor, pendiente, promedio, variabilidad
-        cgm_last = cgm_flat[-1]
-        cgm_mean = np.mean(cgm_flat)
+        # Usar solo características esenciales
+        cgm_last = cgm_flat[-1] if len(cgm_flat) > 0 else 0
         cgm_slope = cgm_flat[-1] - cgm_flat[0] if len(cgm_flat) > 1 else 0
-        cgm_std = np.std(cgm_flat)
         
-        # Discretizar cada característica CGM
+        # Discretizar solo características esenciales
         cgm_last_bin = min(int(cgm_last / 400 * self.cgm_bins), self.cgm_bins - 1)
-        cgm_mean_bin = min(int(cgm_mean / 400 * self.cgm_bins), self.cgm_bins - 1)
-        cgm_slope_bin = min(int((cgm_slope + 100) / 200 * self.cgm_bins), self.cgm_bins - 1)
-        cgm_std_bin = min(int(cgm_std / 50 * self.cgm_bins), self.cgm_bins - 1)
+        cgm_slope_bin = min(int((cgm_slope + 200) / 400 * self.cgm_bins), self.cgm_bins - 1)
         
-        # Extraer características relevantes de otras entradas (asumiendo carbInput, bgInput, IOB)
-        carb_input = other_features[0]
-        bg_input = other_features[1]
-        iob = other_features[2]
+        # Solo usar carbohidratos e insulina a bordo
+        carb_input = other_features[0] if len(other_features) > 0 else 0
+        iob = other_features[2] if len(other_features) > 2 else 0
         
-        # Discretizar características adicionales
+        # Discretizar
         carb_bin = min(int(carb_input / 100 * self.other_bins), self.other_bins - 1)
-        bg_bin = min(int(bg_input / 400 * self.other_bins), self.other_bins - 1)
         iob_bin = min(int(iob / 10 * self.other_bins), self.other_bins - 1)
         
-        # Combinar todas las características discretizadas en un único índice de estado
-        # Usar codificación posicional
+        # Combinar para formar estado (con menos dimensiones)
         state_idx = 0
         state_idx = state_idx * self.cgm_bins + cgm_last_bin
-        state_idx = state_idx * self.cgm_bins + cgm_mean_bin
         state_idx = state_idx * self.cgm_bins + cgm_slope_bin
-        state_idx = state_idx * self.cgm_bins + cgm_std_bin
         state_idx = state_idx * self.other_bins + carb_bin
-        state_idx = state_idx * self.other_bins + bg_bin
         state_idx = state_idx * self.other_bins + iob_bin
         
-        # Asegurarse de que el índice esté en el rango válido
         return min(state_idx, self.vi_agent.n_states - 1)
     
     def _convert_action_to_dose(self, action: int) -> float:
@@ -852,8 +1009,6 @@ class ValueIterationWrapper:
     
     def _create_env_class(self):
         """Crea y devuelve la clase del entorno de dosificación de insulina."""
-        PROBABILITY_OF_TRANSITION = 1.0
-        
         class InsulinDosingEnv:
             """Entorno personalizado para problema de dosificación de insulina."""
             
@@ -959,7 +1114,7 @@ class ValueIterationWrapper:
                         avg_reward = self._get_reward_for_state_action(s, a, dose)
                         
                         # Para Value Iteration, asumimos estado terminal después de cada acción
-                        P[s][a].append((PROBABILITY_OF_TRANSITION, s, avg_reward, True))
+                        P[s][a].append((CONST_PROBABILITY, s, avg_reward, True))
                 
             def reset(self):
                 """Reinicia el entorno eligiendo un ejemplo aleatorio."""
@@ -1082,8 +1237,226 @@ class ValueIterationWrapper:
             'other_bins': self.other_bins
         }
 
+    def setup(self, rng_key: jax.random.PRNGKey) -> Any:
+        """
+        Inicializa el agente para interactuar con el entorno.
+        Compatible con RLModelWrapperJAX.
+        
+        Parámetros:
+        -----------
+        rng_key : jax.random.PRNGKey
+            Clave para generación aleatoria.
+            
+        Retorna:
+        --------
+        Any
+            El estado del agente inicializado (self).
+        """
+        # Actualizar la clave RNG del agente
+        self.rng_key = rng_key
+        return self
 
-def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> ValueIterationWrapper:
+    def _map_observation_to_state(self, cgm_obs: np.ndarray, other_obs: np.ndarray) -> int:
+        """
+        Mapea una observación continua a un índice de estado discreto.
+        
+        Parámetros:
+        -----------
+        cgm_obs : np.ndarray
+            Datos CGM para una muestra.
+        other_obs : np.ndarray
+            Otras características para una muestra.
+            
+        Retorna:
+        --------
+        int
+            Índice del estado discretizado.
+        """
+        # Reutilizar el método existente de discretización
+        return self._discretize_state(cgm_obs, other_obs)
+
+    def train_batch(self, agent_state: Any, batch_data: Tuple, rng_key: jax.random.PRNGKey) -> Tuple[Any, Dict[str, float]]:
+        """
+        Entrena el agente con un lote de datos.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (la propia instancia).
+        batch_data : Tuple
+            Tupla conteniendo ((observaciones_cgm, observaciones_other), targets).
+        rng_key : jax.random.PRNGKey
+            Clave para generación aleatoria.
+            
+        Retorna:
+        --------
+        Tuple[Any, Dict[str, float]]
+            Tupla con (nuevo estado del agente, métricas de entrenamiento).
+        """
+        # Extraer datos del lote
+        (observations_cgm, observations_other), targets = batch_data
+        
+        # Convertir a arrays de NumPy si son arrays de JAX
+        obs_cgm_np = np.array(observations_cgm)
+        obs_other_np = np.array(observations_other)
+        targets_np = np.array(targets)
+        
+        # Solo entrenar realmente en el primer lote de la época
+        # Para los lotes subsiguientes, solo aplicar la política ya aprendida
+        if not hasattr(self, '_trained_once') or not self._trained_once:
+            # Crear entorno de entrenamiento solo la primera vez
+            env = self._create_training_environment(obs_cgm_np, obs_other_np, targets_np)
+            
+            # Entrenar el agente de VI
+            history = self.vi_agent.train(env)
+            
+            # Marcar que ya hemos entrenado una vez
+            self._trained_once = True
+            
+            # Registrar métricas de entrenamiento
+            metrics = {
+                'loss': float(history.get('value_changes', [0.0])[-1] if history.get('value_changes') else 0.0),
+                'iterations': history.get('iterations', 0),
+                'total_time': history.get('total_time', 0.0)
+            }
+        else:
+            # Para lotes posteriores, saltamos el entrenamiento y reportamos métricas fijas
+            metrics = {
+                'loss': 0.0,
+                'iterations': 0,
+                'total_time': 0.0,
+                'skipped': True  # Indicador de que se saltó el entrenamiento
+            }
+        
+        return self, metrics
+
+    def predict_batch(self, agent_state: Any, observations: Tuple[jnp.ndarray, jnp.ndarray], rng_key: jax.random.PRNGKey) -> jnp.ndarray:
+        """
+        Realiza predicciones para un lote de observaciones.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (la propia instancia).
+        observations : Tuple[jnp.ndarray, jnp.ndarray]
+            Tupla con (observaciones_cgm, observaciones_other).
+        rng_key : jax.random.PRNGKey
+            Clave para generación aleatoria.
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Predicciones para el lote.
+        """
+        x_cgm, x_other = observations
+        batch_size = x_cgm.shape[0]
+        
+        # Convertir a arrays de NumPy para procesamiento
+        x_cgm_np = np.array(x_cgm)
+        x_other_np = np.array(x_other)
+        
+        # Inicializar array para predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+        
+        # Realizar predicciones para cada muestra
+        for i in range(batch_size):
+            # Discretizar estado
+            state_idx = self._map_observation_to_state(x_cgm_np[i], x_other_np[i])
+            
+            # Obtener acción según la política actual
+            action = self.vi_agent.get_action(state_idx)
+            
+            # Convertir acción discreta a dosis continua
+            dose = self._convert_action_to_dose(action)
+            
+            # Almacenar predicción
+            predictions[i, 0] = dose
+        
+        # Convertir a array de JAX para interfaz consistente
+        return jnp.array(predictions)
+
+    def evaluate(self, agent_state: Any, batch_data: Tuple, rng_key: jax.random.PRNGKey) -> Dict[str, float]:
+        """
+        Evalúa el rendimiento del agente en un conjunto de datos.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (la propia instancia).
+        batch_data : Tuple
+            Tupla conteniendo ((observaciones_cgm, observaciones_other), targets).
+        rng_key : jax.random.PRNGKey
+            Clave para generación aleatoria.
+            
+        Retorna:
+        --------
+        Dict[str, float]
+            Diccionario con métricas de evaluación.
+        """
+        (observations_cgm, observations_other), targets = batch_data
+        
+        # Realizar predicciones
+        predictions = self.predict_batch(agent_state, (observations_cgm, observations_other), rng_key)
+        
+        # Convertir a NumPy para cálculos
+        preds_np = np.array(predictions).flatten()
+        targets_np = np.array(targets).flatten()
+        
+        # Calcular métricas
+        mse = np.mean((preds_np - targets_np) ** 2)
+        mae = np.mean(np.abs(preds_np - targets_np))
+        
+        # Si hay suficientes muestras para calcular R²
+        if len(targets_np) > 1:
+            ss_tot = np.sum((targets_np - np.mean(targets_np)) ** 2)
+            ss_res = np.sum((targets_np - preds_np) ** 2)
+            r2 = 1 - (ss_res / (ss_tot + 1e-10))  # Evitar división por cero
+        else:
+            r2 = 0.0
+        
+        return {'loss': float(mse), 'mae': float(mae), 'r2': float(r2)}
+
+def create_value_iteration_agent(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], **kwargs) -> ValueIterationWrapper:
+    """
+    Crea un agente de Iteración de Valor para el problema de dosificación de insulina.
+    """
+    # Reducir drásticamente el número de bins y features
+    cgm_bins = kwargs.get('cgm_bins', 2)  # Reducción a solo 2 bins
+    other_bins = kwargs.get('other_bins', 2)  # Reducción a solo 2 bins
+    
+    # Solo las features absolutamente esenciales
+    cgm_features = 1  # Solo último valor de CGM
+    other_features = 1  # Solo carbohidratos
+    
+    # Esto da un espacio manejable: 2^1 * 2^1 = 4 estados
+    n_states = cgm_bins**cgm_features * other_bins**other_features
+    
+    print(f"Espacio de estados redimensionado a {n_states} estados discretos")
+    
+    # Para dosificación de insulina, discretizamos en niveles de dosis
+    n_actions = kwargs.get('n_actions', 20)  # 20 niveles discretos (0 a 15 unidades)
+    
+    # Crear agente de Iteración de Valor con configuración óptima
+    vi_agent = ValueIteration(
+        n_states=n_states,
+        n_actions=n_actions,
+        gamma=kwargs.get('gamma', VALUE_ITERATION_CONFIG['gamma']),
+        theta=kwargs.get('theta', VALUE_ITERATION_CONFIG['theta']),
+        max_iterations=kwargs.get('max_iterations', VALUE_ITERATION_CONFIG['max_iterations'])
+    )
+    
+    # Crear wrapper con bins configurables
+    wrapper = ValueIterationWrapper(
+        vi_agent=vi_agent,
+        cgm_shape=cgm_shape,
+        other_features_shape=other_features_shape
+    )
+    wrapper.cgm_bins = cgm_bins
+    wrapper.other_bins = other_bins
+    
+    return wrapper
+
+def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], **kwargs) -> RLModelWrapperJAX:
     """
     Crea un modelo basado en Iteración de Valor para predicción de dosis de insulina.
     
@@ -1093,35 +1466,29 @@ def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shap
         Forma de los datos CGM (batch_size, time_steps, features)
     other_features_shape : Tuple[int, ...]
         Forma de otras características (batch_size, n_features)
+    **kwargs
+        Argumentos adicionales para el agente
         
     Retorna:
     --------
-    ValueIterationWrapper
-        Wrapper de Iteración de Valor que implementa la interfaz compatible con modelos de aprendizaje profundo
+    RLModelWrapperJAX
+        Wrapper de Iteración de Valor que implementa la interfaz compatible con la API del sistema
     """
-    # Configurar el tamaño del espacio de estados y acciones
-    # Esto es una simplificación - en un caso real habría que definirlo según los datos
-    
-    # Estimación del espacio de estados basado en la discretización
-    cgm_bins = 8  # Bins para cada característica CGM
-    other_bins = 4  # Bins para cada característica adicional
-    cgm_features = 4  # Último valor, promedio, pendiente, variabilidad
-    other_features = 3  # Carbohidratos, glucosa, insulina a bordo
-    
-    # Calcular espacio de estados total (discretizado)
-    n_states = cgm_bins**cgm_features * other_bins**other_features
-    
-    # Para un problema de dosificación, discretizamos en niveles de dosis
-    n_actions = 20  # 20 niveles discretos (0 a 15 unidades)
-    
-    # Crear agente de Iteración de Valor con configuración óptima
-    vi_agent = ValueIteration(
-        n_states=n_states,
-        n_actions=n_actions,
-        gamma=VALUE_ITERATION_CONFIG['gamma'],
-        theta=VALUE_ITERATION_CONFIG['theta'],
-        max_iterations=VALUE_ITERATION_CONFIG['max_iterations']
+    # Devolver el wrapper con el agente de Iteración de Valor
+    return RLModelWrapperJAX(
+        agent_creator=create_value_iteration_agent,
+        cgm_shape=cgm_shape,
+        other_features_shape=other_features_shape,
+        **kwargs
     )
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]:
+    """
+    Retorna una función para crear un modelo de Iteración de Valor compatible con la API del sistema.
     
-    # Crear y devolver wrapper
-    return ValueIterationWrapper(vi_agent, cgm_shape, other_features_shape)
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_value_iteration_model

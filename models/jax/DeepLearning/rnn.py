@@ -2,12 +2,22 @@ import os, sys
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from typing import List, Tuple, Dict, Any, Optional, Callable
+import numpy as np
+from typing import Tuple, Dict, Any, Optional, Callable, List, Union
+from functools import partial
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.config import RNN_CONFIG
+from config.models_config import RNN_CONFIG
+from custom.dl_model_wrapper import DLModelWrapper
+from models.early_stopping import get_early_stopping_config
+
+# Constantes para uso repetido
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_SIGMOID = "sigmoid"
+CONST_SWISH = "swish"
 
 class TimeDistributed(nn.Module):
     """
@@ -20,251 +30,193 @@ class TimeDistributed(nn.Module):
     """
     module: nn.Module
     
-    def __call__(self, inputs: jnp.ndarray, *args, **kwargs) -> jnp.ndarray:
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
         """
         Aplica el módulo a cada paso temporal.
         
         Parámetros:
         -----------
         inputs : jnp.ndarray
-            Tensor de entrada de forma [batch, time, features]
-        
-        Retorna:
-        --------
-        jnp.ndarray
-            Tensor procesado con la misma forma temporal
-        """
-        batch_size, time_steps, features = inputs.shape
-        
-        # Reshape para aplicar la capa a cada paso temporal
-        reshaped_inputs = jnp.reshape(inputs, [batch_size * time_steps, features])
-        
-        # Aplicar la capa
-        outputs = self.module(reshaped_inputs, *args, **kwargs)
-        
-        # Reshape de vuelta
-        output_features = outputs.shape[-1]
-        return jnp.reshape(outputs, [batch_size, time_steps, output_features])
-
-class SimpleRNNCell(nn.Module):
-    """
-    Implementación de una celda RNN simple.
-    
-    Parámetros:
-    -----------
-    units : int
-        Número de unidades
-    activation : Callable
-        Función de activación
-    kernel_init : Callable
-        Inicializador para los pesos
-    recurrent_init : Callable
-        Inicializador para los pesos recurrentes
-    bias_init : Callable
-        Inicializador para los sesgos
-    """
-    units: int
-    activation: Callable = nn.tanh
-    kernel_init: Callable = nn.initializers.glorot_uniform()
-    recurrent_init: Callable = nn.initializers.orthogonal()
-    bias_init: Callable = nn.initializers.zeros
-    
-    @nn.compact
-    def __call__(self, h: jnp.ndarray, x: jnp.ndarray, 
-                dropout_rate: float = 0.0, 
-                recurrent_dropout_rate: float = 0.0,
-                deterministic: bool = True) -> jnp.ndarray:
-        """
-        Aplica un paso de la celda RNN simple.
-        
-        Parámetros:
-        -----------
-        h : jnp.ndarray
-            Estado oculto previo
-        x : jnp.ndarray
-            Entrada actual
-        dropout_rate : float
-            Tasa de dropout para la entrada
-        recurrent_dropout_rate : float
-            Tasa de dropout para la conexión recurrente
-        deterministic : bool
-            Si es True, no se aplica dropout
+            Tensor de entrada [batch, tiempo, características]
             
         Retorna:
         --------
         jnp.ndarray
-            Nuevo estado oculto
+            Tensor procesado [batch, tiempo, características_salida]
         """
-        # Dropout para la entrada
-        if dropout_rate > 0 and not deterministic:
-            x = nn.Dropout(rate=dropout_rate, deterministic=False)(x)
-        
-        # Dropout para la conexión recurrente
-        if recurrent_dropout_rate > 0 and not deterministic:
-            h = nn.Dropout(rate=recurrent_dropout_rate, deterministic=False)(h)
-        
-        # Proyecciones
-        i2h = nn.Dense(self.units, kernel_init=self.kernel_init, bias_init=self.bias_init)(x)
-        h2h = nn.Dense(self.units, kernel_init=self.recurrent_init, use_bias=False)(h)
-        
-        # Actualizar estado oculto
-        h_new = self.activation(i2h + h2h)
-        
-        return h_new
+        batch_size, time_steps, features = inputs.shape
+        reshaped_inputs = inputs.reshape(batch_size * time_steps, features)
+        outputs = self.module(reshaped_inputs)
+        return outputs.reshape(batch_size, time_steps, -1)
 
-def bidirectional_rnn(forward_cell: Callable, backward_cell: Callable, inputs: jnp.ndarray, 
-                     initial_state: jnp.ndarray, reverse_initial_state: jnp.ndarray, 
-                     dropout_rate: float = 0.0, recurrent_dropout_rate: float = 0.0,
-                     deterministic: bool = True) -> jnp.ndarray:
+def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
     """
-    Implementación de RNN bidireccional usando scan.
+    Aplica la función de activación según su nombre.
     
     Parámetros:
     -----------
-    forward_cell : Callable
-        Función de celda RNN para dirección forward
-    backward_cell : Callable
-        Función de celda RNN para dirección backward
-    inputs : jnp.ndarray
-        Tensor de entrada [tiempo, batch, características]
-    initial_state : jnp.ndarray
-        Estado inicial forward
-    reverse_initial_state : jnp.ndarray
-        Estado inicial backward
-    dropout_rate : float
-        Tasa de dropout
-    recurrent_dropout_rate : float
-        Tasa de dropout recurrente
-    deterministic : bool
-        Indica si está en modo inferencia
+    x : jnp.ndarray
+        Tensor al que aplicar la activación
+    activation_name : str
+        Nombre de la función de activación
         
     Retorna:
     --------
     jnp.ndarray
-        Salidas concatenadas de ambas direcciones [batch, tiempo, features*2]
+        Tensor con la activación aplicada
     """
-    # Forward pass
-    def forward_scan_fn(h, x):
-        h_next = forward_cell(h, x, dropout_rate, recurrent_dropout_rate, deterministic)
-        return h_next, h_next
-    
-    _, forward_outputs = jax.lax.scan(
-        forward_scan_fn,
-        initial_state,
-        inputs
-    )
-    
-    # Backward pass (invertir secuencia)
-    reversed_inputs = jnp.flip(inputs, axis=0)
-    
-    def backward_scan_fn(h, x):
-        h_next = backward_cell(h, x, dropout_rate, recurrent_dropout_rate, deterministic)
-        return h_next, h_next
-    
-    _, backward_outputs = jax.lax.scan(
-        backward_scan_fn,
-        reverse_initial_state,
-        reversed_inputs
-    )
-    
-    # Reordenar salidas backward
-    backward_outputs = jnp.flip(backward_outputs, axis=0)
-    
-    # Concatenar outputs [tiempo, batch, características*2]
-    outputs = jnp.concatenate([forward_outputs, backward_outputs], axis=-1)
-    
-    # Transponer a [batch, tiempo, características*2]
-    outputs = jnp.transpose(outputs, (1, 0, 2))
-    
-    return outputs
+    if activation_name == CONST_RELU:
+        return nn.relu(x)
+    elif activation_name == CONST_TANH:
+        return nn.tanh(x)
+    elif activation_name == CONST_SIGMOID:
+        return jax.nn.sigmoid(x)
+    elif activation_name == CONST_SWISH:
+        return nn.swish(x)
+    else:
+        return nn.relu(x)  # Valor por defecto
 
-def apply_rnn(cell_fn: Callable, inputs: jnp.ndarray, units: int, return_sequences: bool = False,
-             dropout_rate: float = 0.0, recurrent_dropout_rate: float = 0.0, 
-             bidirectional: bool = False, deterministic: bool = True) -> jnp.ndarray:
+def get_activation_fn(activation_name: str) -> Callable:
     """
-    Aplica una capa RNN a un tensor de entrada.
+    Obtiene la función de activación correspondiente al nombre.
     
     Parámetros:
     -----------
-    cell_fn : Callable
-        Función que crea la celda RNN
-    inputs : jnp.ndarray
-        Tensor de entrada [batch, tiempo, características]
-    units : int
-        Unidades de la RNN
+    activation_name : str
+        Nombre de la función de activación
+        
+    Retorna:
+    --------
+    Callable
+        Función de activación
+    """
+    if activation_name == CONST_RELU:
+        return nn.relu
+    elif activation_name == CONST_TANH:
+        return nn.tanh
+    elif activation_name == CONST_SIGMOID:
+        return jax.nn.sigmoid
+    elif activation_name == CONST_SWISH:
+        return nn.swish
+    else:
+        return nn.relu  # Valor por defecto
+
+class SimpleScanRNN(nn.Module):
+    """
+    Implementación simple y robusta de RNN utilizando directamente scan.
+    
+    Parámetros:
+    -----------
+    features : int
+        Número de unidades en la capa RNN
     return_sequences : bool
-        Si es True, devuelve toda la secuencia, si no solo el último estado
-    dropout_rate : float
-        Tasa de dropout
-    recurrent_dropout_rate : float
-        Tasa de dropout recurrente
+        Si es True, devuelve la secuencia completa de salidas
     bidirectional : bool
-        Si es True, aplica RNN bidireccional
-    deterministic : bool
-        Indica si está en modo inferencia
-        
-    Retorna:
-    --------
-    jnp.ndarray
-        Salida procesada por la RNN
+        Si es True, procesa la secuencia en ambas direcciones
+    activation : Callable
+        Función de activación
     """
-    batch_size, _, _ = inputs.shape
+    features: int
+    return_sequences: bool = False
+    bidirectional: bool = False
+    activation: Callable = nn.tanh
     
-    # Transponer para formato [tiempo, batch, características]
-    inputs_time_major = jnp.transpose(inputs, (1, 0, 2))
-    
-    if not bidirectional:
-        # RNN unidireccional
-        def scan_fn(h, x):
-            h_next = cell_fn()(h, x, dropout_rate, recurrent_dropout_rate, deterministic)
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray, deterministic: bool = True) -> jnp.ndarray:
+        """
+        Procesa una secuencia completa.
+        
+        Parámetros:
+        -----------
+        inputs : jnp.ndarray
+            Tensor de entrada [batch, tiempo, características]
+        deterministic : bool
+            Si es True, se deshabilita el dropout
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Salidas de la capa RNN
+        """
+        batch_size, _, input_dim = inputs.shape
+        
+        # Definir parámetros de manera explícita
+        w_ih = self.param('w_ih', 
+                         nn.initializers.glorot_uniform(), 
+                         (input_dim, self.features))
+        w_hh = self.param('w_hh', 
+                         nn.initializers.orthogonal(), 
+                         (self.features, self.features))
+        bias = self.param('bias', 
+                         nn.initializers.zeros, 
+                         (self.features,))
+        
+        # Definir función pura para scan que solo usa parámetros de entrada
+        def pure_cell_fn(carry: jnp.ndarray, x: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+            """
+            Función pura de la celda RNN.
+            
+            Parámetros:
+            -----------
+            carry : jnp.ndarray
+                Estado oculto anterior
+            x : jnp.ndarray
+                Entrada para el paso actual
+                
+            Retorna:
+            --------
+            Tuple[jnp.ndarray, jnp.ndarray]
+                (Nuevo estado oculto, Salida)
+            """
+            h = carry
+            h_next = self.activation(
+                jnp.dot(x, w_ih) + 
+                jnp.dot(h, w_hh) + 
+                bias
+            )
             return h_next, h_next
         
-        # Estado inicial
-        init_h = jnp.zeros((batch_size, units))
+        # Transponer entrada para scan [tiempo, batch, características]
+        inputs_t = jnp.swapaxes(inputs, 0, 1)
         
-        # Aplicar scan para recorrer la secuencia
-        final_state, outputs = jax.lax.scan(
-            scan_fn,
-            init_h,
-            inputs_time_major
+        # Estado inicial en ceros
+        init_h = jnp.zeros((batch_size, self.features))
+        
+        # Forward scan
+        _, outputs_forward = jax.lax.scan(
+            pure_cell_fn, 
+            init_h, 
+            inputs_t
         )
+        
+        # Procesar bidireccionalidad si es necesario
+        if self.bidirectional:
+            # Invertir secuencia para backward pass
+            inputs_reversed = jnp.flip(inputs_t, axis=0)
+            _, outputs_backward = jax.lax.scan(
+                pure_cell_fn, 
+                init_h, 
+                inputs_reversed
+            )
+            # Re-invertir salidas backward y concatenar con forward
+            outputs_backward = jnp.flip(outputs_backward, axis=0)
+            outputs = jnp.concatenate([outputs_forward, outputs_backward], axis=-1)
+        else:
+            outputs = outputs_forward
         
         # Transponer de vuelta a [batch, tiempo, características]
-        outputs = jnp.transpose(outputs, (1, 0, 2))
+        outputs = jnp.swapaxes(outputs, 0, 1)
         
-        # Devolver secuencia completa o solo estado final
-        if return_sequences:
+        # Retornar secuencias o solo último estado
+        if self.return_sequences:
             return outputs
         else:
-            return final_state
-    else:
-        # RNN bidireccional
-        forward_cell = cell_fn()
-        backward_cell = cell_fn()
-        
-        # Estados iniciales
-        init_h_forward = jnp.zeros((batch_size, units))
-        init_h_backward = jnp.zeros((batch_size, units))
-        
-        # Aplicar RNN bidireccional
-        outputs = bidirectional_rnn(
-            forward_cell, backward_cell,
-            inputs_time_major, init_h_forward, init_h_backward,
-            dropout_rate, recurrent_dropout_rate, deterministic
-        )
-        
-        # Devolver secuencia completa o solo estados finales
-        if return_sequences:
-            return outputs
-        else:
-            # Para bidireccional, concatenar último estado forward y primer estado backward
-            last_forward = outputs[:, -1, :units]
-            first_backward = outputs[:, 0, units:]
-            return jnp.concatenate([last_forward, first_backward], axis=-1)
+            return outputs[:, -1, :]
 
 class RNNModel(nn.Module):
     """
-    Modelo RNN optimizado para velocidad con procesamiento temporal distribuido.
+    Modelo RNN completo con arquitectura personalizable.
     
     Parámetros:
     -----------
@@ -280,170 +232,116 @@ class RNNModel(nn.Module):
     other_features_shape: Tuple
     
     @nn.compact
-    def __call__(self, inputs: Tuple[jnp.ndarray, jnp.ndarray], training: bool = True) -> jnp.ndarray:
+    def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = True) -> jnp.ndarray:
         """
-        Aplica el modelo RNN a las entradas.
+        Ejecuta el modelo RNN sobre las entradas.
         
         Parámetros:
         -----------
-        inputs : Tuple[jnp.ndarray, jnp.ndarray]
-            Tupla de (cgm_input, other_input)
+        cgm_input : jnp.ndarray
+            Datos de entrada CGM [batch, tiempo, características]
+        other_input : jnp.ndarray
+            Otras características [batch, características]
         training : bool
-            Indica si está en modo entrenamiento
+            Si es True, el modelo está en modo entrenamiento
             
         Retorna:
         --------
         jnp.ndarray
-            Predicción del modelo
+            Predicciones del modelo
         """
-        cgm_input, other_input = inputs
         deterministic = not training
         
-        # Procesamiento temporal distribuido inicial
+        # Aplicar TimeDistributed si está configurado
         if self.config['use_time_distributed']:
             x = TimeDistributed(nn.Dense(32))(cgm_input)
             x = get_activation(x, self.config['activation'])
-            x = TimeDistributed(nn.BatchNorm(
-                epsilon=self.config['epsilon'],
-                momentum=0.9,
-                use_running_average=deterministic
-            ))(x)
+            x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
         else:
             x = cgm_input
         
-        # Reducir secuencia temporal para procesamiento más rápido
-        x = nn.max_pool(x, window_shape=(1, 2, 1), strides=(1, 2, 1))
-        
-        # Remodelar después de max_pool que devuelve un tensor 5D
-        batch_size, reduced_seq_len, features = x.shape[0], x.shape[2], x.shape[3]
-        x = jnp.reshape(x, (batch_size, reduced_seq_len, features))
-        
-        # Capas RNN con menos unidades pero bidireccionales
-        for units in self.config['hidden_units']:
-            # Crear la celda RNN
-            def create_rnn_cell(units=units):
-                return lambda h, x, dr, rdr, det: SimpleRNNCell(
-                    units=units,
-                    activation=get_activation_fn(self.config['activation'])
-                )(h, x, dr, rdr, det)
+        # Capas RNN apiladas
+        for i, units in enumerate(self.config['hidden_units']):
+            is_last_layer = i == len(self.config['hidden_units']) - 1
+            return_sequences = not is_last_layer
             
-            # Aplicar RNN
-            x = apply_rnn(
-                create_rnn_cell,
-                x,
-                units=units,
-                return_sequences=True,
-                dropout_rate=self.config['dropout_rate'],
-                recurrent_dropout_rate=self.config['recurrent_dropout'],
+            # Usar la implementación puramente funcional de RNN
+            x = SimpleScanRNN(
+                features=units,
+                return_sequences=return_sequences,
                 bidirectional=self.config['bidirectional'],
-                deterministic=deterministic
-            )
-            
-            # Normalización por lotes después de cada RNN
-            x = nn.BatchNorm(
-                epsilon=self.config['epsilon'],
-                momentum=0.9,  # Aumentar momentum para actualización más rápida
-                use_running_average=deterministic
-            )(x)
-        
-        # Último RNN sin return_sequences
-        def create_final_rnn_cell(units=self.config['hidden_units'][-1]):
-            return lambda h, x, dr, rdr, det: SimpleRNNCell(
-                units=units,
                 activation=get_activation_fn(self.config['activation'])
-            )(h, x, dr, rdr, det)
+            )(x, deterministic=deterministic)
+            
+            # Normalización para capas intermedias
+            if return_sequences:
+                x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
+                # Aplicar dropout si está en modo entrenamiento
+                if not deterministic:
+                    x = nn.Dropout(rate=self.config['dropout_rate'])(
+                        x, deterministic=deterministic
+                    )
         
-        x = apply_rnn(
-            create_final_rnn_cell,
-            x,
-            units=self.config['hidden_units'][-1],
-            return_sequences=False,
-            dropout_rate=self.config['dropout_rate'],
-            recurrent_dropout_rate=self.config['recurrent_dropout'],
-            bidirectional=self.config['bidirectional'],
-            deterministic=deterministic
-        )
-        
-        # Combinar características
+        # Combinar con otras características
         x = jnp.concatenate([x, other_input], axis=-1)
         
-        # Reducir capas densas
+        # Capas densas finales
+        x = nn.Dense(64)(x)
+        x = get_activation(x, self.config['activation'])
+        x = nn.LayerNorm(epsilon=self.config['epsilon'])(x)
+        x = nn.Dropout(rate=self.config['dropout_rate'])(x, deterministic=deterministic)
+        
         x = nn.Dense(32)(x)
         x = get_activation(x, self.config['activation'])
-        x = nn.BatchNorm(
-            epsilon=self.config['epsilon'],
-            use_running_average=deterministic
-        )(x)
-        x = nn.Dropout(rate=self.config['dropout_rate'], deterministic=deterministic)(x)
         
         # Capa de salida
-        output = nn.Dense(1)(x)
-        
-        return output
+        x = nn.Dense(1)(x)
+        return x
 
-def get_activation(x: jnp.ndarray, activation_name: str) -> jnp.ndarray:
+def create_rnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DLModelWrapper:
     """
-    Aplica la función de activación al tensor.
+    Crea un modelo RNN con JAX/Flax.
     
     Parámetros:
     -----------
-    x : jnp.ndarray
-        Tensor de entrada
-    activation_name : str
-        Nombre de la función de activación
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características)
         
     Retorna:
     --------
-    jnp.ndarray
-        Tensor con la activación aplicada
+    DLModelWrapper
+        Modelo RNN envuelto en DLModelWrapper
     """
-    return get_activation_fn(activation_name)(x)
-
-def get_activation_fn(activation_name: str) -> Callable:
-    """
-    Obtiene la función de activación según su nombre.
+    # Función creadora de modelo para pasar al wrapper
+    def model_creator():
+        return RNNModel(
+            config=RNN_CONFIG,
+            cgm_shape=cgm_shape,
+            other_features_shape=other_features_shape
+        )
     
-    Parámetros:
-    -----------
-    activation_name : str
-        Nombre de la función de activación
-        
-    Retorna:
-    --------
-    Callable
-        Función de activación
-    """
-    if activation_name == 'relu':
-        return jax.nn.relu
-    elif activation_name == 'tanh':
-        return jax.nn.tanh
-    elif activation_name == 'sigmoid':
-        return jax.nn.sigmoid
-    elif activation_name == 'swish':
-        return jax.nn.swish
-    else:
-        return jax.nn.relu  # Por defecto
-
-def create_rnn_model(cgm_shape: tuple, other_features_shape: tuple) -> RNNModel:
-    """
-    Crea un modelo RNN optimizado para velocidad con procesamiento temporal distribuido con JAX/Flax.
+    # Crear wrapper con framework JAX
+    model_wrapper = DLModelWrapper(model_creator, 'jax')
     
-    Parámetros:
-    -----------
-    cgm_shape : tuple
-        Forma de los datos CGM (samples, timesteps, features)
-    other_features_shape : tuple
-        Forma de otras características (samples, features)
-        
-    Retorna:
-    --------
-    rnn_model
-        Modelo RNN inicializado
-    """
-    model = RNNModel(
-        config=RNN_CONFIG,
-        cgm_shape=cgm_shape,
-        other_features_shape=other_features_shape
+    # Configurar early stopping
+    es_patience, es_min_delta, es_restore_best = get_early_stopping_config()
+    model_wrapper.add_early_stopping(
+        patience=es_patience,
+        min_delta=es_min_delta,
+        restore_best_weights=es_restore_best
     )
     
-    return model
+    return model_wrapper
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]:
+    """
+    Retorna una función para crear un modelo RNN compatible con la API del sistema.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], DLModelWrapper]
+        Función para crear el modelo con las formas de entrada especificadas
+    """
+    return create_rnn_model
