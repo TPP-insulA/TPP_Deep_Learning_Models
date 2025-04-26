@@ -453,7 +453,7 @@ class QlearningModel(nn.Module):
             cgm_value = cgm_data.item()
             
         # Detectar si los datos ya están normalizados (valores típicamente entre -1 y 1)
-        is_normalized = -2.0 <= cgm_value <= 2.0
+        is_normalized = -3.0 <= cgm_value <= 3.0
         
         if is_normalized:
             # Caso 1: Datos ya normalizados (típicamente entre -1 y 1)
