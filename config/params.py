@@ -75,7 +75,7 @@ from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_waven
 from models.pytorch.ReinforcementLearning.monte_carlo_methods import model_creator as pt_monte_carlo_creator
 from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
 from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
-# from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
+from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
 # from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
 # from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
 
@@ -177,7 +177,7 @@ PT_MODELS = {
     "pt_monte_carlo": pt_monte_carlo_creator,
     "pt_policy_iteration": pt_policy_iteration_creator,
     "pt_q_learning": pt_q_learning_creator,
-    # "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
+    "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
     # "pt_sarsa": pt_sarsa_creator,
     # "pt_value_iteration": pt_value_iteration_creator,
     ## Modelos de Aprendizaje por Refuerzo Profundo
@@ -266,8 +266,8 @@ USE_PT_MODELS = {
     ## Modelos de Aprendizaje por Refuerzo
     "pt_monte_carlo": False,
     "pt_policy_iteration": False,
-    "pt_q_learning": True,
-    "pt_reinforce_mcpg": False,
+    "pt_q_learning": False,
+    "pt_reinforce_mcpg": True,
     "pt_sarsa": False,
     "pt_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
