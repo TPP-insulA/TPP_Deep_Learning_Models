@@ -8,6 +8,8 @@ from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 from torch import nn
 from types import SimpleNamespace
 
+from custom.rl_model_wrapper import RLModelWrapperPyTorch
+
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
@@ -711,9 +713,6 @@ def create_q_learning_model_wrapper(cgm_shape: Tuple[int, ...], other_features_s
     Any
         Modelo Q-Learning envuelto para compatibilidad con el sistema
     """
-    # Importar aquí para evitar dependencias circulares
-    from custom.rl_model_wrapper import RLModelWrapperPyTorch
-    
     # Definir función creadora
     def model_creator_fn() -> nn.Module:
         return create_q_learning_model(cgm_shape, other_features_shape)
@@ -724,5 +723,13 @@ def create_q_learning_model_wrapper(cgm_shape: Tuple[int, ...], other_features_s
     return model_wrapper
 
 
-# Alias para compatibilidad con el sistema
-model_creator = create_q_learning_model_wrapper
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperPyTorch]:
+    """
+    Devuelve una función creadora del modelo Q Learning compatible con la infraestructura.
+    
+    Retorna:
+    --------
+    Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperPyTorch]
+        Función que crea un modelo Q Learning envuelto
+    """
+    return create_q_learning_model_wrapper
