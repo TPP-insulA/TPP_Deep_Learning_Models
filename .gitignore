@@ -15,4 +15,12 @@ build/
 Cargo.lock
 *.keras
 *.h5
+*.npy
+*.pt
 __pycache__
+figures/various_models/jax
+figures/various_models/pytorch
+figures/various_models/tensorflow
+docs/models_results.typ
+*.pkl
+**/logs/**

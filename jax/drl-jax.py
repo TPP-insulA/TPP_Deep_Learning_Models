@@ -26,6 +26,10 @@ from gymnasium import spaces
 jax.config.update("jax_enable_x64", True)
 
 PROJECT_DIR = os.path.join(os.getcwd(), "..", "..")
+FIGURES_DIR = os.path.join(PROJECT_DIR, "figures", "jax")
+if not os.path.exists(FIGURES_DIR):
+    os.makedirs(FIGURES_DIR)
+    print(f"Created figures directory: {FIGURES_DIR}")
 
 # Configuración global
 CONFIG = {
@@ -729,6 +733,8 @@ def plot_evaluation(y_test, y_pred_jax, y_rule, subject_test, scaler_y):
     plt.ylabel('Predicted Dose (units)', fontsize=10)
     plt.title('JAX MLP: Predictions vs Real (Density)', fontsize=12)
     plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIR, "jax_pred_vs_real_density.png"), dpi=300)
     plt.show()
 
     # 2. Residual Distribution (KDE Plots)
@@ -743,6 +749,8 @@ def plot_evaluation(y_test, y_pred_jax, y_rule, subject_test, scaler_y):
     plt.title('Residual Distribution (KDE)', fontsize=12)
     plt.legend(fontsize=8)
     plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIR, "jax_residual_distribution.png"), dpi=300)
     plt.show()
 
     # 3. MAE by Subject
@@ -766,6 +774,8 @@ def plot_evaluation(y_test, y_pred_jax, y_rule, subject_test, scaler_y):
     plt.title('MAE by Subject', fontsize=12)
     plt.legend(fontsize=8)
     plt.grid(True, axis='y', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(FIGURES_DIR, "jax_mae_by_subject.png"), dpi=300)
     plt.show()
 
     elapsed_time = time.time() - start_time

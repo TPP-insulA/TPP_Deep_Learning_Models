@@ -21,7 +21,7 @@ from stable_baselines3 import PPO, SAC, TD3
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import BaseCallback
 
-PROJECT_DIR = os.path.join(os.getcwd(), "..", "..")
+PROJECT_DIR = os.path.abspath(os.path.join(os.getcwd(), ".."))
 
 # Global configuration
 CONFIG = {
