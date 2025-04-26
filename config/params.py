@@ -57,13 +57,43 @@ from models.jax.DeepReinforcementLearning.ppo import model_creator as jax_ppo_cr
 from models.jax.DeepReinforcementLearning.sac import model_creator as jax_sac_creator
 from models.jax.DeepReinforcementLearning.trpo import model_creator as jax_trpo_creator
 
+
+## Modelos PyTorch
+### Modelos de Aprendizaje Profundo
+from models.pytorch.DeepLearning.attention_only import model_creator as pt_create_attention_model
+from models.pytorch.DeepLearning.cnn import model_creator as pt_create_cnn_model
+from models.pytorch.DeepLearning.fnn import model_creator as pt_create_fnn_model
+from models.pytorch.DeepLearning.gru import model_creator as pt_create_gru_model
+from models.pytorch.DeepLearning.lstm import model_creator as pt_create_lstm_model
+from models.pytorch.DeepLearning.rnn import model_creator as pt_create_rnn_model
+from models.pytorch.DeepLearning.tabnet import model_creator as pt_create_tabnet_model
+from models.pytorch.DeepLearning.tcn import model_creator as pt_create_tcn_model
+from models.pytorch.DeepLearning.transformer import model_creator as pt_create_transformer_model
+from models.pytorch.DeepLearning.wavenet import model_creator as pt_create_wavenet_model
+
+### Modelos de Aprendizaje por Refuerzo
+from models.pytorch.ReinforcementLearning.monte_carlo_methods import model_creator as pt_monte_carlo_creator
+from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
+from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
+from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
+from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
+from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
+
+### Modelos de Aprendizaje por Refuerzo Profundo
+from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
+from models.pytorch.DeepReinforcementLearning.ddpg import model_creator as pt_ddpg_creator
+from models.pytorch.DeepReinforcementLearning.dqn import model_creator as pt_dqn_creator
+from models.pytorch.DeepReinforcementLearning.ppo import model_creator as pt_ppo_creator
+from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac_creator
+from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
+
 # Modo de Ejecución
-DEBUG = False 
+DEBUG = True 
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
-## Opciones: "tensorflow", "jax"
-FRAMEWORK = "tensorflow"
+## Opciones: "tensorflow", "jax", "pytorch"
+FRAMEWORK = "pytorch"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -129,6 +159,37 @@ JAX_MODELS = {
     "jax_trpo": jax_trpo_creator,
 }
 
+## Modelos PyTorch disponibles.
+PT_MODELS = {
+    # PyTorch
+    ## Modelos de Aprendizaje Profundo
+    "pt_attention_only": pt_create_attention_model,
+    "pt_cnn": pt_create_cnn_model,
+    "pt_fnn": pt_create_fnn_model,
+    "pt_gru": pt_create_gru_model,
+    "pt_lstm": pt_create_lstm_model,
+    "pt_rnn": pt_create_rnn_model,
+    "pt_tabnet": pt_create_tabnet_model,
+    "pt_tcn": pt_create_tcn_model,
+    "pt_transformer": pt_create_transformer_model,
+    "pt_wavenet": pt_create_wavenet_model,
+    ## Modelos de Aprendizaje por Refuerzo
+    "pt_monte_carlo": pt_monte_carlo_creator,
+    "pt_policy_iteration": pt_policy_iteration_creator,
+    "pt_q_learning": pt_q_learning_creator,
+    "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
+    "pt_sarsa": pt_sarsa_creator,
+    "pt_value_iteration": pt_value_iteration_creator,
+    ## Modelos de Aprendizaje por Refuerzo Profundo
+    "pt_a2c": pt_a2c_creator,
+    "pt_a3c": pt_a3c_creator,
+    "pt_ddpg": pt_ddpg_creator,
+    "pt_dqn": pt_dqn_creator,
+    "pt_ppo": pt_ppo_creator,
+    "pt_sac": pt_sac_creator,
+    "pt_trpo": pt_trpo_creator,
+}
+
 # Modelos TensorFlow a utilizar
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
@@ -187,4 +248,34 @@ USE_JAX_MODELS = {
     "jax_ppo": True,
     "jax_sac": True,
     "jax_trpo": True,
+}
+
+# Modelos Pytorch a utilizar
+USE_PT_MODELS = {
+    ## Modelos de Aprendizaje Profundo
+    "pt_attention_only": False,
+    "pt_cnn": False,
+    "pt_fnn": False,
+    "pt_gru": False,
+    "pt_lstm": False,
+    "pt_rnn": False,
+    "pt_tabnet": False,
+    "pt_tcn": False,
+    "pt_transformer": False,
+    "pt_wavenet": False,
+    ## Modelos de Aprendizaje por Refuerzo
+    "pt_monte_carlo": False,
+    "pt_policy_iteration": False,
+    "pt_q_learning": False,
+    "pt_reinforce_mcpg": False,
+    "pt_sarsa": False,
+    "pt_value_iteration": True,
+    ## Modelos de Aprendizaje por Refuerzo Profundo
+    "pt_a2c": False,
+    "pt_a3c": False,
+    "pt_ddpg": False,
+    "pt_dqn": False,
+    "pt_ppo": False,
+    "pt_sac": False,
+    "pt_trpo": True,
 }

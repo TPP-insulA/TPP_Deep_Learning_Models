@@ -14,7 +14,7 @@ sys.path.append(PROJECT_ROOT)
 from custom.printer import cprint, coloured
 
 # Configuración 
-from config.params import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, TF_MODELS, JAX_MODELS
+from config.params import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, USE_PT_MODELS, TF_MODELS, JAX_MODELS, PT_MODELS
 
 # Procesamiento
 from processing.pandas import preprocess_data as pd_preprocess, split_data as pd_split
@@ -92,8 +92,23 @@ elif FRAMEWORK == "jax":
     import jax
     cprint(f"Dispositivos JAX disponibles: {jax.devices()}", 'green')
     cprint("Usando backend de JAX para entrenamiento", 'green', 'bold')
+elif FRAMEWORK == "pytorch":
+    from training.pytorch import (
+        train_multiple_models, calculate_metrics, create_ensemble_prediction, 
+        optimize_ensemble_weights, enhance_features
+    )
+    
+    # Configure PyTorch
+    import torch
+    if torch.cuda.is_available():
+        cprint(f"GPU available: {torch.cuda.device_count()} devices", 'green')
+        cprint(f"Using: {torch.cuda.get_device_name(0)}", 'green')
+    else:
+        cprint("No GPUs detected, using CPU", 'yellow')
+        
+    cprint("Using PyTorch backend for training", 'green', 'bold')
 else:
-    cprint(f"Error: Framework no soportado: {FRAMEWORK}. Debe ser 'tensorflow' o 'jax'.", 'red', 'bold')
+    cprint(f"Error: Framework not supported: {FRAMEWORK}. Must be 'tensorflow', 'jax', or 'pytorch'.", 'red', 'bold')
     sys.exit(1)
 
 # Constante para mensaje repetido
@@ -101,15 +116,22 @@ CONST_MODEL_ACTIVATED = "Modelo {} activado."
 CONST_MODEL_DEACTIVATED = "Modelo {} desactivado."
 
 use_models = {}
-MODELS_TO_USE = USE_JAX_MODELS if FRAMEWORK == "jax" else USE_TF_MODELS
-AVAILABLE_MODELS = JAX_MODELS if FRAMEWORK == "jax" else TF_MODELS
+if FRAMEWORK == "tensorflow":
+    MODELS_TO_USE = USE_TF_MODELS
+    AVAILABLE_MODELS = TF_MODELS
+elif FRAMEWORK == "jax":
+    MODELS_TO_USE = USE_JAX_MODELS
+    AVAILABLE_MODELS = JAX_MODELS
+elif FRAMEWORK == "pytorch":
+    MODELS_TO_USE = USE_PT_MODELS
+    AVAILABLE_MODELS = PT_MODELS
 
 for model_name, use in MODELS_TO_USE.items():
     if use:
         model_fn = AVAILABLE_MODELS[model_name]
         
-        # Si estamos usando JAX, asegurar que todos los modelos estén en formato uniforme
-        if FRAMEWORK == "jax":
+        # Si estamos usando JAX o PyTorch, asegurar que todos los modelos estén en formato uniforme
+        if FRAMEWORK == "jax" or FRAMEWORK == "pytorch":
             # Verificar si es un model creator que necesita ser llamado
             if is_model_creator(model_fn):
                 model_fn = model_fn()

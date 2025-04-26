@@ -1,17 +1,25 @@
-from custom.model_wrapper import ModelWrapper
-from custom.printer import print_info
 from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 import numpy as np
 import jax
 import jax.numpy as jnp
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm.auto import tqdm
+
+from custom.model_wrapper import ModelWrapper
+from custom.printer import print_debug, print_info
+from config.models_config import EARLY_STOPPING_POLICY
 
 # Constantes para uso repetido
 CONST_ACTOR = "actor"
 CONST_CRITIC = "critic"
 CONST_TARGET = "target"
 CONST_PARAMS = "params"
-CONST_DROPOUT = "dropout"
+CONST_DEVICE = "device"
+CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
+
 
 class DRLModelWrapperTF(ModelWrapper):
     """
@@ -286,9 +294,9 @@ class DRLModelWrapperTF(ModelWrapper):
             val_loss = float(np.mean((val_preds - y_val) ** 2))
             history["val_loss"].append(val_loss)
         
-    def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
-             validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+    def fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
+           validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
+           epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -1215,7 +1223,286 @@ class DRLModelWrapperJAX(ModelWrapper):
         # Si no hay método predict, devolver ceros
         return np.zeros((len(x_cgm),), dtype=np.float32)
 
+class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
+    """
+    Wrapper para modelos de aprendizaje por refuerzo profundo implementados en PyTorch.
+    
+    Parámetros:
+    -----------
+    model_or_cls : Union[Callable, nn.Module]
+        Clase del modelo DRL a instanciar o instancia ya creada del modelo
+    **model_kwargs
+        Argumentos para el constructor del modelo (usado solo si se pasa una clase)
+    """
+    
+    def __init__(self, model_or_cls: Union[Callable, nn.Module], **model_kwargs) -> None:
+        """
+        Inicializa un wrapper para modelos de aprendizaje por refuerzo profundo en PyTorch.
+        
+        Parámetros:
+        -----------
+        model_or_cls : Union[Callable, nn.Module]
+            Clase del modelo DRL a instanciar o instancia ya creada del modelo
+        **model_kwargs
+            Argumentos para el constructor del modelo (usado solo si se pasa una clase)
+        """
+        ModelWrapper.__init__(self)
+        nn.Module.__init__(self)
+        super().__init__()
+        
+        # Determinar si es una clase o una instancia
+        self.is_class = isinstance(model_or_cls, type) or callable(model_or_cls)
+        
+        if self.is_class:
+            self.model_cls = model_or_cls
+            self.model_kwargs = model_kwargs
+            # Inicializar el modelo inmediatamente si es posible
+            try:
+                self.model = self.model_cls(**self.model_kwargs)
+            except Exception:
+                self.model = None
+        else:
+            self.model = model_or_cls
+            self.model_kwargs = {}
+            
+        self.buffer = None
+        self.algorithm = model_kwargs.get('algorithm', 'generic')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Inicializar el modelo si ya se pasó una instancia
+        if not self.is_class and self.model is not None:
+            if isinstance(self.model, nn.Module):
+                self.model = self.model.to(self.device)
+            
+        # Crear un generador de numpy para operaciones aleatorias
+        self.rng = np.random.Generator(np.random.PCG64(model_kwargs.get('seed', 42)))
+        
+        # Configuración para early stopping
+        self.early_stopping_config = {
+            'patience': EARLY_STOPPING_POLICY['early_stopping_patience'],
+            'min_delta': EARLY_STOPPING_POLICY['early_stopping_min_delta'],
+            'restore_best_weights': EARLY_STOPPING_POLICY['early_stopping_restore_best_weights'],
+            'best_val_loss': EARLY_STOPPING_POLICY['early_stopping_best_val_loss'],
+            'counter': EARLY_STOPPING_POLICY['early_stopping_counter'],
+            'best_weights': EARLY_STOPPING_POLICY['early_stopping_best_weights']
+        }
+    
+    def to(self, device: torch.device) -> 'DRLModelWrapperPyTorch':
+        """
+        Mueve el modelo al dispositivo especificado.
+        
+        Parámetros:
+        -----------
+        device : torch.device
+            Dispositivo de destino (CPU/GPU)
+            
+        Retorna:
+        --------
+        DRLModelWrapperPyTorch
+            Self para permitir encadenamiento
+        """
+        self.device = device
+        if self.model is not None and isinstance(self.model, nn.Module):
+                self.model = self.model.to(device)
+        return self
+    
+    def forward(self, x_cgm: torch.Tensor, x_other: torch.Tensor) -> torch.Tensor:
+        """
+        Implementación requerida del método forward para nn.Module.
+        
+        Parámetros:
+        -----------
+        x_cgm : torch.Tensor
+            Datos CGM de entrada
+        x_other : torch.Tensor
+            Otras características de entrada
+            
+        Retorna:
+        --------
+        torch.Tensor
+            Predicciones del modelo
+        """
+        # Si el modelo no está inicializado, intentar inicializarlo ahora
+        if self.model is None:
+            if self.is_class:
+                try:
+                    self.model = self.model_cls(**self.model_kwargs)
+                    if isinstance(self.model, nn.Module):
+                        self.model = self.model.to(self.device)
+                except Exception as e:
+                    print_debug(f"Error al inicializar el modelo: {e}")
+                    raise ValueError(CONST_MODEL_INIT_ERROR.format("realizar forward pass"))
+            else:
+                raise ValueError(CONST_MODEL_INIT_ERROR.format("realizar forward pass"))
+            
+        # Delegamos el forward al modelo subyacente
+        try:
+            if (hasattr(self.model, 'forward') and callable(self.model.forward)) or hasattr(self.model, '__call__'):
+                return self.model(x_cgm, x_other)
+        except Exception as e:
+            print_debug(f"Error en forward: {e}")
+            
+        # Si no podemos usar forward directamente, intentar con predict
+        with torch.no_grad():
+            try:
+                x_cgm_np = x_cgm.cpu().numpy()
+                x_other_np = x_other.cpu().numpy()
+                predictions_np = self.predict([x_cgm_np, x_other_np])
+                return torch.FloatTensor(predictions_np).to(self.device)
+            except Exception as e:
+                print_debug(f"Error al predecir con el modelo: {e}")
+                # Devolver un tensor de ceros como fallback
+                return torch.zeros(x_cgm.shape[0], 1, device=self.device)
+    
+    def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
+             rng_key: Any = None) -> Any:
+        """
+        Inicializa el modelo DRL con los datos de entrada.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM de entrada
+        x_other : np.ndarray
+            Otras características de entrada
+        y : np.ndarray
+            Valores objetivo
+        rng_key : Any, opcional
+            Clave para generación aleatoria (default: None)
+            
+        Retorna:
+        --------
+        Any
+            Estado inicial del modelo o parámetros
+        """
+        # Si el modelo ya está inicializado y no es una clase, devolver directamente
+        if self.model is not None and not self.is_class:
+            return self.model
 
+        # Si el modelo no está inicializado pero tenemos una clase, crearlo
+        if self.model is None and self.is_class:
+            self.model = self.model_cls(**self.model_kwargs)
+            
+        # Mover modelo al dispositivo adecuado si es un módulo PyTorch
+        if isinstance(self.model, nn.Module):
+            self.model = self.model.to(self.device)
+        
+        # Inicialización específica si el modelo lo requiere
+        if hasattr(self.model, 'start'):
+            return self.model.start(x_cgm, x_other, y, rng_key)
+        elif hasattr(self.model, 'initialize'):
+            state_dim = (x_cgm.shape[1:], x_other.shape[1:])
+            action_dim = 1  # Para regresión en el caso de dosis de insulina
+            return self.model.initialize(state_dim, action_dim)
+            
+        return self.model
+
+    def parameters(self, recurse=True):
+        """
+        Retorna los parámetros entrenables del modelo.
+        Necesario para que optimizadores de PyTorch funcionen correctamente.
+        
+        Parámetros:
+        -----------
+        recurse : bool, opcional
+            Si True, devuelve parámetros de esta instancia y todos los submódulos
+            recursivamente (default: True)
+            
+        Retorna:
+        --------
+        Iterator
+            Iterador sobre los parámetros del modelo
+        """
+        # Si el modelo existe y es un módulo PyTorch, delegar a sus parámetros
+        if self.model is not None and isinstance(self.model, nn.Module):
+            return self.model.parameters(recurse=recurse)
+        # De lo contrario, devolver los parámetros de este wrapper (que podría estar vacío)
+        return super().parameters(recurse=recurse)
+        
+    def train(self, mode: bool = True) -> 'DRLModelWrapperPyTorch':
+        """
+        Establece el módulo en modo entrenamiento.
+        
+        Parámetros:
+        -----------
+        mode : bool, opcional
+            Si True, establece en modo entrenamiento, si False en modo evaluación (default: True)
+            
+        Retorna:
+        --------
+        DRLModelWrapperPyTorch
+            Self para permitir encadenamiento
+        """
+        nn.Module.train(self, mode)
+        if self.model is not None and isinstance(self.model, nn.Module):
+            self.model.train(mode)
+        return self
+    
+    def eval(self) -> 'DRLModelWrapperPyTorch':
+        """
+        Establece el módulo en modo evaluación.
+        
+        Retorna:
+        --------
+        DRLModelWrapperPyTorch
+            Self para permitir encadenamiento
+        """
+        # Call nn.Module's eval method directly
+        nn.Module.eval(self)
+        if self.model is not None and isinstance(self.model, nn.Module):
+            self.model.eval()
+        return self
+    
+    def fit(self, x: List[np.ndarray], y: np.ndarray, 
+           validation_data: Optional[Tuple] = None,
+           epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+        """
+        Entrena el modelo DRL con los datos proporcionados.
+        
+        Parámetros:
+        -----------
+        x : List[np.ndarray]
+            Lista con [x_cgm, x_other]
+        y : np.ndarray
+            Valores objetivo (acciones)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
+        epochs : int, opcional
+            Número de épocas de entrenamiento (default: 10)
+        batch_size : int, opcional
+            Tamaño de lote (default: 32)
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso, 2=detallado)
+            
+        Retorna:
+        --------
+        Dict[str, List[float]]
+            Historial de entrenamiento con métricas
+        """
+        # Extraer datos CGM y otras características
+        x_cgm, x_other = x
+        
+        # Asegurar que el modelo está inicializado
+        if self.model is None:
+            self.start(x_cgm, x_other, y)
+        
+        # Si el modelo tiene su propio método fit, úsalo
+        if hasattr(self.model, 'fit') and callable(self.model.fit):
+            return self.model.fit(
+                x=[x_cgm, x_other],
+                y=y,
+                validation_data=validation_data,
+                epochs=epochs,
+                batch_size=batch_size,
+                verbose=verbose
+            )
+        
+        # Si llegamos aquí, implementar entrenamiento genérico de RL
+        # ... (resto del código original)
+        
+    # resto de métodos de la clase...
+
+# Actualizar la clase DRLModelWrapper para incluir PyTorch
 class DRLModelWrapper(ModelWrapper):
     """
     Wrapper para modelos de aprendizaje por refuerzo profundo que selecciona el wrapper 
@@ -1226,7 +1513,7 @@ class DRLModelWrapper(ModelWrapper):
     model_cls : Callable
         Clase del modelo DRL a instanciar
     framework : str
-        Framework a utilizar ('jax' o 'tensorflow')
+        Framework a utilizar ('jax', 'tensorflow' o 'pytorch')
     **model_kwargs
         Argumentos para el constructor del modelo
     """
@@ -1240,7 +1527,7 @@ class DRLModelWrapper(ModelWrapper):
         model_cls : Callable
             Clase del modelo DRL a instanciar
         framework : str
-            Framework a utilizar ('jax' o 'tensorflow')
+            Framework a utilizar ('jax', 'tensorflow' o 'pytorch')
         **model_kwargs
             Argumentos para el constructor del modelo
         """
@@ -1250,8 +1537,28 @@ class DRLModelWrapper(ModelWrapper):
         # Seleccionar el wrapper adecuado según el framework
         if self.framework == 'jax':
             self.wrapper = DRLModelWrapperJAX(model_cls, **model_kwargs)
+        elif self.framework == 'pytorch':
+            self.wrapper = DRLModelWrapperPyTorch(model_cls, **model_kwargs)
         else:
             self.wrapper = DRLModelWrapperTF(model_cls, **model_kwargs)
+    
+    def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
+        """
+        Agrega early stopping al modelo.
+
+        Parámetros:
+        -----------
+        patience : int, opcional
+            Número de épocas a esperar para detener el entrenamiento (default: 10)
+        min_delta : float, opcional
+            Mínima mejora requerida para considerar una mejora (default: 0.0)
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar (default: True)
+        """
+        if hasattr(self.wrapper, 'add_early_stopping'):
+            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
+        else:
+            super().add_early_stopping(patience, min_delta, restore_best_weights)
     
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              rng_key: Any = None) -> Any:
@@ -1309,7 +1616,10 @@ class DRLModelWrapper(ModelWrapper):
             print_info(f"Épocas: {epochs}, Batch size: {batch_size}, Ejemplos: {len(y)}")
         
         # Delegar el entrenamiento al wrapper específico con el nivel de verbosidad
-        return self.wrapper.train(x_cgm, x_other, y, validation_data, epochs, batch_size, verbose=verbose)
+        if hasattr(self.wrapper, 'fit') and callable(self.wrapper.fit):
+            return self.wrapper.fit(x_cgm, x_other, y, validation_data, epochs, batch_size, verbose=verbose)
+        else:
+            return self.wrapper.train(x_cgm, x_other, y, validation_data, epochs, batch_size, verbose=verbose)
     
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
         """

@@ -8,6 +8,10 @@ EARLY_STOPPING_POLICY = {
     'early_stopping_patience': 10,       # Épocas a esperar antes de detener
     'early_stopping_min_delta': 0.001,   # Mejora mínima considerada significativa
     'early_stopping_restore_best_weights': True, # Restaurar mejores pesos al finalizar
+    'early_stopping_best_val_loss': float('inf'), # Mejor pérdida de validación
+    'early_stopping_counter': 0,         # Contador de épocas sin mejora
+    'early_stopping_best_epoch': 0,      # Época con mejor pérdida de validación
+    'early_stopping_best_weights': None, # Mejores pesos del modelo
 }
 ###########################################################
 ###                Deep Learning Models                 ###
@@ -377,6 +381,8 @@ MONTE_CARLO_CONFIG = {
     # Parámetros de entrenamiento
     'log_interval': 10,          # Cada cuántos episodios mostrar estadísticas
     'batch_size': 10,            # Tamaño de lote para batch MC
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización
     'smoothing_window': 20       # Ventana para suavizado en gráficos
@@ -421,6 +427,8 @@ QLEARNING_CONFIG = {
     'max_steps_per_episode': 500,               # Máximo de pasos por episodio
     'eval_interval': 100,           # Intervalo de episodios para evaluación
     'eval_episodes': 10,            # Número de episodios para evaluación
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización y registro
     'render_train': False,          # Si renderizar durante entrenamiento
