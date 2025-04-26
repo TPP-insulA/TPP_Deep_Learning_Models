@@ -269,7 +269,7 @@ USE_PT_MODELS = {
     "pt_q_learning": False,
     "pt_reinforce_mcpg": False,
     "pt_sarsa": False,
-    "pt_value_iteration": False,
+    "pt_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": False,
     "pt_a3c": False,
