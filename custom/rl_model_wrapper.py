@@ -772,11 +772,11 @@ class RLModelWrapperPyTorch(ModelWrapper):
                 def parameters(self, recurse=True):
                     return iter([self.dummy])
                     
-            # def forward(self, *args):
-            #     if len(args) == 2:
-            #         batch_size = args[0].size(0) if args[0].dim() > 0 else 1
-            #         return torch.zeros(batch_size, 1, device=args[0].device)
-            #     return torch.zeros(1)
+                def forward(self, *args):
+                    if len(args) == 2:
+                        batch_size = args[0].size(0) if args[0].dim() > 0 else 1
+                        return torch.zeros(batch_size, 1, device=args[0].device)
+                    return torch.zeros(1)
                 
         return DummyModule()
 

@@ -24,6 +24,3 @@ figures/various_models/tensorflow
 docs/models_results.typ
 *.pkl
 **/logs/**
-results/*
-*/results/*
-**/results/*

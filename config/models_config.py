@@ -427,6 +427,8 @@ QLEARNING_CONFIG = {
     'max_steps_per_episode': 500,               # Máximo de pasos por episodio
     'eval_interval': 100,           # Intervalo de episodios para evaluación
     'eval_episodes': 10,            # Número de episodios para evaluación
+    'n_states': 1000,          # Número de estados en el espacio de estados
+    'n_actions': 20,            # Número de acciones posibles
     
     # Visualización y registro
     'render_train': False,          # Si renderizar durante entrenamiento
