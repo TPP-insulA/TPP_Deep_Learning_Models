@@ -76,8 +76,8 @@ from models.pytorch.ReinforcementLearning.monte_carlo_methods import model_creat
 from models.pytorch.ReinforcementLearning.policy_iteration import model_creator as pt_policy_iteration_creator
 from models.pytorch.ReinforcementLearning.q_learning import model_creator as pt_q_learning_creator
 from models.pytorch.ReinforcementLearning.reinforce_mcgp import model_creator as pt_reinforce_mcgp_creator
-# from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
-# from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
+from models.pytorch.ReinforcementLearning.sarsa import model_creator as pt_sarsa_creator
+from models.pytorch.ReinforcementLearning.value_iteration import model_creator as pt_value_iteration_creator
 
 ### Modelos de Aprendizaje por Refuerzo Profundo
 from models.pytorch.DeepReinforcementLearning.a2c_a3c import model_creator_a2c as pt_a2c_creator, model_creator_a3c as pt_a3c_creator
@@ -178,8 +178,8 @@ PT_MODELS = {
     "pt_policy_iteration": pt_policy_iteration_creator,
     "pt_q_learning": pt_q_learning_creator,
     "pt_reinforce_mcpg": pt_reinforce_mcgp_creator,
-    # "pt_sarsa": pt_sarsa_creator,
-    # "pt_value_iteration": pt_value_iteration_creator,
+    "pt_sarsa": pt_sarsa_creator,
+    "pt_value_iteration": pt_value_iteration_creator,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": pt_a2c_creator,
     "pt_a3c": pt_a3c_creator,
@@ -267,9 +267,9 @@ USE_PT_MODELS = {
     "pt_monte_carlo": False,
     "pt_policy_iteration": False,
     "pt_q_learning": False,
-    "pt_reinforce_mcpg": True,
+    "pt_reinforce_mcpg": False,
     "pt_sarsa": False,
-    "pt_value_iteration": False,
+    "pt_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": False,
     "pt_a3c": False,
