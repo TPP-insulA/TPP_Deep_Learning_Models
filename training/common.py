@@ -47,9 +47,32 @@ def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray],
     np.ndarray
         Predicciones combinadas del ensemble
     """
-    all_preds = np.stack(list(predictions_dict.values()))
+    # Normalizar todos los arrays de predicciones a 1D
+    normalized_preds = {}
+    for model_name, preds in predictions_dict.items():
+        # Convertir a numpy si es necesario
+        if not isinstance(preds, np.ndarray):
+            preds = np.array(preds)
+            
+        # Asegurar que el array sea 1D
+        if preds.ndim > 1:
+            preds = preds.reshape(-1)
+            
+        normalized_preds[model_name] = preds
+    
+    # Verificar si todos los arrays tienen la misma longitud después de normalizar
+    lengths = [len(preds) for preds in normalized_preds.values()]
+    if len(set(lengths)) > 1:
+        print(f"Advertencia: Los modelos tienen longitudes de predicción diferentes: {lengths}")
+        # Usar la longitud común mínima
+        min_length = min(lengths)
+        for model_name, preds in normalized_preds.items():
+            normalized_preds[model_name] = preds[:min_length]
+    
+    # Apilar predicciones y aplicar pesos
+    all_preds = np.stack(list(normalized_preds.values()))
     if weights is None:
-        weights = np.ones(len(predictions_dict)) / len(predictions_dict)
+        weights = np.ones(len(normalized_preds)) / len(normalized_preds)
     return np.average(all_preds, axis=0, weights=weights)
 
 
@@ -70,11 +93,39 @@ def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray],
     np.ndarray
         Pesos optimizados para cada modelo
     """
-    def objective(weights):
+    # Asegurar que y_true sea 1D para consistencia
+    if y_true.ndim > 1:
+        y_true = y_true.reshape(-1)
+    
+    # Registrar los modelos y sus formas de predicción
+    print("\nFormas de predicciones de modelos antes de optimización:")
+    for model_name, preds in predictions_dict.items():
+        print(f"  {model_name}: {np.array(preds).shape}")
+    
+    def objective(weights: np.ndarray) -> float:
+        """
+        Función objetivo para optimización de pesos.
+        
+        Parámetros:
+        -----------
+        weights : np.ndarray
+            Pesos a optimizar
+            
+        Retorna:
+        --------
+        float
+            Error cuadrático medio
+        """
         # Normalizar pesos
         weights = weights / np.sum(weights)
         # Obtener predicción del ensemble
         ensemble_pred = create_ensemble_prediction(predictions_dict, weights)
+        # Asegurar que las predicciones del ensemble coincidan con la longitud de y_true
+        if len(ensemble_pred) > len(y_true):
+            ensemble_pred = ensemble_pred[:len(y_true)]
+        elif len(ensemble_pred) < len(y_true):
+            y_true_temp = y_true[:len(ensemble_pred)]
+            return mean_squared_error(y_true_temp, ensemble_pred)
         # Calcular error
         return mean_squared_error(y_true, ensemble_pred)
     
@@ -82,14 +133,19 @@ def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray],
     initial_weights = np.ones(n_models) / n_models
     bounds = [(0, 1) for _ in range(n_models)]
     
-    result = minimize(
-        objective,
-        initial_weights,
-        bounds=bounds,
-        constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
-    )
-    
-    return result.x / np.sum(result.x)
+    try:
+        result = minimize(
+            objective,
+            initial_weights,
+            bounds=bounds,
+            constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+        )
+        optimized_weights = result.x / np.sum(result.x)
+        return optimized_weights
+    except Exception as e:
+        print(f"Error en optimización: {e}")
+        print("Volviendo a pesos iguales")
+        return initial_weights
 
 
 def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
