@@ -448,7 +448,7 @@ cprint("\n==== GENERANDO REPORTE EN TYPST ====", 'cyan', 'bold')
 report_path = create_report(
     model_figures=model_figures,            # Diccionario con rutas a figuras por modelo
     ensemble_metrics=ensemble_metrics,      # Métricas del modelo ensemble
-    framework=FRAMEWORK,                    # 'tensorflow' o 'jax'
+    framework=FRAMEWORK,                    # 'tensorflow', 'jax' o 'pytorch'
     project_root=PROJECT_ROOT,              # Ruta base del proyecto
     figures_dir=FIGURES_DIR,                # Directorio de figuras (constante definida)
     metrics=metrics                         # Métricas de todos los modelos
@@ -456,14 +456,14 @@ report_path = create_report(
 
 cprint(f"Reporte Typst generado: {report_path}", 'green')
 
-# Intentar renderizar el PDF
-pdf_path = render_to_pdf(report_path)
-if pdf_path:
-    cprint(f"PDF generado: {pdf_path}", 'green')
+# # Intentar renderizar el PDF
+# pdf_path = render_to_pdf(report_path)
+# if pdf_path:
+#     cprint(f"PDF generado: {pdf_path}", 'green')
 
 cprint("\n==== PROCESO COMPLETADO ====", 'cyan', 'bold')
 cprint(f"Resultados guardados en: {RESULTS_SAVE_DIR}", 'green')
 cprint(f"Visualizaciones guardadas en: {FIGURES_DIR}", 'green')
 cprint(f"Reporte guardado en: {report_path}", 'green')
-if pdf_path:
-    cprint(f"PDF guardado en: {pdf_path}", 'green')
+# if pdf_path:
+#     cprint(f"PDF guardado en: {pdf_path}", 'green')

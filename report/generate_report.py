@@ -145,7 +145,7 @@ y un coeficiente R² de {ensemble_metrics["r2"]:.4f}.
 """
     
     # Guardar el archivo Typst
-    typst_path = os.path.join(docs_dir, "models_results.typ")
+    typst_path = os.path.join(docs_dir, f"models_results_{framework}.typ")
     with open(typst_path, 'w') as f:
         f.write(typst_content)
     
