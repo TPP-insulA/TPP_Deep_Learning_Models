@@ -171,6 +171,22 @@ def _prepare_model(model: Union[nn.Module, DLModelWrapperPyTorch],
                  y_train: np.ndarray) -> nn.Module:
     """
     Prepara el modelo para entrenamiento, manejando wrappers si es necesario.
+    
+    Parámetros:
+    -----------
+    model : Union[nn.Module, DLModelWrapperPyTorch]
+        Modelo a preparar (puede ser un wrapper)
+    x_cgm_train : np.ndarray
+        Datos CGM de entrenamiento
+    x_other_train : np.ndarray
+        Otras características de entrenamiento
+    y_train : np.ndarray
+        Valores objetivo de entrenamiento
+        
+    Retorna:
+    --------
+    nn.Module
+        Modelo preparado para entrenamiento
     """
     if hasattr(model, 'model') and isinstance(model, DLModelWrapperPyTorch):
         # Si model es un wrapper, inicializar y usar el modelo interno
@@ -190,6 +206,22 @@ def _run_train_epoch(model: nn.Module,
                     criterion: nn.Module) -> float:
     """
     Ejecuta una época de entrenamiento y devuelve la pérdida promedio.
+    
+    Parámetros:
+    -----------
+    model : nn.Module
+        Modelo a entrenar
+    train_loader : DataLoader
+        DataLoader para el conjunto de entrenamiento
+    optimizer : optim.Optimizer
+        Optimizador para el modelo
+    criterion : nn.Module
+        Función de pérdida para el entrenamiento
+        
+    Retorna:
+    --------
+    float
+        Pérdida promedio de la época
     """
     model.train()
     train_loss = 0.0
@@ -236,6 +268,20 @@ def _run_validation(model: nn.Module,
                   criterion: nn.Module) -> Tuple[float, np.ndarray, np.ndarray]:
     """
     Ejecuta validación y devuelve pérdida, predicciones y valores reales.
+    
+    Parámetros:
+    -----------
+    model : nn.Module
+        Modelo a validar
+    val_loader : DataLoader
+        DataLoader para el conjunto de validación
+    criterion : nn.Module
+        Función de pérdida para la validación
+        
+    Retorna:
+    --------
+    Tuple[float, np.ndarray, np.ndarray]
+        (pérdida promedio, predicciones, valores reales)
     """
     model.eval()
     val_loss = 0.0
@@ -279,6 +325,22 @@ def _predict_in_batches(model: nn.Module,
                       batch_size: int = 64) -> np.ndarray:
     """
     Realiza predicciones en lotes para evitar problemas de memoria.
+    
+    Parámetros:
+    -----------
+    model : nn.Module
+        Modelo a usar para predicciones
+    x_cgm : np.ndarray
+        Datos CGM para predicción
+    x_other : np.ndarray
+        Otras características para predicción
+    batch_size : int, opcional
+        Tamaño del batch para predicción (default: 64)
+        
+    Retorna:
+    --------
+    np.ndarray
+        Predicciones del modelo
     """
     model.eval()
     with torch.no_grad():
@@ -762,6 +824,13 @@ def train_multiple_models(model_creators: Dict[str, Callable],
 def debug_tensor_info(tensor: torch.Tensor, name: str) -> None:
     """
     Imprime información de depuración sobre un tensor.
+    
+    Parámetros:
+    -----------
+    tensor : torch.Tensor
+        Tensor a debugguear
+    name : str
+        Nombre del tensor para identificación
     """
     print_debug(f"{name} - Forma: {tensor.shape}, Tipo: {tensor.dtype}, Dispositivo: {tensor.device}")
     print_debug(f"{name} - Min: {tensor.min().item():.4f}, Max: {tensor.max().item():.4f}, Media: {tensor.mean().item():.4f}")

@@ -93,7 +93,7 @@ DEBUG = False
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax", "pytorch"
-FRAMEWORK = "pytorch"
+FRAMEWORK = "tensorflow"
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
 PROCESSING = "polars"
@@ -197,7 +197,7 @@ USE_TF_MODELS = {
     "tf_cnn": False,
     "tf_fnn": False,
     "tf_gru": False,
-    "tf_lstm": True,
+    "tf_lstm": False,
     "tf_rnn": False,
     "tf_tabnet": False,
     "tf_tcn": False,

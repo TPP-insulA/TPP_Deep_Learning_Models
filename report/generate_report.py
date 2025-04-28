@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Optional
 from custom.printer import cprint
+from constants.constants import CONST_FRAMEWORKS, CONST_MODELS_NAMES, HEADERS_BACKGROUND, MODELS_BACKGROUND, ENSEMBLE_BACKGROUND
 
 def create_report(model_figures: Dict[str, Dict[str, str]], 
                   ensemble_metrics: Dict[str, float],
@@ -31,30 +32,96 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
     str
         Ruta al archivo Typst generado
     """
-    # Fecha actual para el reporte
-    from datetime import datetime
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    # # Fecha actual para el reporte
+    # from datetime import datetime
+    # current_date = datetime.now().strftime("%Y-%m-%d")
     
     # Crear directorio docs si no existe
     docs_dir = os.path.join(project_root, "docs")
     os.makedirs(docs_dir, exist_ok=True)
     
+    def get_min_max(data: Dict[str, Dict[str, float]], metric: str) -> tuple[float, float]:
+        """
+        Obtiene el mínimo y máximo valor de una métrica dada en los modelos.
+        
+        Parámetros:
+        -----------
+        data : Dict[str, Dict[str, float]]
+            Diccionario con métricas de los modelos
+        metric : str
+            Nombre de la métrica a evaluar (ej. 'mae', 'rmse', 'r2')
+        
+        Retorna:
+        --------
+        tuple[float, float]
+            Mínimo y máximo valor de la métrica
+        """
+        values = [model_metric[metric] for model_metric in data.values()]
+        return min(values), max(values)
+
+    def color_for_value(value: float, min_val: float, max_val: float, better_is_lower: bool = False) -> str:
+        """
+        Genera un color RGB como cadena para Typst.
+        
+        Parámetros:
+        -----------
+        value : float
+            Valor a evaluar
+        min_val : float
+            Valor mínimo de la métrica
+        max_val : float
+            Valor máximo de la métrica
+        better_is_lower : bool
+            Indica si un valor menor es mejor (default: False)
+        
+        Retorna:
+        --------
+        str
+            Color en formato RGB para Typst
+        """
+        if min_val == max_val:
+            t = 0.5
+        else:
+            t = (value - min_val) / (max_val - min_val)
+        if better_is_lower:
+            r = int(t * 255)
+            g = int(255 * (1 - t))
+            b = 0
+        else:
+            r = int(255 * (1 - t))
+            g = int(t * 255)
+            b = 0
+        return f"rgb({r}, {g}, {b})"
+    
+    mae_min, mae_max = get_min_max(metrics, "mae")
+    rmse_min, rmse_max = get_min_max(metrics, "rmse")
+    r2_min, r2_max = get_min_max(metrics, "r2")
+    
     # Inicio del documento Typst
     typst_content = f"""
 #set page(
-  margin: 2.5cm,
-  numbering: "1",
+  margin: 2cm,
+  numbering: "1 de 1",
 )
 
 #set text(font: "New Computer Modern")
+#set heading(numbering: "1.")
 #show heading: set block(above: 1.4em, below: 1em)
+
+#set table(
+  fill: (x, y) =>
+    if y == 0 {{
+      rgb("{HEADERS_BACKGROUND}").lighten(40%)
+    }} else if x == 0 {{
+      rgb("{MODELS_BACKGROUND}")
+    }},
+  align: right,
+)
 
 #align(center)[
   #text(17pt)[*Resultados de Entrenamiento de Modelos*]
   #v(0.5em)
-  #text(13pt)[Framework: {framework.upper()}]
-  #v(0.5em)
-  #text(11pt)[Fecha: {current_date}]
+  #text(13pt)[#underline[Framework]: *{CONST_FRAMEWORKS[framework]}*]
 ]
 
 = Resumen de Resultados
@@ -65,17 +132,20 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
   table(
     columns: 4,
     align: center + horizon,
-    [], [*MAE*], [*RMSE*], [*R²*],
+    [*Modelo*], [*MAE*], [*RMSE*], [*R²*],
 """
 
     # Agregar filas para cada modelo
     for model_name, model_metric in metrics.items():
+        mae_color = color_for_value(model_metric["mae"], mae_min, mae_max, better_is_lower=True)
+        rmse_color = color_for_value(model_metric["rmse"], rmse_min, rmse_max, better_is_lower=True)
+        r2_color = color_for_value(model_metric["r2"], r2_min, r2_max)
         typst_content += f"""
-    [*{model_name}*], [{model_metric["mae"]:.4f}], [{model_metric["rmse"]:.4f}], [{model_metric["r2"]:.4f}],"""
+    [*{CONST_MODELS_NAMES[model_name]}*], table.cell(fill: {mae_color}.lighten(37%), [{model_metric["mae"]:.4f}]), table.cell(fill: {rmse_color}.lighten(37%), [{model_metric["rmse"]:.4f}]), table.cell(fill: {r2_color}.lighten(37%),  [{model_metric["r2"]:.4f}]),"""
     
     # Agregar fila del ensemble
     typst_content += f"""
-    [*Ensemble*], [{ensemble_metrics["mae"]:.4f}], [{ensemble_metrics["rmse"]:.4f}], [{ensemble_metrics["r2"]:.4f}],
+    table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [*Ensemble*]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["mae"]:.4f}]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["rmse"]:.4f}]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["r2"]:.4f}]),
   ),
   caption: [Comparación de métricas entre modelos],
 )
@@ -100,7 +170,7 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
             _ = os.path.relpath(metrics_fig, docs_dir)
         
         typst_content += f"""
-== Modelo: {model_name}
+== Modelo: {CONST_MODELS_NAMES[model_name]}
 
 === Métricas
 - MAE: {metrics[model_name]["mae"]:.4f}
@@ -109,13 +179,13 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
 
 === Historial de Entrenamiento
 #figure(
-  image("{training_history_rel}", width: 80%),
+  image("{training_history_rel}", width: 71%),
   caption: [Historial de entrenamiento para {model_name}],
 )
 
 === Predicciones
 #figure(
-  image("{predictions_rel}", width: 80%),
+  image("{predictions_rel}", width: 71%),
   caption: [Predicciones vs valores reales para {model_name}],
 )
 
@@ -132,7 +202,7 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
 
 === Pesos del Ensemble
 #figure(
-  image("{os.path.relpath(os.path.join(figures_dir, 'ensemble_weights.png'), docs_dir)}", width: 80%),
+  image("{os.path.relpath(os.path.join(figures_dir, 'ensemble_weights.png'), docs_dir)}", width: 71%),
   caption: [Pesos optimizados para cada modelo en el ensemble],
 )
 
