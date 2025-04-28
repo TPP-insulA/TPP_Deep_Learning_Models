@@ -88,7 +88,7 @@ from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac
 from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
-DEBUG = True 
+DEBUG = False 
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
