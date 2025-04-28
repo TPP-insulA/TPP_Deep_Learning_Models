@@ -12,7 +12,7 @@ folder = CONFIG["processed_data_path"]
 model = "ppo"
 dataset = "val"
 CSV_PATH = os.path.join(folder, f"{model}_predictions_{dataset}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
-
+print("CSV_PATH:", CSV_PATH)
 # Configurar estilo de gráficos
 plt.style.use('seaborn')
 # %matplotlib inline

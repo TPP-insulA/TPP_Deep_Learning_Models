@@ -11,7 +11,8 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from config import CONFIG, PREV_SAMPLES, POST_SAMPLES, MODEL_ID, PREPROCESSSING_ID
-
+print("MODEL_ID:", MODEL_ID)
+print("PREPROCESSSING_ID:", PREPROCESSSING_ID)
 # %% CELL: Custom Gym Environment
 class InsulinEnv(gym.Env):
     def __init__(self, data_path, standardization_params_path, permute_feature=None):
@@ -102,24 +103,29 @@ class InsulinEnv(gym.Env):
         avg_mgdl = np.mean(mgdl_post)
         NORMAL_LOW = 70
         NORMAL_HIGH = 180
-        DOSE_THRESHOLD = 1.0
-        
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+        DOSE_THRESHOLD_PERCENT = 0.10
+        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+
+        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
             if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0
+                return 1.0 #prediccion similar a la real
             else:
                 return -0.5
-        elif avg_mgdl > NORMAL_HIGH:
-            if pred_dose > real_dose:
-                return 0.5
-            else:
+        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
+            if pred_dose > real_dose: #prediccion mayor a la real
+                return 1.0
+            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD: #prediccion similar a la real
                 return -1.0
-        else:
-            if pred_dose < real_dose:
-                return 0.5
             else:
+                return -2.0
+        else: #hipoglucemia
+            if pred_dose < real_dose: #prediccion menor a la real
+                return 1.0
+            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
                 return -1.0
-    
+            else:
+                return -2.0
+
     def render(self):
         pass
 
@@ -150,7 +156,7 @@ def train_ppo():
         device="cpu"
     )
     
-    model.learn(total_timesteps=1000000)
+    model.learn(total_timesteps=100000)
     
     return model, env
 
