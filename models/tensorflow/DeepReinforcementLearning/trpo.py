@@ -3,14 +3,14 @@ import tensorflow as tf
 import numpy as np
 import time
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, LSTM, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import MeanSquaredError
+from keras._tf_keras.keras.saving import register_keras_serializable
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable, TypeVar
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())

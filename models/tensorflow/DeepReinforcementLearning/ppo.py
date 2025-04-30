@@ -2,15 +2,15 @@ import os, sys
 import tensorflow as tf
 import numpy as np
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, LSTM, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
-from tensorflow.keras.callbacks import EarlyStopping
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import MeanSquaredError
+from keras._tf_keras.keras.callbacks import EarlyStopping
+from keras._tf_keras.keras.saving import register_keras_serializable
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 
@@ -254,7 +254,14 @@ class PPO:
         logp_normal = -0.5 * tf.square((actions - mu) / sigma) - 0.5 * tf.math.log(2.0 * np.pi) - tf.math.log(sigma)
         return tf.reduce_sum(logp_normal, axis=-1, keepdims=True)
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # states
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # actions
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # old_log_probs
+        tf.TensorSpec(shape=[None], dtype=tf.float32),        # rewards
+        tf.TensorSpec(shape=[None], dtype=tf.float32),        # advantages
+        tf.TensorSpec(shape=[None], dtype=tf.float32)         # values
+    ])
     def train_step(self, states: tf.Tensor, actions: tf.Tensor, old_log_probs: tf.Tensor, 
                   rewards: tf.Tensor, advantages: tf.Tensor, values: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
         """
@@ -269,7 +276,7 @@ class PPO:
         old_log_probs : tf.Tensor
             Log de probabilidades de acciones bajo la política antigua
         rewards : tf.Tensor
-            Recompensas recibidas
+            Recompensas recibidas (o retornos calculados)
         advantages : tf.Tensor
             Ventajas estimadas
         values : tf.Tensor

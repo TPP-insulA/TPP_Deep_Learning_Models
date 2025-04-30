@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import time
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 import tensorflow as tf
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.saving import register_keras_serializable
 from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
@@ -1044,12 +1044,6 @@ class QLearningModel(tf.keras.models.Model):
         self.history = {
             'loss': history['episode_rewards'],
             'val_loss': []
-        }
-        
-        # Preparar historial en formato Keras
-        keras_history = {
-            'loss': np.mean(history['episode_rewards']),
-            'val_loss': 0.0
         }
         
         return self.history

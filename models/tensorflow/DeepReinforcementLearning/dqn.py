@@ -1,14 +1,14 @@
 import os, sys
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import Huber
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import Huber
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import gym
@@ -543,10 +543,17 @@ class DQN:
         """
         self.target_q_network.set_weights(self.q_network.get_weights())
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),                        # states
+        tf.TensorSpec(shape=(None,), dtype=tf.int32),                               # actions
+        tf.TensorSpec(shape=(None,), dtype=tf.float32),                             # rewards
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),                        # next_states
+        tf.TensorSpec(shape=(None,), dtype=tf.float32),                             # dones
+        tf.TensorSpec(shape=(None,), dtype=tf.float32, name="importance_weights")   # importance_weights
+    ])
     def _train_step(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
                   next_states: tf.Tensor, dones: tf.Tensor, 
-                  importance_weights: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor]:
+                  importance_weights: tf.Tensor = None) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         Realiza un paso de entrenamiento para actualizar la red Q.
         

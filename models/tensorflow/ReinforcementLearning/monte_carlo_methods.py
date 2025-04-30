@@ -4,8 +4,8 @@ import time
 import pickle
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.keras import Model
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.saving import register_keras_serializable
 from typing import Dict, List, Tuple, Optional, Union, Any
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())

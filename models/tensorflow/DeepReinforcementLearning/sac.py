@@ -2,13 +2,13 @@ import os, sys
 import tensorflow as tf
 import numpy as np
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import matplotlib.pyplot as plt

@@ -1,13 +1,13 @@
 import os, sys
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import gym
@@ -570,9 +570,16 @@ class DDPG:
         
         return action
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # states
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # actions
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # rewards
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # next_states
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # dones
+        tf.TensorSpec(shape=(), dtype=tf.float32)  # gamma
+    ])
     def _update_networks(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
-                        next_states: tf.Tensor, dones: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+                        next_states: tf.Tensor, dones: tf.Tensor, gamma: float) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Actualiza las redes del actor y crítico usando el algoritmo DDPG.
         
@@ -588,6 +595,8 @@ class DDPG:
             Estados siguientes
         dones : tf.Tensor
             Indicadores de finalización
+        gamma : float
+            Factor de descuento para recompensas futuras
             
         Retorna:
         --------
@@ -602,7 +611,7 @@ class DDPG:
             target_q_values = self.target_critic([next_states, target_actions], training=False)
             
             # Calcular Q-values objetivo usando la ecuación de Bellman
-            targets = rewards + (1 - dones) * self.gamma * target_q_values
+            targets = rewards + (1 - dones) * gamma * target_q_values
             
             # Predecir Q-values actuales
             current_q_values = self.critic([states, actions], training=True)
@@ -629,8 +638,9 @@ class DDPG:
         actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
         self.actor_optimizer.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
         
-        return critic_loss, actor_loss, tf.reduce_mean(current_q_values, axis=0)
-    
+        # Retornar las pérdidas y el valor Q para seguimiento
+        return critic_loss, actor_loss, current_q_values
+        
     def train_step(self) -> Tuple[float, float, float]:
         """
         Realiza un paso de entrenamiento DDPG con un lote de experiencias.
@@ -654,8 +664,11 @@ class DDPG:
         rewards = tf.reshape(rewards, (-1, 1))
         dones = tf.reshape(dones, (-1, 1))
         
+        # Convertir gamma a tensor constante para tf.function
+        gamma_tensor = tf.constant(self.gamma, dtype=tf.float32)
+        
         # Actualizar redes
-        critic_loss, actor_loss, q_value = self._update_networks(states, actions, rewards, next_states, dones)
+        critic_loss, actor_loss, q_value = self._update_networks(states, actions, rewards, next_states, dones, gamma_tensor)
         
         # Actualizar redes target con soft update
         self.update_target_networks()

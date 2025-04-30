@@ -5,13 +5,13 @@ import matplotlib.pyplot as plt
 import time
 from types import SimpleNamespace
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, LayerNormalization, Dropout, Activation, GlobalAveragePooling1D,
     Flatten, Reshape, Conv1D, LSTM, GRU, BatchNormalization, Concatenate
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 

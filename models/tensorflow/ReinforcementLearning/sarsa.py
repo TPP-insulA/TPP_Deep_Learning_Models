@@ -5,9 +5,9 @@ import pickle
 import os
 import sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Input, Concatenate, GlobalAveragePooling1D
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import Dense, Input, Concatenate, GlobalAveragePooling1D
+from keras._tf_keras.keras.saving import register_keras_serializable
 from types import SimpleNamespace
 import matplotlib.pyplot as plt
 

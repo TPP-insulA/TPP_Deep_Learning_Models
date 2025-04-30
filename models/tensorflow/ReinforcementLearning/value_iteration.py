@@ -5,9 +5,9 @@ import time
 import pickle
 from typing import Dict, List, Tuple, Optional, Union, Any
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, Concatenate, GlobalAveragePooling1D
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import Input, Dense, Concatenate, GlobalAveragePooling1D
+from keras._tf_keras.keras.saving import register_keras_serializable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 

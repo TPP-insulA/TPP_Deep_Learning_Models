@@ -88,15 +88,19 @@ from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac
 from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
-DEBUG = False 
+DEBUG = False
+FRAMEWORK_OP = 1
+PROCESSING_OP = 1
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax", "pytorch"
-FRAMEWORK = "tensorflow"
+FRAMEWORK_OPTIONS = ["tensorflow", "jax", "pytorch"]
+FRAMEWORK = FRAMEWORK_OPTIONS[FRAMEWORK_OP] 
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
-PROCESSING = "polars"
+PROCESSING_OPTIONS = ["pandas", "polars"]
+PROCESSING = PROCESSING_OPTIONS[PROCESSING_OP]
 ## Modelos TensorFlow disponibles.
 TF_MODELS = {
     # TensorFlow
@@ -193,29 +197,29 @@ PT_MODELS = {
 # Modelos TensorFlow a utilizar
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "tf_attention_only": False,
-    "tf_cnn": False,
-    "tf_fnn": False,
-    "tf_gru": False,
-    "tf_lstm": False,
-    "tf_rnn": False,
-    "tf_tabnet": False,
-    "tf_tcn": False,
-    "tf_transformer": False,
-    "tf_wavenet": False,
+    "tf_attention_only": True,
+    "tf_cnn": True,
+    "tf_fnn": True,
+    "tf_gru": True,
+    "tf_lstm": True,
+    "tf_rnn": True,
+    "tf_tabnet": True,
+    "tf_tcn": True,
+    "tf_transformer": True,
+    "tf_wavenet": True,
     ## Modelos de Aprendizaje por Refuerzo
-    "tf_monte_carlo": False,
-    "tf_policy_iteration": False,
-    "tf_q_learning": False,
+    "tf_monte_carlo": True,
+    "tf_policy_iteration": True,
+    "tf_q_learning": True,
     "tf_reinforce_mcpg": True,
-    "tf_sarsa": False,
-    "tf_value_iteration": False,
+    "tf_sarsa": True,
+    "tf_value_iteration": True,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "tf_a2c": False,
-    "tf_a3c": False,
-    "tf_ddpg": False,
-    "tf_dqn": False,
-    "tf_ppo": False,
+    "tf_a2c": True,
+    "tf_a3c": True,
+    "tf_ddpg": True,
+    "tf_dqn": True,
+    "tf_ppo": True,
     "tf_sac": True,
     "tf_trpo": True,
 }

@@ -1,12 +1,12 @@
 import os, sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Dropout, LayerNormalization,
     MultiHeadAttention, GlobalAveragePooling1D, GlobalMaxPooling1D, 
     Concatenate, Add
 )
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.saving import register_keras_serializable
 from typing import Dict, Tuple, Any, Optional, Callable, Union
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
@@ -213,10 +213,10 @@ def create_attention_block(x: tf.Tensor, num_heads: int, key_dim: int,
     """
     # Codificación de posición relativa
     if ATTENTION_CONFIG['use_relative_attention']:
-        pos_encoding = RelativePositionEncoding(
-            ATTENTION_CONFIG['max_relative_position'],
-            key_dim
-        )(x)
+        # pos_encoding = RelativePositionEncoding(
+        #     ATTENTION_CONFIG['max_relative_position'],
+        #     key_dim
+        # )(x)
         
         # Modificado: eliminado el parámetro attention_bias que no está soportado
         mha = MultiHeadAttention(
@@ -273,20 +273,13 @@ def create_attention_model(cgm_shape: Tuple[int, ...], other_features_shape: Tup
     
     # Definir entrada CGM con la forma correcta (tiempo, características)
     cgm_input = Input(shape=cgm_shape)
-    
-    # Manejar diferentes formatos de other_features_shape
-    if len(other_features_shape) == 1:
-        # Si es una tupla con un solo elemento (por ejemplo: (6,))
-        other_input = Input(shape=other_features_shape)
-    else:
-        # Si es una tupla con más elementos (asumimos que ya está en formato correcto)
-        other_input = Input(shape=other_features_shape)
+    other_input = Input(shape=other_features_shape)
     
     # Proyección inicial - preservar la dimensionalidad temporal
     x = Dense(ATTENTION_CONFIG['key_dim'] * ATTENTION_CONFIG['num_heads'])(cgm_input)
     
     # Parámetros del modelo
-    embedding_dim = ATTENTION_CONFIG['key_dim'] * ATTENTION_CONFIG['num_heads']
+    # embedding_dim = ATTENTION_CONFIG['key_dim'] * ATTENTION_CONFIG['num_heads']
     
     # Stochastic depth (dropout de capas)
     survive_rates = tf.linspace(1.0, 0.5, ATTENTION_CONFIG['num_layers'])
