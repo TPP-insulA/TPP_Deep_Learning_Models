@@ -16,6 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DQN_CONFIG, EARLY_STOPPING_POLICY
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -47,7 +48,7 @@ class ReplayBuffer:
     """
     def __init__(self, capacity: int = 10000) -> None:
         self.buffer = deque(maxlen=capacity)
-        self.rng = np.random.Generator(np.random.PCG64(42))
+        self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
     
     def add(self, state: np.ndarray, action: int, reward: float, 
            next_state: np.ndarray, done: float) -> None:
@@ -369,7 +370,7 @@ class QNetwork(nn.Module):
         int
             Acción seleccionada según la política
         """
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         if rng.random() < epsilon:
             # Exploración: acción aleatoria
             return rng.integers(0, self.action_dim)
@@ -408,7 +409,7 @@ class DQN:
         action_dim: int,
         config: Optional[Dict[str, Any]] = None,
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         torch.manual_seed(seed)
@@ -1145,7 +1146,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_dim=action_dim,
         config=config,
         hidden_units=config['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper para DQN

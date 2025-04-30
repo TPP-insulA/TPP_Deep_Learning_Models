@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import QLEARNING_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 
 class QLearning:
     """
@@ -31,7 +32,7 @@ class QLearning:
         epsilon_decay: float = QLEARNING_CONFIG['epsilon_decay'],
         use_decay_schedule: str = QLEARNING_CONFIG['use_decay_schedule'],
         decay_steps: int = QLEARNING_CONFIG['decay_steps'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente Q-Learning.
@@ -897,7 +898,7 @@ class QLearningModel(tf.keras.models.Model):
                 self.features = features
                 self.targets = targets
                 self.model = model
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1165,7 +1166,7 @@ def create_q_learning_model(cgm_shape: Tuple[int, ...], other_features_shape: Tu
         epsilon_decay=QLEARNING_CONFIG['epsilon_decay'],
         use_decay_schedule=QLEARNING_CONFIG['use_decay_schedule'],
         decay_steps=QLEARNING_CONFIG['decay_steps'],
-        seed=QLEARNING_CONFIG.get('seed', 42)
+        seed=QLEARNING_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver el modelo wrapper

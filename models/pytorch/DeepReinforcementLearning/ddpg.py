@@ -16,6 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG, EARLY_STOPPING_POLICY
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -45,7 +46,7 @@ class ReplayBuffer:
     """
     def __init__(self, capacity: int = 100000) -> None:
         self.buffer = deque(maxlen=capacity)
-        self.rng = np.random.Generator(np.random.PCG64(42))
+        self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
     
     def add(self, state: np.ndarray, action: np.ndarray, reward: float, 
            next_state: np.ndarray, done: float) -> None:
@@ -132,7 +133,7 @@ class OUActionNoise:
         Semilla para la generación de números aleatorios (default: 42)
     """
     def __init__(self, mean: np.ndarray, std_deviation: np.ndarray, theta: float = 0.15, 
-                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = 42) -> None:
+                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = CONST_DEFAULT_SEED) -> None:
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -407,7 +408,7 @@ class DDPG:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Usar configuración proporcionada o por defecto
         self.config = config or DDPG_CONFIG
@@ -1285,7 +1286,7 @@ class DDPGWrapper(nn.Module):
                 self.other_encoder = other_encoder
                 self.current_idx = 0
                 self.num_samples = len(targets)
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.action_space = SimpleNamespace(
                     sample=lambda: self.rng.uniform(0, 15, (1,)),
                     n=1,
@@ -1498,7 +1499,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         action_high=action_high,
         action_low=action_low,
         config=config,
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
 
     # Crear wrapper para DDPG
@@ -1567,7 +1568,7 @@ def create_ddpg_model_wrapper(cgm_shape: Tuple[int, ...], other_features_shape: 
             action_high=action_high,
             action_low=action_low,
             config=config,
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Create and return the wrapper model (important: inherits from nn.Module)

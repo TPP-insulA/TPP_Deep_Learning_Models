@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.printer import print_debug
 
 # Constantes para evitar duplicación
@@ -129,7 +130,7 @@ class OUActionNoise:
         Semilla para la generación de números aleatorios (default: 42)
     """
     def __init__(self, mean: np.ndarray, std_deviation: np.ndarray, theta: float = 0.15, 
-                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = 42):
+                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = CONST_DEFAULT_SEED):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -414,7 +415,7 @@ class DDPG:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ):
         # Use provided config or default
         self.config = config or DDPG_CONFIG
@@ -688,7 +689,7 @@ class DDPG:
         if step_counter < warmup_steps:
             # Exploración inicial uniforme - usando el generador np.random.default_rng con semilla
             # para asegurar reproducibilidad
-            rng = np.random.default_rng(seed=42)  # Using a default seed
+            rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)  # Using a default seed
             return rng.uniform(
                 low=self.action_low,
                 high=self.action_high,
@@ -1351,7 +1352,7 @@ class DDPGWrapper(Model):
                 
                 # Definir espacios de observación y acción
                 # Estado: combinación de CGM y otras características codificadas
-                self.rng = np.random.default_rng(42)  # Crear una instancia de Generator
+                self.rng = np.random.default_rng(CONST_DEFAULT_SEED)  # Crear una instancia de Generator
             def reset(self) -> Tuple[np.ndarray, Dict]:
                 """
                 Reinicia el entorno y devuelve la observación inicial.
@@ -1591,7 +1592,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         'epsilon': DDPG_CONFIG['epsilon'],
         'actor_activation': DDPG_CONFIG['actor_activation'],
         'critic_activation': DDPG_CONFIG['critic_activation'],
-        'seed': DDPG_CONFIG.get('seed', 42)
+        'seed': DDPG_CONFIG.get('seed', CONST_DEFAULT_SEED)
     }
     
     # Crear agente DDPG

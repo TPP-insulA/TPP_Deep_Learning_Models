@@ -10,6 +10,7 @@ import pickle
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
 from custom.rl_model_wrapper import RLModelWrapperJAX
 from custom.printer import print_success, print_error
@@ -1017,7 +1018,7 @@ class ValueIterationWrapper:
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 

@@ -13,6 +13,7 @@ from functools import partial
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import SARSA_CONFIG
 from custom.rl_model_wrapper import RLModelWrapperJAX
 
@@ -50,7 +51,7 @@ class SARSA:
         self, 
         env: Any, 
         config: Optional[Dict] = None,
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:
@@ -691,7 +692,7 @@ def create_sarsa_agent(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
     sarsa_agent = SARSA(
         env=temp_env, 
         config=sarsa_config, 
-        seed=kwargs.get('seed', 42),
+        seed=kwargs.get('seed', CONST_DEFAULT_SEED),
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )

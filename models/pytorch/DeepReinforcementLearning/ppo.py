@@ -16,6 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import PPO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -246,7 +247,7 @@ class PPO:
         entropy_coef: float = PPO_CONFIG['entropy_coef'],
         value_coef: float = PPO_CONFIG['value_coef'],
         max_grad_norm: float = PPO_CONFIG['max_grad_norm'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         torch.manual_seed(seed)
@@ -926,7 +927,7 @@ class PPOWrapper(nn.Module):
                 self.wrapper = wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Definir espacios de observación y acción
                 self.observation_space = SimpleNamespace(
@@ -1137,7 +1138,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             entropy_coef=PPO_CONFIG['entropy_coef'],
             value_coef=PPO_CONFIG['value_coef'],
             max_grad_norm=PPO_CONFIG['max_grad_norm'],
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Crear wrapper PPO

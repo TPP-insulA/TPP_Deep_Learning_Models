@@ -13,6 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import VALUE_ITERATION_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 
 # Constantes para cadenas repetidas
 CONST_ITERACION = "Iteración"
@@ -1179,7 +1180,7 @@ def _prepare_data_for_env(
     max_samples = min(500, len(target_np))  # Reducido a 500 muestras máximo
     if len(target_np) > max_samples:
         # Usar una semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         indices = rng.choice(len(target_np), max_samples, replace=False)
         cgm_np = cgm_np[indices]
         other_np = other_np[indices]

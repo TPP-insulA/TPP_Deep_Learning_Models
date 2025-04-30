@@ -16,6 +16,7 @@ import gym
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import DQN_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -184,7 +185,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             (states, actions, rewards, next_states, dones, índices, pesos de importancia)
         """
         # Crear generador NumPy moderno con semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         
         if len(self.buffer) < batch_size:
             idx = rng.choice(len(self.buffer), len(self.buffer), replace=False)
@@ -389,7 +390,7 @@ class DQN:
         action_dim: int,
         config: Optional[Dict[str, Any]] = None,
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente DQN.
@@ -1063,7 +1064,7 @@ class DQNWrapper:
         self.dqn_agent = dqn_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
-        self.rng_key = jax.random.PRNGKey(42)
+        self.rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         
         # Configurar codificadores para procesar entradas
         self._setup_encoders()
@@ -1399,7 +1400,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_dim=action_dim,
         config=config,
         hidden_units=DQN_CONFIG['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper para DQN

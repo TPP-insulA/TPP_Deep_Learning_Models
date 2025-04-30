@@ -15,6 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SAC_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from models.early_stopping import get_early_stopping_config
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
@@ -44,7 +45,7 @@ class ReplayBuffer:
     seed : int, opcional
         Semilla para reproducibilidad (default: 42)
     """
-    def __init__(self, capacity: int, seed: int = 42) -> None:
+    def __init__(self, capacity: int, seed: int = CONST_DEFAULT_SEED) -> None:
         self.buffer = deque(maxlen=capacity)
         self.rng = np.random.Generator(np.random.PCG64(seed))
     
@@ -340,7 +341,7 @@ class SAC(nn.Module):
         action_dim: int,
         config: Dict = SAC_CONFIG,
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         super(SAC, self).__init__()
         
@@ -977,7 +978,7 @@ class SACWrapper(nn.Module):
                 self.wrapper = wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Definir espacios
                 self.observation_space = SimpleNamespace(
@@ -1496,7 +1497,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             action_dim=action_dim,
             config=SAC_CONFIG,
             hidden_units=SAC_CONFIG.get('hidden_units', [256, 256]),
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Crear wrapper SAC

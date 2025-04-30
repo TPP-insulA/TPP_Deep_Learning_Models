@@ -17,6 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import REINFORCE_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 
 # Constantes para mensajes y valores
 CONST_ENTRENANDO = "Entrenando agente REINFORCE..."
@@ -369,7 +370,7 @@ class REINFORCE:
         use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
         hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente REINFORCE.
@@ -896,7 +897,7 @@ class REINFORCEModel(tf.keras.models.Model):
                 self.features = features
                 self.targets = targets
                 self.model = model
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1184,7 +1185,7 @@ def create_reinforce_mcpg_model(cgm_shape: Tuple[int, ...], other_features_shape
         use_baseline=REINFORCE_CONFIG['use_baseline'],
         entropy_coef=REINFORCE_CONFIG['entropy_coef'],
         hidden_sizes=REINFORCE_CONFIG['hidden_units'],
-        seed=REINFORCE_CONFIG.get('seed', 42)
+        seed=REINFORCE_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver el modelo wrapper

@@ -14,6 +14,7 @@ from tqdm import tqdm
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import A2C_A3C_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -1349,7 +1350,7 @@ class A2CWrapper:
         self.other_features_shape = other_features_shape
         
         # Inicializar clave para generación de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1604,7 +1605,7 @@ class A2CWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -2042,7 +2043,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         value_coef=A2C_A3C_CONFIG['value_coef'],
         max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators
@@ -2100,7 +2101,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         value_coef=A2C_A3C_CONFIG['value_coef'],
         max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators

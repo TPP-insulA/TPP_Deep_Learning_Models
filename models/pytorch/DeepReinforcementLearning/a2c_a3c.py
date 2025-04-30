@@ -17,6 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import A2C_A3C_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -282,7 +283,7 @@ class A2C:
         value_coef: float = A2C_A3C_CONFIG['value_coef'],
         max_grad_norm: float = A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Parámetros del modelo
         self.state_dim = state_dim
@@ -764,7 +765,7 @@ class A3C(A2C):
         value_coef: float = A2C_A3C_CONFIG['value_coef'],
         max_grad_norm: float = A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         super(A3C, self).__init__(
             state_dim, action_dim, continuous,
@@ -964,7 +965,7 @@ class A3CWorker:
         self.update_local_model()
         
         # Generador de números aleatorios con semilla basada en ID
-        self.rng = np.random.Generator(np.random.PCG64(42 + worker_id))
+        self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED + worker_id))
     
     def update_local_model(self) -> None:
         """
@@ -1465,7 +1466,7 @@ class A2CWrapper(nn.Module):
                 self.model = model_wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Para compatibilidad con algoritmos RL
                 action_dim = model_wrapper.a2c_agent.action_dim
@@ -1762,7 +1763,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             value_coef=A2C_A3C_CONFIG['value_coef'],
             max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
             hidden_units=A2C_A3C_CONFIG['hidden_units'],
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Crear y devolver el wrapper
@@ -1820,7 +1821,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             value_coef=A2C_A3C_CONFIG['value_coef'],
             max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
             hidden_units=A2C_A3C_CONFIG['hidden_units'],
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Crear y devolver el wrapper

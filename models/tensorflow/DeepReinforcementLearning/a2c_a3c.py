@@ -11,12 +11,13 @@ from tensorflow.keras.optimizers import Adam
 import threading
 from typing import Tuple, Dict, List, Any, Optional, Union, Callable
 
-from custom.printer import print_success
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import A2C_A3C_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
+from custom.printer import print_success
 
 
 class ActorCriticModel(Model):
@@ -1374,7 +1375,7 @@ class A2CWrapper(Model):
                 self.model = model_wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.lock = threading.RLock()  # Lock para sincronización en entrenamiento asíncrono
                 
                 # Para compatibilidad con algoritmos RL

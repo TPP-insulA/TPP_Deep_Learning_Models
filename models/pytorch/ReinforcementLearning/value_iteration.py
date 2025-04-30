@@ -12,6 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
+from constants.constants import CONST_DEFAULT_SEED
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 from custom.printer import print_success, print_warning, print_error, print_info
 
@@ -80,7 +81,7 @@ class ValueIteration:
         self.iteration_times = []
         
         # Configurar generador de números aleatorios
-        self.rng = np.random.Generator(np.random.PCG64(42))
+        self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
     
     def _calculate_action_values(self, state: int, transitions: Dict[int, Dict[int, List]]) -> torch.Tensor:
         """
@@ -909,7 +910,7 @@ class ValueIterationModel(nn.Module):
         
         if len(targets) > max_samples:
             # Muestreo aleatorio
-            rng = np.random.Generator(np.random.PCG64(42))
+            rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
             indices = rng.choice(len(targets), max_samples, replace=False)
             cgm_data = cgm_data[indices]
             other_features = other_features[indices]
@@ -940,7 +941,7 @@ class ValueIterationModel(nn.Module):
                 self.model = model
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Preparar entorno
                 self.P = {}

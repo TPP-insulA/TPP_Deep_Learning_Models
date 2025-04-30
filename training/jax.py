@@ -14,7 +14,7 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 import orbax.checkpoint as orbax_ckpt
-from custom.printer import print_debug
+from custom.printer import print_debug, print_success
 from training.common import (
     calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
     enhance_features, get_model_type, process_training_results
@@ -633,6 +633,12 @@ def train_model_sequential(model_creator: Callable,
             epochs=CONST_EPOCHS, batch_size=CONST_DEFAULT_BATCH_SIZE
         )
         
+        # Guardar el modelo entrenado
+        os.makedirs(models_dir, exist_ok=True)
+        model_path = os.path.join(models_dir, f"{name}.pkl")
+        model_wrapper.save(model_path)
+        print_success(f"Modelo guardado en {model_path}")
+        
         # Predecir
         y_pred = model_wrapper.predict(x_cgm_test, x_other_test)
         
@@ -771,6 +777,15 @@ def predict_model(model_path: str,
     np.ndarray
         Predicciones del modelo
     """
+    # Verificar si el modelo es archivo pickle (modelo wrapper)
+    if model_path.endswith('.pkl'):
+        # Crear el Wrapper
+        model = model_creator()
+        # Cargar el modelo
+        model.load(model_path)
+        # Predecir
+        return model.predict(x_cgm, x_other)
+    
     # Determinar formas de entrada si no se proporcionan
     if input_shapes is None:
         input_shapes = ((x_cgm.shape[1:]), (x_other.shape[1:]))

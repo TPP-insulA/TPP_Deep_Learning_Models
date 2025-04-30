@@ -13,6 +13,7 @@ import pickle
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import DDPG_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -131,7 +132,7 @@ class OUActionNoise:
         Semilla para la generación de números aleatorios (default: 42)
     """
     def __init__(self, mean: np.ndarray, std_deviation: np.ndarray, theta: float = 0.15, 
-                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = 42):
+                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = CONST_DEFAULT_SEED):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -468,7 +469,7 @@ class DDPG:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ):
         # Use provided config or default
         self.config = config or DDPG_CONFIG
@@ -1272,7 +1273,7 @@ class DDPGWrapper:
         Configura los codificadores para proyectar datos de entrada al espacio de estados.
         """
         # Semilla para reproducibilidad
-        rng_key = jax.random.PRNGKey(42)
+        rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         key_cgm, key_other = jax.random.split(rng_key)
         
         # Obtener dimensiones y convertirlas explícitamente a enteros
@@ -1452,7 +1453,7 @@ class DDPGWrapper:
                 self.other_encoder = other_encoder
                 self.current_idx = 0
                 self.num_samples = len(targets)
-                self.rng = np.random.default_rng(seed=42)
+                self.rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
                 self.action_space = SimpleNamespace(
                     sample=lambda: self.rng.uniform(0, 15, (1,)),
                     n=1,
@@ -1602,7 +1603,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         'critic_activation': DDPG_CONFIG['critic_activation'],
         'dropout_rate': DDPG_CONFIG['dropout_rate'],
         'epsilon': DDPG_CONFIG['epsilon'],
-        'seed': 42
+        'seed': CONST_DEFAULT_SEED
     }
     
     # Crear agente DDPG
@@ -1612,7 +1613,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         action_high=action_high,
         action_low=action_low,
         config=config,
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper DDPG

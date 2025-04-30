@@ -12,6 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import MONTE_CARLO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.printer import print_debug
 
 class MonteCarlo:
@@ -125,7 +126,7 @@ class MonteCarlo:
         int
             La acción seleccionada
         """
-        rng = np.random.default_rng(42)  # Crear una instancia de Generator
+        rng = np.random.default_rng(CONST_DEFAULT_SEED)  # Crear una instancia de Generator
         if explore and rng.random() < self.epsilon:
             return rng.integers(0, self.n_actions)  # Exploración uniforme
         else:
@@ -460,7 +461,7 @@ class MonteCarlo:
                 env.render()
             
             # Seleccionar acción usando política de comportamiento
-            rng = np.random.default_rng(42)  # Generator with seed for reproducibility
+            rng = np.random.default_rng(CONST_DEFAULT_SEED)  # Generator with seed for reproducibility
             if rng.random() < behavior_epsilon:
                 action = rng.integers(0, self.n_actions)
                 behavior_prob = behavior_epsilon / self.n_actions
@@ -616,7 +617,7 @@ class MonteCarlo:
         """
         # Iniciar con un estado aleatorio (exploring start)
         if hasattr(env, 'set_state'):
-            rng = np.random.default_rng(42)
+            rng = np.random.default_rng(CONST_DEFAULT_SEED)
             random_state = rng.integers(0, self.n_states)
             env.set_state(random_state)
             state = random_state
@@ -625,7 +626,7 @@ class MonteCarlo:
             state, _ = env.reset()
             
         # Seleccionar una primera acción aleatoria para garantizar exploring starts
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(CONST_DEFAULT_SEED)
         action = rng.integers(0, self.n_actions)
         
         # Ejecutar la primera acción
@@ -1419,7 +1420,7 @@ class MonteCarlo:
                 env.render()
             
             # Seleccionar acción usando política de comportamiento
-            rng = np.random.default_rng(42)
+            rng = np.random.default_rng(CONST_DEFAULT_SEED)
             if rng.random() < behavior_epsilon:
                 action = rng.integers(0, self.n_actions)
                 behavior_prob = behavior_epsilon / self.n_actions
@@ -2050,7 +2051,7 @@ class MonteCarlo:
         Tuple[int, float]
             Acción seleccionada y su probabilidad
         """
-        rng = np.random.default_rng(42)
+        rng = np.random.default_rng(CONST_DEFAULT_SEED)
         if rng.random() < epsilon:
             action = rng.integers(0, self.n_actions)
             prob = epsilon / self.n_actions

@@ -13,6 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TRPO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -188,7 +189,7 @@ class TRPO:
         backtrack_coeff: float = TRPO_CONFIG['backtrack_coeff'],
         cg_iters: int = TRPO_CONFIG['cg_iters'],
         damping: float = TRPO_CONFIG['damping'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         torch.manual_seed(seed)
@@ -1301,7 +1302,7 @@ class TRPOWrapper(nn.Module):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1426,7 +1427,7 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
             backtrack_coeff=TRPO_CONFIG['backtrack_coeff'],
             cg_iters=TRPO_CONFIG['cg_iters'],
             damping=TRPO_CONFIG['damping'],
-            seed=TRPO_CONFIG.get('seed', 42)
+            seed=TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         )
         
         wrapper = TRPOWrapper(

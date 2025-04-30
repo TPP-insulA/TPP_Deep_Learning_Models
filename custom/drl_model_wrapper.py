@@ -12,9 +12,10 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm.auto import tqdm
 
+from constants.constants import CONST_DEFAULT_SEED
+from config.models_config import EARLY_STOPPING_POLICY
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_warning, print_error, print_success
-from config.models_config import EARLY_STOPPING_POLICY
 
 # Constantes para uso repetido
 CONST_ACTOR = "actor"
@@ -1482,7 +1483,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
                 self.model = self.model.to(self.device)
             
         # Crear un generador de numpy para operaciones aleatorias
-        self.rng = np.random.Generator(np.random.PCG64(model_kwargs.get('seed', 42)))
+        self.rng = np.random.Generator(np.random.PCG64(model_kwargs.get('seed', CONST_DEFAULT_SEED)))
         
         # Configuración para early stopping
         self.early_stopping_config = {

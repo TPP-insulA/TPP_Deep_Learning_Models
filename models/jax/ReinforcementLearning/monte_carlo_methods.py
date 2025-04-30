@@ -11,6 +11,7 @@ from tqdm.auto import tqdm
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 sys.path.append(PROJECT_ROOT)
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import MONTE_CARLO_CONFIG
 from custom.rl_model_wrapper import RLModelWrapperJAX
 from custom.printer import print_warning # Importar print_warning
@@ -43,7 +44,7 @@ class MonteCarlo:
         epsilon_decay: float = MONTE_CARLO_CONFIG['epsilon_decay'],
         first_visit: bool = MONTE_CARLO_CONFIG['first_visit'],
         evaluation_mode: bool = False,
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:
@@ -372,7 +373,7 @@ def create_monte_carlo_agent(cgm_shape: Tuple[int, ...], other_features_shape: T
     # Configurar el tamaño del espacio de estados y acciones
     n_states = kwargs.get('n_states', 100)  # Ejemplo: discretización del espacio de estados
     n_actions = kwargs.get('n_actions', 20)   # Ejemplo: niveles discretos de dosis de insulina
-    seed = kwargs.get('seed', 42)
+    seed = kwargs.get('seed', CONST_DEFAULT_SEED)
 
     mc_agent = MonteCarlo(
         n_states=n_states,

@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import TRPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -195,7 +196,7 @@ class TRPO:
         backtrack_coeff: float = TRPO_CONFIG['backtrack_coeff'],
         cg_iters: int = TRPO_CONFIG['cg_iters'],
         damping: float = TRPO_CONFIG['damping'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # En lugar de obtener la semilla de la configuración, usar el parámetro
         key = jax.random.PRNGKey(seed)
@@ -1052,7 +1053,7 @@ class TRPO:
         losses = []
         
         # Create a Generator instance with a fixed seed for reproducibility
-        seed = TRPO_CONFIG.get('seed', 42)
+        seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         rng = np.random.default_rng(seed)
         
         for _ in range(epochs):
@@ -1599,7 +1600,7 @@ class TRPOWrapper:
         Configura las funciones de codificación para procesar datos de entrada.
         """
         # Inicializa parámetros para la codificación
-        self.key = jax.random.key(42)
+        self.key = jax.random.key(CONST_DEFAULT_SEED)
         
         # Funciones de codificación con hparams
         def init_encoder_params(key, input_shape, hidden_sizes):
@@ -1814,7 +1815,7 @@ class TRPOWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1991,7 +1992,7 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         backtrack_coeff=TRPO_CONFIG['backtrack_coeff'],
         cg_iters=TRPO_CONFIG['cg_iters'],
         damping=TRPO_CONFIG['damping'],
-        seed=TRPO_CONFIG.get('seed', 42)
+        seed=TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver modelo wrapper

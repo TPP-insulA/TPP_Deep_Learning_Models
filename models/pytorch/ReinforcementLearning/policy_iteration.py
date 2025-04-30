@@ -9,6 +9,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import POLICY_ITERATION_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 from custom.printer import print_warning
 
@@ -42,7 +43,7 @@ class PolicyIteration:
         theta: float = POLICY_ITERATION_CONFIG[CONST_THETA],
         max_iterations: int = POLICY_ITERATION_CONFIG[CONST_MAX_ITER],
         evaluation_mode: bool = False,
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:
@@ -627,7 +628,7 @@ def create_policy_iteration_model(cgm_shape: Tuple[int, ...], other_features_sha
         max_iterations=POLICY_ITERATION_CONFIG[CONST_MAX_ITER],
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
-        seed=kwargs.get('seed', 42)
+        seed=kwargs.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver el modelo wrapper

@@ -13,9 +13,9 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import POLICY_ITERATION_CONFIG
+from constants.constants import CONST_LOSS, CONST_VAL_LOSS, CONST_DEFAULT_SEED # Importar constantes comunes
 from custom.model_wrapper import ModelWrapper # Import base class
 from custom.printer import print_info, print_warning # For better logging
-from constants.constants import CONST_LOSS, CONST_VAL_LOSS # Importar constantes comunes
 
 # Constantes para rutas de figuras y mensajes recurrentes
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "policy_iteration")
@@ -47,7 +47,7 @@ class PolicyIteration:
         theta: float = POLICY_ITERATION_CONFIG['theta'],
         max_iterations: int = POLICY_ITERATION_CONFIG['max_iterations'],
         max_iterations_eval: int = POLICY_ITERATION_CONFIG['max_iterations_eval'],
-        seed: int = POLICY_ITERATION_CONFIG.get('seed', 42)
+        seed: int = POLICY_ITERATION_CONFIG.get('seed', CONST_DEFAULT_SEED)
     ) -> None:
         """
         Inicializa el agente de Iteración de Política.

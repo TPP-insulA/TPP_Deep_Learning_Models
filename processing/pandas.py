@@ -3,10 +3,16 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import os
+import sys
 from joblib import Parallel, delayed
 import time
 from tqdm import tqdm
 from datetime import timedelta
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.getcwd(), ".."))
+sys.path.append(PROJECT_ROOT) 
+
+from constants.constants import CONST_DEFAULT_SEED
 
 # Global configuration
 CONFIG = {
@@ -414,7 +420,7 @@ def assign_subjects_to_sets(df_final: pd.DataFrame, sorted_subjects: np.ndarray,
     
     # Shuffle remaining subjects for randomness
     remaining_subjects_list = list(remaining_subjects)
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
     rng.shuffle(remaining_subjects_list)
     
     # Assign each subject to minimize distribution differences

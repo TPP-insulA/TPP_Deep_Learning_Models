@@ -15,6 +15,8 @@ matplotlib.use('Agg')
 PROJECT_ROOT = os.path.abspath(os.path.join(os.getcwd(), ".."))
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
+
 # Global configuration
 CONFIG = {
     "batch_size": 128,
@@ -525,7 +527,7 @@ def split_data(df_final: pl.DataFrame) -> tuple:
     val_subjects = []
 
     # Aleatorizar la lista restante y convertir a pandas para cálculos
-    rng = np.random.default_rng(seed=42)
+    rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
     rng.shuffle(remaining_subjects)
     df_final_pd = df_final.to_pandas()
 

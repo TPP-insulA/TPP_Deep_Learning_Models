@@ -13,6 +13,7 @@ import time
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 
+from constants.constants import CONST_DEFAULT_SEED
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_log, print_success, print_error, print_warning
 
@@ -40,7 +41,7 @@ class RLModelWrapperTF(ModelWrapper):
         self.model_cls = model_cls
         self.model_kwargs = model_kwargs
         self.model = None # El modelo se instancia en start
-        self.rng = np.random.default_rng(model_kwargs.get('seed', 42)) # Generador aleatorio para mezclar datos
+        self.rng = np.random.default_rng(model_kwargs.get('seed', CONST_DEFAULT_SEED)) # Generador aleatorio para mezclar datos
 
     def _get_input_shapes(self, x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[Tuple, Tuple]:
         """
@@ -1165,7 +1166,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
                     self.rng = np.random.Generator(np.random.PCG64(seed_val))
                 except (TypeError, IndexError):
                     # Usar valor por defecto si falla
-                    seed_val = 42
+                    seed_val = CONST_DEFAULT_SEED
                     torch.manual_seed(seed_val)
                     self.rng = np.random.Generator(np.random.PCG64(seed_val))
         

@@ -9,12 +9,12 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense, Concatenate
 from keras.saving import register_keras_serializable
 
-from custom.printer import print_warning, print_success
-
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import POLICY_ITERATION_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
+from custom.printer import print_warning, print_success
 
 # Constantes para rutas y mensajes
 FIGURAS_DIR = "figures/reinforcement_learning/policy_iteration"
@@ -42,7 +42,7 @@ class PolicyIteration:
         theta: float = POLICY_ITERATION_CONFIG['theta'],
         max_iterations: int = POLICY_ITERATION_CONFIG['max_iterations'],
         max_iterations_eval: int = POLICY_ITERATION_CONFIG['max_iterations_eval'],
-        seed: int = POLICY_ITERATION_CONFIG.get('seed', 42)
+        seed: int = POLICY_ITERATION_CONFIG.get('seed', CONST_DEFAULT_SEED)
     ) -> None:
         """
         Inicializa el agente de Iteración de Política.
@@ -1044,7 +1044,7 @@ def _prepare_data_for_env(
     max_samples = min(500, len(target_np))  # Reducido a 500 muestras máximo
     if len(target_np) > max_samples:
         # Usar una semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         indices = rng.choice(len(target_np), max_samples, replace=False)
         cgm_np = cgm_np[indices]
         other_np = other_np[indices]
@@ -1161,7 +1161,7 @@ def _create_training_environment(
             self.features = features
             self.targets = targets
             self.agent = agent
-            self.rng = np.random.Generator(np.random.PCG64(42))
+            self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
             self.current_idx = 0
             self.max_idx = len(targets) - 1
             

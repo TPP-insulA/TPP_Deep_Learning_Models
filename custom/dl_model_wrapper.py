@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
+from constants.constants import CONST_DEFAULT_SEED
 from custom.model_wrapper import ModelWrapper
 from custom.printer import cprint, print_debug, print_info, print_error
 
@@ -318,7 +319,7 @@ class DLModelWrapperJAX(ModelWrapper):
         """
         # Si no se proporciona una clave, crea una con una semilla predeterminada
         if rng_key is None:
-            rng_key = jax.random.PRNGKey(42)
+            rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         
         # Inicializa el modelo
         self.initialize(x_cgm, x_other, y, seed=int(rng_key[0]))
@@ -523,7 +524,7 @@ class DLModelWrapperJAX(ModelWrapper):
         num_samples = len(y)
         indices = np.arange(num_samples)
         # Create a random generator with a seed for reproducibility
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         rng.shuffle(indices)
         
         # Calculate number of batches for the progress bar
@@ -1188,7 +1189,7 @@ class DLModelWrapperPyTorch(ModelWrapper):
                     torch.manual_seed(seed_val)
                     np.random.seed(seed_val)
                 except (TypeError, IndexError):
-                    torch.manual_seed(42)  # Valor por defecto
+                    torch.manual_seed(CONST_DEFAULT_SEED)  # Valor por defecto
         
         return self.model
     

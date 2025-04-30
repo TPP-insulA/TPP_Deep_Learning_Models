@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import PPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -152,7 +153,7 @@ class PPO:
         entropy_coef: float = PPO_CONFIG['entropy_coef'],
         value_coef: float = PPO_CONFIG['value_coef'],
         max_grad_norm: Optional[float] = PPO_CONFIG['max_grad_norm'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         key = jax.random.PRNGKey(seed)
@@ -622,7 +623,7 @@ class PPO:
         indices = np.arange(len(states))
         
         # Crear un generador de números aleatorios con semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(seed=42))
+        rng = np.random.Generator(np.random.PCG64(seed=CONST_DEFAULT_SEED))
         
         # Múltiples épocas de actualización con los mismos datos
         for _ in range(update_iters):
@@ -950,7 +951,7 @@ class PPOWrapper:
         self.other_features_shape = other_features_shape
         
         # Inicializar generador de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1173,7 +1174,7 @@ class PPOWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1321,7 +1322,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         entropy_coef=PPO_CONFIG['entropy_coef'],
         value_coef=PPO_CONFIG['value_coef'],
         max_grad_norm=PPO_CONFIG['max_grad_norm'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators

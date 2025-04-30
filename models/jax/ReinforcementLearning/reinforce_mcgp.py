@@ -17,6 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import REINFORCE_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.rl_model_wrapper import RLModelWrapperJAX
 from custom.printer import print_debug, print_warning
 
@@ -154,7 +155,7 @@ class REINFORCE:
         continuous: bool = True,
         use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:
@@ -1573,7 +1574,7 @@ class REINFORCEWrapper:
         self.other_features_shape = other_features_shape
         
         # Inicializar clave para generación de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -2063,7 +2064,7 @@ class REINFORCEWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -2555,7 +2556,7 @@ def create_reinforce_mcgp_model(cgm_shape: Tuple[int, ...], other_features_shape
         hidden_units=REINFORCE_CONFIG['hidden_units'],
         use_baseline=REINFORCE_CONFIG['use_baseline'],
         entropy_coef=REINFORCE_CONFIG['entropy_coef'],
-        seed=kwargs.get('seed', 42),
+        seed=kwargs.get('seed', CONST_DEFAULT_SEED),
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )

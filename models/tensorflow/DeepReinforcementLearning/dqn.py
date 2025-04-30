@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DQN_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.drl_model_wrapper import DRLModelWrapper, DRLModelWrapperTF
 
 class ReplayBuffer:
@@ -169,7 +170,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             probabilities /= np.sum(probabilities)
             
             # Muestreo según distribución
-            rng = np.random.default_rng(seed=42)
+            rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
             idx = rng.choice(len(self.buffer), batch_size, p=probabilities, replace=False).tolist()
         
         # Extraer batch
@@ -414,7 +415,7 @@ class QNetwork(Model):
         int
             Acción seleccionada según la política
         """
-        rng = np.random.default_rng(seed=42)
+        rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
         if rng.random() < epsilon:
             # Explorar: acción aleatoria
             return int(rng.integers(0, self.action_dim))
@@ -451,7 +452,7 @@ class DQN:
         action_dim: int,
         config: Optional[Dict[str, Any]] = None,
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         tf.random.set_seed(seed)
@@ -1277,7 +1278,7 @@ class DQNModelWrapper(Model):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1522,7 +1523,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_dim=action_dim,
         config=config,
         hidden_units=DQN_CONFIG['hidden_units'],
-        seed=DQN_CONFIG.get('seed', 42)
+        seed=DQN_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear wrapper DQN directamente sin usar DRLModelWrapperTF

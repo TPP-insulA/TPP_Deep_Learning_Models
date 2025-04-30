@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import TRPO_CONFIG
-
+from constants.constants import CONST_DEFAULT_SEED
 
 class ActorCriticModel:
     """
@@ -157,7 +157,7 @@ class ActorCriticModel:
                 return mu[0]
             
             # Muestrear de la distribución normal usando Generator
-            seed = TRPO_CONFIG.get('seed', 42)
+            seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
             rng = np.random.default_rng(seed)
             action = mu + rng.normal(size=mu.shape) * std
             return action[0]
@@ -418,7 +418,7 @@ class TRPO:
         damping: float = TRPO_CONFIG['damping']
     ) -> None:
         # Configurar semilla para reproducibilidad
-        seed = TRPO_CONFIG.get('seed', 42)
+        seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         tf.random.set_seed(seed)
         np.random.seed(seed)
         
@@ -738,7 +738,7 @@ class TRPO:
         losses = []
         
         # Crear generador con semilla fija para reproducibilidad
-        seed = TRPO_CONFIG.get('seed', 42)
+        seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         rng = np.random.default_rng(seed)
         
         for _ in range(epochs):
@@ -1486,7 +1486,7 @@ class TRPOModelWrapper(Model):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(TRPO_CONFIG.get('seed', 42)))
+                self.rng = np.random.Generator(np.random.PCG64(TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 

@@ -15,6 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SARSA_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 
 # Constantes para prevenir duplicación
 CONST_CGM_ENCODER = 'cgm_encoder'
@@ -36,7 +37,7 @@ class SARSA:
         self, 
         env: Any, 
         config: Optional[Dict] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente SARSA.
@@ -828,7 +829,7 @@ class SARSAModel(Model):
                 self.model = model
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Definir espacio de acción discreto
                 self.action_space = SimpleNamespace(
@@ -991,7 +992,7 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
             'max_steps': SARSA_CONFIG['max_steps'],
             'smoothing_window': SARSA_CONFIG['smoothing_window']
         },
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear y devolver el modelo wrapper
