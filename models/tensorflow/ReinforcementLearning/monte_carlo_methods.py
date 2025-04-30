@@ -2413,10 +2413,10 @@ class MonteCarloModel(tf.keras.Model):
         predictions = tf.reshape(tf.cast(predictions, tf.float32), [-1, 1])
         
         # Calcular pérdida
-        loss = tf.reduce_mean(tf.square(predictions - targets))
+        loss = tf.reduce_mean(tf.square(predictions - targets), axis=0)
         
         # Obtener un valor escalar para las métricas
-        loss_val = tf.reduce_mean(loss)
+        loss_val = tf.reduce_mean(loss, axis=0)
         
         # Actualizar métricas con valores explícitos
         self.loss_tracker.update_state(loss_val)

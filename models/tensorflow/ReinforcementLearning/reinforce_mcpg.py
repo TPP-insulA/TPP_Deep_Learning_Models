@@ -474,7 +474,7 @@ class REINFORCE:
             
             # Calcular entropía para regularización
             entropy = self.policy.get_entropy(states)
-            mean_entropy = tf.reduce_mean(entropy)
+            mean_entropy = tf.reduce_mean(entropy, axis=0)
             
             # Si se usa baseline, usar valores como ventaja
             if self.use_baseline:
@@ -486,7 +486,7 @@ class REINFORCE:
                 advantages = returns
             
             # Calcular pérdida de política (negativo porque queremos maximizar)
-            policy_loss = -tf.reduce_mean(log_probs * advantages)
+            policy_loss = -tf.reduce_mean(log_probs * advantages, axis=0)
             
             # Agregar término de entropía para fomentar exploración
             loss = policy_loss - self.entropy_coef * mean_entropy
@@ -498,7 +498,7 @@ class REINFORCE:
         # Actualizar métricas
         self.policy_loss_metric.update_state(policy_loss)
         self.entropy_metric.update_state(mean_entropy)
-        self.returns_metric.update_state(tf.reduce_mean(returns))
+        self.returns_metric.update_state(tf.reduce_mean(returns, axis=0))
         
         return policy_loss, mean_entropy
     
@@ -525,7 +525,7 @@ class REINFORCE:
             values = tf.squeeze(values, axis=-1)
             
             # Calcular pérdida MSE
-            baseline_loss = tf.reduce_mean(tf.square(returns - values))
+            baseline_loss = tf.reduce_mean(tf.square(returns - values), axis=0)
         
         # Calcular gradientes y actualizar red de valor
         grads = tape.gradient(baseline_loss, self.value_network.trainable_variables)

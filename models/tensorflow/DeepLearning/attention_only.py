@@ -218,7 +218,7 @@ def create_attention_block(x: tf.Tensor, num_heads: int, key_dim: int,
         #     key_dim
         # )(x)
         
-        # Modificado: eliminado el parámetro attention_bias que no está soportado
+        # Eliminado el parámetro attention_bias que no está soportado
         mha = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=key_dim,

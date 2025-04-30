@@ -617,7 +617,7 @@ def train_model_sequential(model_creator: Callable,
     model_wrapper = model_creator(input_shapes[0], input_shapes[1])
     
     # Verificar si es un wrapper (DLModelWrapper, RLModelWrapper, DRLModelWrapper)
-    # Modificación: mejorar la condición para detectar wrappers
+    # Mejorar la condición para detectar wrappers
     is_wrapper = (hasattr(model_wrapper, 'model') or not hasattr(model_wrapper, 'init')) and not isinstance(model_wrapper, nn.Module)
     
     if is_wrapper:

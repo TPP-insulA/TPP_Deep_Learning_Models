@@ -923,8 +923,8 @@ class PolicyIterationModel(Model):
             _ = self.action_decoder(dummy_input)
         
         # Establecer pesos para mapear linealmente desde espacio de acciones discretas a dosis continuas
-        min_dose = tf.reduce_min(y)
-        max_dose = tf.reduce_max(y)
+        min_dose = tf.reduce_min(y, axis=0)
+        max_dose = tf.reduce_max(y, axis=0)
         dose_spread = max_dose - min_dose
         
         # Asegurar que todos los valores son del mismo tipo (float32)

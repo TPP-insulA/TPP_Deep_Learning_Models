@@ -162,7 +162,18 @@ class WavenetBlock(tf.keras.layers.Layer):
 def create_wavenet_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> Model:
     """
     Se crea un modelo WaveNet usando la API funcional de Keras.
-    # ... (docstring remains the same) ...
+    
+    Parámetros:
+    ----------
+    cgm_shape : Tuple[int, ...]
+        Forma de la entrada CGM.
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características.
+        
+    Retorna:
+    -------
+    Model
+        Modelo WaveNet.
     """
     # Definición de Entradas
     cgm_input = Input(shape=cgm_shape, name=CONST_INPUT_CGM)
