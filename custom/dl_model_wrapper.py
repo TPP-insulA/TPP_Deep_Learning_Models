@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
 from custom.model_wrapper import ModelWrapper
-from custom.printer import cprint, print_debug, print_info
+from custom.printer import cprint, print_debug, print_info, print_error
 
 # Constantes para mensajes de error
 CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
@@ -618,7 +618,7 @@ class DLModelWrapperJAX(ModelWrapper):
             # Sin mejora
             self.early_stopping['wait'] += 1
             if self.early_stopping['wait'] >= self.early_stopping['patience']:
-                print(f"\nEarly stopping activado en época {epoch+1}")
+                print_debug(f"\nEarly stopping activado en época {epoch+1}")
                 
                 # Restaurar mejores parámetros si se solicitó
                 if self.early_stopping['restore_best_weights'] and self.early_stopping['best_params'] is not None:
@@ -1578,7 +1578,7 @@ class DLModelWrapper(ModelWrapper):
         model_creator : Callable
             Función que crea una instancia del modelo
         framework : str, opcional
-            Framework a utilizar ('jax' o 'tensorflow') (default: 'jax')
+            Framework a utilizar ('pytorch', 'jax' o 'tensorflow') (default: 'jax')
         """
         super().__init__()
         
@@ -1719,4 +1719,4 @@ class DLModelWrapper(ModelWrapper):
         if isinstance(self.wrapper, DLModelWrapperJAX):
             self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
         else:
-            print("Early stopping solo está disponible para modelos JAX")
+            print_error("Early stopping solo está disponible para modelos JAX")

@@ -1,15 +1,19 @@
-from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 import numpy as np
 import jax
 import jax.numpy as jnp
+from flax.training import train_state
+from flax.training.checkpoints import save_checkpoint, restore_checkpoint
+import os
+import pickle
+import tensorflow as tf
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm.auto import tqdm
 
 from custom.model_wrapper import ModelWrapper
-from custom.printer import print_debug, print_info
+from custom.printer import print_debug, print_info, print_warning, print_error, print_success
 from config.models_config import EARLY_STOPPING_POLICY
 
 # Constantes para uso repetido
@@ -465,6 +469,150 @@ class DRLModelWrapperTF(ModelWrapper):
                 predictions[i] = act_method(state)
                 
         return predictions
+    
+    def save(self, path: str) -> None:
+        """
+        Guarda el modelo en disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
+        
+        try:
+            # Verificar si el modelo tiene método save
+            if hasattr(self.model, 'save'):
+                self.model.save(path)
+                print_success(f"Modelo guardado en {path}")
+            # Verificar si se pueden guardar los pesos
+            elif hasattr(self.model, 'save_weights'):
+                self.model.save_weights(f"{path}_weights.h5")
+                print_success(f"Pesos del modelo guardados en {path}_weights.h5")
+            else:
+                # Intentar guardar modelo completo con SavedModel
+                tf.saved_model.save(self.model, path)
+                print_success(f"Modelo guardado usando SavedModel en {path}")
+        except Exception as e:
+            # Fallback a pickle si los métodos anteriores fallan
+            print_warning(f"No se pudo guardar con métodos estándar: {e}")
+            print_warning("Guardando con pickle como alternativa")
+            with open(f"{path}.pkl", 'wb') as f:
+                save_data = {
+                    'model_kwargs': self.model_kwargs,
+                    'weights': self.model.get_weights() if hasattr(self.model, 'get_weights') else None
+                }
+                pickle.dump(save_data, f)
+            print_success(f"Modelo guardado como pickle en {path}.pkl")
+
+    def load(self, path: str) -> None:
+        """
+        Carga el modelo desde disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        # Verificar si es un archivo pickle
+        if path.endswith('.pkl'):
+            self._load_from_pickle(path)
+        # Verificar si es un archivo de pesos
+        elif path.endswith('_weights.h5') or path.endswith('.h5'):
+            self._load_weights(path)
+        # Intentar cargar como modelo completo
+        elif os.path.isdir(path) or path.endswith('.keras'):
+            self._load_complete_model(path)
+        else:
+            raise ValueError(f"Formato de archivo no soportado: {path}")
+            
+    def _load_from_pickle(self, path: str) -> None:
+        """
+        Carga el modelo desde un archivo pickle.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo pickle
+        
+        Retorna:
+        --------
+        None
+        """
+        try:
+            with open(path, 'rb') as f:
+                data = pickle.load(f)
+            
+            # Recrear modelo si es necesario
+            if self.model is None:
+                self._create_model_instance((1,), (1,))
+            
+            # Establecer pesos si están disponibles
+            if 'weights' in data and data['weights'] is not None and hasattr(self.model, 'set_weights'):
+                self.model.set_weights(data['weights'])
+                print_success(f"Pesos cargados desde {path}")
+            else:
+                print_warning("No se encontraron pesos en el archivo pickle o el modelo no soporta set_weights")
+        except Exception as e:
+            print_error(f"Error al cargar desde pickle: {e}")
+            
+    def _load_weights(self, path: str) -> None:
+        """
+        Carga los pesos del modelo desde un archivo h5.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo de pesos
+        
+        Retorna:
+        --------
+        None
+        """
+        try:
+            # Asegurar que el modelo existe
+            if self.model is None:
+                self._create_model_instance((1,), (1,))
+                
+            # Cargar pesos
+            if hasattr(self.model, 'load_weights'):
+                self.model.load_weights(path)
+                print_success(f"Pesos cargados desde {path}")
+            else:
+                print_warning("El modelo no tiene método load_weights")
+        except Exception as e:
+            print_error(f"Error al cargar pesos: {e}")
+            
+    def _load_complete_model(self, path: str) -> None:
+        """
+        Carga el modelo completo.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del modelo completo
+        
+        Retorna:
+        --------
+        None
+        """
+        try:
+            self.model = tf.keras.models.load_model(path)
+            print_success(f"Modelo cargado desde {path}")
+        except Exception as e:
+            print_error(f"Error al cargar el modelo completo: {e}")
+            print_warning("Intentando cargar como pesos...")
+            self._load_weights(path)
 
 
 class DRLModelWrapperJAX(ModelWrapper):
@@ -1222,6 +1370,65 @@ class DRLModelWrapperJAX(ModelWrapper):
         
         # Si no hay método predict, devolver ceros
         return np.zeros((len(x_cgm),), dtype=np.float32)
+    
+    def save(self, path: str) -> None:
+        """
+        Guarda el estado del agente JAX en disco.
+
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el estado del agente.
+
+        Retorna:
+        --------
+        None
+        """
+        if self.agent_state is None:
+            raise ValueError("El estado del agente debe estar inicializado antes de guardarlo.")
+
+        try:
+            save_checkpoint(path, self.agent_state, step=0, keep=1)
+            print_success(f"Estado del agente guardado en: {path}")
+        except Exception as e:
+            print_warning(f"No se pudo guardar con checkpoint de Flax: {e}")
+            print_warning("Guardando con pickle como alternativa.")
+            save_data = {
+                'agent_state': self.agent_state,
+                'cgm_shape': self.cgm_shape,
+                'other_features_shape': self.other_features_shape,
+                'model_kwargs': self.model_kwargs
+            }
+            with open(f"{path}.pkl", 'wb') as f:
+                pickle.dump(save_data, f)
+            print_success(f"Estado del agente guardado como pickle en: {path}.pkl")
+
+    def load(self, path: str) -> None:
+        """
+        Carga el estado del agente JAX desde disco.
+
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el estado del agente.
+
+        Retorna:
+        --------
+        None
+        """
+        try:
+            self.agent_state = restore_checkpoint(path, self.agent_state)
+            print_success(f"Estado del agente restaurado desde: {path}")
+        except Exception as e:
+            print_warning(f"No se pudo cargar desde checkpoint de Flax: {e}")
+            print_warning("Intentando cargar desde pickle.")
+            with open(f"{path}.pkl", 'rb') as f:
+                data = pickle.load(f)
+            self.agent_state = data.get('agent_state')
+            self.cgm_shape = data.get('cgm_shape', self.cgm_shape)
+            self.other_features_shape = data.get('other_features_shape', self.other_features_shape)
+            self.model_kwargs.update(data.get('model_kwargs', {}))
+            print_success(f"Estado del agente restaurado desde pickle: {path}.pkl")
 
 class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
     """
@@ -1500,7 +1707,54 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         # Si llegamos aquí, implementar entrenamiento genérico de RL
         # ... (resto del código original)
         
-    # resto de métodos de la clase...
+    def save(self, path: str) -> None:
+        """
+        Guarda el modelo DRL de PyTorch en disco.
+
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo.
+
+        Retorna:
+        --------
+        None
+        """
+        if self.model is None:
+            raise ValueError("El modelo debe estar inicializado antes de guardarlo.")
+
+        save_data = {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
+            'model_kwargs': self.model_kwargs,
+            'rng_state': torch.get_rng_state()
+        }
+        torch.save(save_data, path)
+        print_success(f"Modelo guardado en: {path}")
+
+    def load(self, path: str) -> None:
+        """
+        Carga el modelo DRL de PyTorch desde disco.
+
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el modelo.
+
+        Retorna:
+        --------
+        None
+        """
+        checkpoint = torch.load(path, map_location=self.device)
+        if self.model is None:
+            self.model = self.model_cls(**self.model_kwargs)
+            self.model.to(self.device)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        if 'optimizer_state_dict' in checkpoint and self.optimizer:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'rng_state' in checkpoint:
+            torch.set_rng_state(checkpoint['rng_state'])
+        print_success(f"Modelo cargado desde: {path}")
 
 # Actualizar la clase DRLModelWrapper para incluir PyTorch
 class DRLModelWrapper(ModelWrapper):
@@ -1638,3 +1892,38 @@ class DRLModelWrapper(ModelWrapper):
             Predicciones del modelo (acciones)
         """
         return self.wrapper.predict(x_cgm, x_other)
+    def save(self, filepath: str) -> None:
+        """
+        Guarda el modelo/agente (si el wrapper lo soporta).
+        
+        Parámetros:
+        -----------
+        filepath : str
+            Ruta del archivo donde guardar el modelo
+            
+        Retorna:
+        --------
+        None
+        """
+        if hasattr(self.wrapper, 'save'):
+            self.wrapper.save(filepath)
+        else:
+            print_warning(f"El guardado no está implementado para el wrapper {type(self.wrapper).__name__}.")
+
+    def load(self, filepath: str) -> None:
+        """
+        Carga el modelo/agente (si el wrapper lo soporta).
+        
+        Parámetros:
+        -----------
+        filepath : str
+            Ruta del archivo desde donde cargar el modelo
+            
+        Retorna:
+        --------
+        None
+        """
+        if hasattr(self.wrapper, 'load'):
+            self.wrapper.load(filepath)
+        else:
+            print(f"Advertencia: La carga no está implementada para el wrapper {type(self.wrapper).__name__}.")
