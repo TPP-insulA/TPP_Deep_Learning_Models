@@ -207,15 +207,15 @@ USE_TF_MODELS = {
     "tf_monte_carlo": False,
     "tf_policy_iteration": False,
     "tf_q_learning": False,
-    "tf_reinforce_mcpg": True,
+    "tf_reinforce_mcpg": False,
     "tf_sarsa": False,
     "tf_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "tf_a2c": False,
-    "tf_a3c": False,
-    "tf_ddpg": False,
-    "tf_dqn": False,
-    "tf_ppo": False,
+    "tf_a2c": True,
+    "tf_a3c": True,
+    "tf_ddpg": True,
+    "tf_dqn": True,
+    "tf_ppo": True,
     "tf_sac": True,
     "tf_trpo": True,
 }
@@ -223,10 +223,10 @@ USE_TF_MODELS = {
 # Modelos JAX a utilizar
 USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "jax_attention_only": True,
-    "jax_cnn": True,
-    "jax_fnn": True,
-    "jax_gru": True,
+    "jax_attention_only": False,
+    "jax_cnn": False,
+    "jax_fnn": False,
+    "jax_gru": False,
     "jax_lstm": True,
     "jax_rnn": True,
     "jax_tabnet": True,

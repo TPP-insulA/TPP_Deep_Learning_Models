@@ -659,18 +659,18 @@ class DDPG:
         # Actualizar redes target con soft update
         self.update_target_networks()
         
-        # Convertir tensor losses/q_value to Python floats/numpy scalars
-        critic_loss_np = critic_loss.numpy()
-        actor_loss_np = actor_loss.numpy()
-        q_value_np = q_value.numpy()
+        # Convertir loss y q_value de tensor a float de Python
+        critic_loss_float = float(critic_loss.numpy())
+        actor_loss_float = float(actor_loss.numpy())
+        q_value_float = float(q_value.numpy())
 
-        # Actualizar métricas acumuladas using the numpy values
-        self.actor_loss_sum += actor_loss_np
-        self.critic_loss_sum += critic_loss_np
-        self.q_value_sum += q_value_np
+        # Actualizar métricas acumuladas usando los valores float 
+        self.actor_loss_sum += actor_loss_float
+        self.critic_loss_sum += critic_loss_float
+        self.q_value_sum += q_value_float
         self.updates_count += 1
 
-        return critic_loss_np, actor_loss_np, q_value_np
+        return critic_loss_float, actor_loss_float, q_value_float
     
     def _select_action(self, state: np.ndarray, step_counter: int, warmup_steps: int) -> np.ndarray:
         """

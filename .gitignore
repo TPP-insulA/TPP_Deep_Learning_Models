@@ -25,3 +25,6 @@ figures/various_models/tensorflow
 *.h5
 *.npy
 # *.pt
+
+# Modelos my grandes para subir
+pt_sarsa.pt
