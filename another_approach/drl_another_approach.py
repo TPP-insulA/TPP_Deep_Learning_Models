@@ -9,6 +9,9 @@ import json
 from config import CONFIG, WINDOW_PREV_HOURS, WINDOW_POST_HOURS, PREV_SAMPLES, POST_SAMPLES, PREPROCESSSING_ID
 from calculate_iob import calculate_iob
 
+os.makedirs(CONFIG["data_path"], exist_ok=True)
+os.makedirs(CONFIG["processed_data_path"], exist_ok=True)
+os.makedirs(CONFIG["params_path"], exist_ok=True)
 # %% CELL: Load data
 
 all_data = []
@@ -174,6 +177,7 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
 
 
 # %% CELL: Save dataset from every subject
+
 for subject_df in all_data:
     subject_id = subject_df["subject_id"][0]
     output_path = os.path.join(CONFIG["processed_data_path"], f"{subject_id}_processed_{PREPROCESSSING_ID}.parquet")

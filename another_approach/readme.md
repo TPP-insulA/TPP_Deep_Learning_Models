@@ -322,6 +322,72 @@ Funcion de recompensa:
             else:
                 return -4.0
 
+### ID = 5:
+
+Pasos:
+
+model.learn(total_timesteps=300000)  # 🔄 Más pasos que ID 3
+
+Función de recompensa:
+
+def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
+    avg_mgdl = np.mean(mgdl_post)
+    NORMAL_LOW = 70
+    NORMAL_HIGH = 180
+    DOSE_THRESHOLD_PERCENT = 0.10
+    DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+
+    if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:  # Rango normal
+        return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
+    elif avg_mgdl > NORMAL_HIGH:  # Hiperglucemia
+        if pred_dose >= real_dose:
+            return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
+        else:
+            return - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
+    else:  # Hipoglucemia
+        if pred_dose < real_dose:
+            return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
+        else:
+            return -2.0
+
+### ID = 6
+
+**Hiperparámetros:**
+
+```python
+model = PPO(
+    "MlpPolicy",
+    env,
+    verbose=1,
+    learning_rate=1e-4,      # más conservador
+    n_steps=2048,
+    batch_size=256,          # batch más grande
+    n_epochs=10,
+    gamma=0.99,
+    gae_lambda=0.95,
+    clip_range=0.2,
+    device="cpu"
+)
+```
+
+**Pasos:**
+```python
+model.learn(total_timesteps=500000)
+```
+
+Misma función de recompensa del ID = 5.
+
+### ID = 7
+
+Igual que el 6 pero 1 millón de pasos
+
+**Pasos:**
+```python
+model.learn(total_timesteps=1000000)
+```
+
+
+
 ## Resultados:
 
 ### ID de modelo 0 con ID de preprocesamiento 0:

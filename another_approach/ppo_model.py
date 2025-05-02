@@ -101,30 +101,22 @@ class InsulinEnv(gym.Env):
     
     def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
         avg_mgdl = np.mean(mgdl_post)
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD_PERCENT = 0.10
-        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+        error = abs(pred_dose - real_dose)
+        rel_error = error / (real_dose + 1e-5)  # evitar división por cero
 
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0 #prediccion similar a la real
+        if avg_mgdl < 70:  # hipoglucemia
+            if pred_dose > real_dose:
+                return float(-2.0)  # castigo fuerte por sobredosificar
             else:
-                return -0.5
-        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
-            if pred_dose > real_dose: #prediccion mayor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD: #prediccion similar a la real
-                return -1.0
+                return float(1.0 - rel_error)
+        elif avg_mgdl > 180:  # hiperglucemia
+            if pred_dose >= real_dose:
+                return float(1.0 - rel_error)
             else:
-                return -2.0
-        else: #hipoglucemia
-            if pred_dose < real_dose: #prediccion menor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -1.0
-            else:
-                return -2.0
+                return float(-rel_error)  # castigo por subdosificar
+        else:  # rango normal
+            return float(1.0 - rel_error)  # recompensa inversamente proporcional al error
+
 
     def render(self):
         pass
@@ -146,9 +138,9 @@ def train_ppo():
         "MlpPolicy",
         env,
         verbose=1,
-        learning_rate=3e-4,
+        learning_rate=1e-4,
         n_steps=2048,
-        batch_size=64,
+        batch_size=256,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
@@ -156,7 +148,7 @@ def train_ppo():
         device="cpu"
     )
     
-    model.learn(total_timesteps=100000)
+    model.learn(total_timesteps=500000)
     
     return model, env
 

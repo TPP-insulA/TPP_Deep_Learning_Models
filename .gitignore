@@ -1,12 +1,8 @@
-*Subject*.xlsx
 manifest
 .venv
-/subjects
-/subjects/*
 df_final
 *.zip
 df_final.csv
-data/*
 .DS_Store
 build/
 /build/*

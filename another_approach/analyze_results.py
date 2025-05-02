@@ -14,7 +14,7 @@ dataset = "val"
 CSV_PATH = os.path.join(folder, f"{model}_predictions_{dataset}_{PREPROCESSSING_ID}_{MODEL_ID}.csv")
 print("CSV_PATH:", CSV_PATH)
 # Configurar estilo de gráficos
-plt.style.use('seaborn')
+plt.style.use('seaborn-v0_8')
 # %matplotlib inline
 
 # %% CELL: Load and Initial Processing
