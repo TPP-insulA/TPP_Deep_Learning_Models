@@ -386,6 +386,16 @@ Igual que el 6 pero 1 millón de pasos
 model.learn(total_timesteps=1000000)
 ```
 
+### ID = 8:
+
+Como el 7 pero:
+
+
+**Espacio de acción:**
+```python
+self.action_space = Discrete(41)  # Acciones de 0.0 a 20.0 en pasos de 0.5
+pred_dose = float(action.item()) * 0.5
+```
 
 
 ## Resultados:

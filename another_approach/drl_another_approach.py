@@ -22,20 +22,20 @@ rows_with_missing_count_post = 0
 # Iterar sobre los archivos .xlsx en el directorio
 for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
     subject_id = file_path.stem  # Nombre del archivo sin extensión
-    
+
     # Leer las hojas con pandas como puente
     xlsx_data = pd.read_excel(file_path, sheet_name=None, engine="openpyxl")
-    
+
     # Convertir a Polars
     cgm_df = pl.from_pandas(xlsx_data.get("CGM", pd.DataFrame())) if "CGM" in xlsx_data else pl.DataFrame()
     bolus_df = pl.from_pandas(xlsx_data.get("Bolus", pd.DataFrame())) if "Bolus" in xlsx_data else pl.DataFrame()
     basal_df = pl.from_pandas(xlsx_data.get("Basal", pd.DataFrame())) if "Basal" in xlsx_data else pl.DataFrame()
-    
+
     # Verificar columnas mínimas necesarias
     required_cgm_cols = {"date", "mg/dl"}
     required_bolus_cols = {"date", "normal"}
     required_basal_cols = {"date", "rate", "duration"}
-    
+
     if cgm_df.height > 0 and not required_cgm_cols.issubset(set(cgm_df.columns)):
         print(f"Advertencia: {subject_id} - CGM no tiene todas las columnas requeridas: {cgm_df.columns}")
         continue
@@ -45,15 +45,14 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
     if basal_df.height > 0 and not required_basal_cols.issubset(set(basal_df.columns)):
         print(f"Advertencia: {subject_id} - Basal no tiene todas las columnas requeridas: {basal_df.columns}")
         basal_df = pl.DataFrame()  # Ignorar Basal si faltan columnas
-    
+
     # Asegurarse de que 'date' sea datetime y 'mg/dl' sea Float64
     if cgm_df.height > 0:
         if cgm_df["date"].dtype == pl.Utf8:
             cgm_df = cgm_df.with_columns(pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S"))
-        cgm_df = cgm_df.with_columns([
-            pl.col("date").cast(pl.Datetime("us")),
-            pl.col("mg/dl").cast(pl.Float64)  # Forzar mg/dl a Float64 desde el inicio
-        ])
+        cgm_df = cgm_df.with_columns(
+            [pl.col("date").cast(pl.Datetime("us")), pl.col("mg/dl").cast(pl.Float64)]  # Forzar mg/dl a Float64 desde el inicio
+        )
 
     if bolus_df.height > 0:
         if bolus_df["date"].dtype == pl.Utf8:
@@ -65,50 +64,45 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
             basal_df = basal_df.with_columns(pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S"))
         basal_df = basal_df.with_columns(pl.col("date").cast(pl.Datetime("us")))
 
-
-
     if bolus_df.height == 0:
         print(f"Advertencia: {subject_id} - No hay datos válidos en Bolus después de filtrar normal (todos son None o 0)")
-        continue    
-    
+        continue
+
     # Procesar cada evento de bolo
     subject_rows = []
     for bolus_row in bolus_df.rows(named=True):
         bolus_date = bolus_row["date"]
-        
+
         # Ventana previa de CGM (2 horas antes)
         prev_start = bolus_date - timedelta(hours=WINDOW_PREV_HOURS)
-        cgm_prev = cgm_df.filter(
-            (pl.col("date") >= prev_start) & (pl.col("date") <= bolus_date)
-        ).sort("date").tail(PREV_SAMPLES)
-        
+        cgm_prev = cgm_df.filter((pl.col("date") >= prev_start) & (pl.col("date") <= bolus_date)).sort("date").tail(PREV_SAMPLES)
+
         # Rellenar con último valor si hay menos de 24 datos
         if cgm_prev.height < PREV_SAMPLES:
             last_value = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else None
-            if  last_value is None:
+            if last_value is None:
                 continue
             missing_count = PREV_SAMPLES - cgm_prev.height
             if missing_count == PREV_SAMPLES:
                 continue
             missing_count_prev += missing_count
             rows_with_missing_count_prev += 1
-            filler = pl.DataFrame({
-                "date": [bolus_date - timedelta(minutes=5 * i) for i in range(missing_count)],
-                "mg/dl": [float(last_value)] * missing_count  # Convertir a float explícitamente
-            }).with_columns([
-                pl.col("date").cast(pl.Datetime("us")),
-                pl.col("mg/dl").cast(pl.Float64)  # Forzar tipo Float64
-            ])
+            filler = pl.DataFrame(
+                {
+                    "date": [bolus_date - timedelta(minutes=5 * i) for i in range(missing_count)],
+                    "mg/dl": [float(last_value)] * missing_count,  # Convertir a float explícitamente
+                }
+            ).with_columns(
+                [pl.col("date").cast(pl.Datetime("us")), pl.col("mg/dl").cast(pl.Float64)]  # Forzar tipo Float64
+            )
             # Depuración: verificar tipos antes de concatenar
             # print(f"Subject: {subject_id}, filler dtypes: {filler.dtypes}, cgm_prev dtypes: {cgm_prev.dtypes}")
             cgm_prev = pl.concat([filler, cgm_prev]).sort("date").tail(PREV_SAMPLES)
-        
+
         # Ventana posterior de CGM (2 horas después)
         post_end = bolus_date + timedelta(hours=WINDOW_POST_HOURS)
-        cgm_post = cgm_df.filter(
-            (pl.col("date") > bolus_date) & (pl.col("date") <= post_end)
-        ).sort("date").head(POST_SAMPLES)
-        
+        cgm_post = cgm_df.filter((pl.col("date") > bolus_date) & (pl.col("date") <= post_end)).sort("date").head(POST_SAMPLES)
+
         # Rellenar con último valor si hay menos de 24 datos (para evaluación)
         if cgm_post.height < POST_SAMPLES:
             last_value = cgm_post["mg/dl"][-1] if cgm_post.height > 0 else cgm_prev["mg/dl"][-1]
@@ -117,63 +111,75 @@ for file_path in Path(CONFIG["data_path"]).glob("*.xlsx"):
             rows_with_missing_count_post += 1
             if missing_count == POST_SAMPLES:
                 continue
-            filler = pl.DataFrame({
-                "date": [bolus_date + timedelta(minutes=5 * (i + 1)) for i in range(missing_count)],
-                "mg/dl": [float(last_value)] * missing_count  # Convertir a float explícitamente
-            }).with_columns([
-                pl.col("date").cast(pl.Datetime("us")),
-                pl.col("mg/dl").cast(pl.Float64)  # Forzar tipo Float64
-            ])
+            filler = pl.DataFrame(
+                {
+                    "date": [bolus_date + timedelta(minutes=5 * (i + 1)) for i in range(missing_count)],
+                    "mg/dl": [float(last_value)] * missing_count,  # Convertir a float explícitamente
+                }
+            ).with_columns(
+                [pl.col("date").cast(pl.Datetime("us")), pl.col("mg/dl").cast(pl.Float64)]  # Forzar tipo Float64
+            )
             cgm_post = pl.concat([cgm_post, filler]).sort("date").head(POST_SAMPLES)
-        
+
         # Calcular insulinOnBoard con chequeo adicional
         iob = bolus_row.get("insulinOnBoard", None)
         if iob is None:
             iob = calculate_iob(0, bolus_date, basal_df, bolus_df, subject_id) if basal_df.height > 0 or bolus_df.height > 0 else 0.0
-        
+
         # Asignar targetBloodGlucose (aleatorio si falta)
         target_bg = bolus_row.get("targetBloodGlucose", None)
         if target_bg is None or target_bg < 70.0 or target_bg > 160.0:
             target_bg = np.random.choice([110.0, 130.0, 160.0])  # Valor por defecto si no hay datos o fuera de rango
-        
+
         # Manejar valores nulos en Bolus con valores por defecto
         carb_input = bolus_row.get("carbInput", None)  # 0 si falta
         if carb_input is None:
             carb_input = 0.0
         insulin_carb_ratio = bolus_row.get("insulinCarbRatio", None)  # Valor típico si falta
         if insulin_carb_ratio is None or insulin_carb_ratio == 0:
-            #Obtener algun valor no nulo de la columna
-            insulin_carb_ratio = bolus_df.filter(pl.col("insulinCarbRatio").is_not_null() & (pl.col("insulinCarbRatio") != 0)).select("insulinCarbRatio").to_numpy().flatten()[0] if bolus_df.height > 0 else 10.0  # Valor por defecto si no hay datos
+            # Obtener algun valor no nulo de la columna
+            insulin_carb_ratio = (
+                bolus_df.filter(pl.col("insulinCarbRatio").is_not_null() & (pl.col("insulinCarbRatio") != 0))
+                .select("insulinCarbRatio")
+                .to_numpy()
+                .flatten()[0]
+                if bolus_df.height > 0
+                else 10.0
+            )  # Valor por defecto si no hay datos
         bg_input = bolus_row.get("bgInput", None)  # Última glucosa
         if bg_input is None:
-            bg_input = cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else np.random.choice([60.0, 80.0, 110.0, 130.0, 160.0, 190.0, 220.0, 250.0])  # Valor por defecto si no hay datos
+            bg_input = (
+                cgm_prev["mg/dl"][-1] if cgm_prev.height > 0 else np.random.choice([60.0, 80.0, 110.0, 130.0, 160.0, 190.0, 220.0, 250.0])
+            )  # Valor por defecto si no hay datos
 
         # Construir fila
-        try: 
+        try:
             row = {
-            "subject_id": subject_id,
-            "bolus_date": bolus_date,
-            **{f"mg/dl_prev_{i+1}": cgm_prev["mg/dl"][i] for i in range(PREV_SAMPLES)},
-            "carbInput": float(carb_input),
-            "insulinCarbRatio": float(insulin_carb_ratio),
-            "bgInput": float(bg_input),
-            "insulinOnBoard": float(iob),
-            "targetBloodGlucose": float(target_bg),
-            "normal": bolus_row["normal"],
-            **{f"mg/dl_post_{i+1}": cgm_post["mg/dl"][i] for i in range(POST_SAMPLES)},
-        }
+                "subject_id": subject_id,
+                "bolus_date": bolus_date,
+                **{f"mg/dl_prev_{i+1}": cgm_prev["mg/dl"][i] for i in range(PREV_SAMPLES)},
+                "carbInput": float(carb_input),
+                "insulinCarbRatio": float(insulin_carb_ratio),
+                "bgInput": float(bg_input),
+                "insulinOnBoard": float(iob),
+                "targetBloodGlucose": float(target_bg),
+                "normal": bolus_row["normal"],
+                **{f"mg/dl_post_{i+1}": cgm_post["mg/dl"][i] for i in range(POST_SAMPLES)},
+            }
         except:
-            print(f"Error with values: {subject_id}, insulin_carb_ratio: {insulin_carb_ratio}, bg_input: {bg_input}, iob: {iob}, carb_input: {carb_input}, target_bg: {target_bg}")
+            print(
+                f"Error with values: {subject_id}, insulin_carb_ratio: {insulin_carb_ratio}, bg_input: {bg_input}, iob: {iob}, carb_input: {carb_input}, target_bg: {target_bg}"
+            )
             continue
         subject_rows.append(row)
-    
+
     # Convertir a DataFrame de Polars
     if subject_rows:
         subject_df = pl.DataFrame(subject_rows)
         all_data.append(subject_df)
 
-#print(f"Missing count prev: {missing_count_prev}, rows with missing count prev: {rows_with_missing_count_prev}")
-#print(f"Missing count post: {missing_count_post}, rows with missing count post: {rows_with_missing_count_post}")
+# print(f"Missing count prev: {missing_count_prev}, rows with missing count prev: {rows_with_missing_count_prev}")
+# print(f"Missing count post: {missing_count_post}, rows with missing count post: {rows_with_missing_count_post}")
 
 
 # %% CELL: Save dataset from every subject
@@ -195,7 +201,7 @@ test_dfs = []
 
 
 for subject_df in all_data:
-    
+
     subject_df = subject_df.sort("bolus_date")
     total_rows = subject_df.height
     train_end = int(total_rows * train_ratio)
@@ -209,7 +215,7 @@ for subject_df in all_data:
     val_dfs.append(val_df)
     test_dfs.append(test_df)
 
-#for i, df in enumerate(train_dfs):
+# for i, df in enumerate(train_dfs):
 #        print(f"Train DF {i} (sujeto {train_dfs[i]['subject_id'][0]}) tipos: {dict(zip(df.columns, df.dtypes))}")
 
 train_combined = pl.concat(train_dfs)
@@ -225,7 +231,11 @@ print("Estadísticas de targetBloodGlucose en train_combined:", train_combined["
 # Columnas del estado a estandarizar
 state_cols = [
     *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-    "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
+    "carbInput",
+    "insulinCarbRatio",
+    "bgInput",
+    "insulinOnBoard",
+    "targetBloodGlucose",
 ]
 action_col = ["normal"]  # Acción, no se estandariza
 post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]  # Para reward, no se estandariza
@@ -237,13 +247,13 @@ stds = train_combined.select([pl.col(col).std() for col in state_cols]).to_dicts
 with open(os.path.join(CONFIG["params_path"], f"state_standardization_params_{PREPROCESSSING_ID}.json"), "w") as f:
     json.dump({"means": means, "stds": stds}, f)
 
+
 # %% CELL: Normalize train, val and test data
 def standardize_state(df, means, stds):
     for col in state_cols:
-        df = df.with_columns(
-            ((pl.col(col) - means[col]) / stds[col]).alias(col)
-        )
+        df = df.with_columns(((pl.col(col) - means[col]) / stds[col]).alias(col))
     return df
+
 
 train_standardized = standardize_state(train_combined, means, stds)
 val_standardized = standardize_state(val_combined, means, stds)
