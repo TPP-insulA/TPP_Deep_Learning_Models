@@ -148,7 +148,7 @@ def train_ppo():
         device="cpu"
     )
     
-    model.learn(total_timesteps=500000)
+    model.learn(total_timesteps=1000000)
     
     return model, env
 
