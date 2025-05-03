@@ -2,7 +2,7 @@ import pandas as pd
 import os
 from config import CONFIG, PREPROCESSSING_ID
 
-MODEL_IDS = [4, 5, 6, 7, 8]
+MODEL_IDS = [4, 5, 6, 7, 8, 9]
 
 
 def analyze_model(model_id):

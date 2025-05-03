@@ -1,367 +1,197 @@
-# Cofiguraciones de preprocesamiento de datos y de modelos entrenados
+# 🧾 Configuraciones de Preprocesamiento de Datos y Modelos PPO
 
-En config modificar ID de modelo y ID de preprocesamiento cuando se hagan cambios con uno o con el otro.
-Luego documentar aca datos utiles sobre los cambios.
+Este documento registra las configuraciones utilizadas para el preprocesamiento de datos y el entrenamiento de modelos PPO.  
+Cualquier modificación en el modelo o en el preprocesamiento debe estar acompañada por un nuevo ID y ser registrada aquí.
 
-En la carpeta /data se encuentran datos sobre los modelos y el preprocesamiento.
+> **Objetivo**: entrenar agentes PPO capaces de predecir la dosis adecuada de insulina bolus, maximizando el control glucémico postprandial en pacientes con diabetes.
 
-En /data/params se encontraran archivos json con los parametros de las estandarizaciones (incluir otros archivos con otros parametros?).
-Por ejemplo, la estandarizacion que se utilizo para el preprocesamiento con ID 0 tiene sus datos en "state_standardization_params_0.json".
+## 📁 Estructura de Archivos
 
-En /data/processed se encuentran 3 archivos con los datasets de train, val y test por cada preprocesamiento utilizado.
-Por ejemplo, para el ID 0 de preprocesamiento tenemos "train_all_0.parquet", "test_all_0.parquet" y "val_all_0.parquet".
+- El archivo `config.py` debe reflejar los IDs actuales de modelo (`MODEL_ID`) y preprocesamiento (`PREPROCESSING_ID`).
+- Carpeta `/data/params`: contiene archivos `.json` con los parámetros de estandarización por ID.  
+  Ejemplo: `state_standardization_params_0.json` corresponde al preprocesamiento ID 0.
+- Carpeta `/data/processed`: contiene datasets `train_all_<ID>.parquet`, `val_all_<ID>.parquet`, `test_all_<ID>.parquet` por preprocesamiento.
+- Carpeta `/data/results`: guarda las predicciones generadas por los modelos.  
+  Ejemplo: `ppo_predictions_val_0_0.csv` representa modelo ID 0 y preprocesamiento ID 0.
 
-## Preprocesamiento de datos
+## 🧪 Preprocesamiento de Datos
 
-### ID = 0:
+### ID = 0
 
-Las columnas que se utilizaron para predecir normal fueron:
-- los 24 datos previos de CGM al momento de inyectarse el bolo de insulina, tomando 2 horas antes y asumiendo que hay un dato de CGM cada 5 minutos.
-- carbInput
-- insulinCarbRatio
-- bgInput
-- insulinOnBoard
-- targetBloodGlucose
+**Variables utilizadas como entrada:**
 
-Para el calculo de iob se utilizo la funcion con ID 0 de calculo de iob.
+- 24 valores de CGM previos al momento del bolo (2 horas antes, 1 dato cada 5 minutos)
+- `carbInput`
+- `insulinCarbRatio`
+- `bgInput`
+- `insulinOnBoard`
+- `targetBloodGlucose`
 
-Parametros de CONFIG:
+**Configuraciones utilizadas:**
 
-WINDOW_PREV_HOURS = 2  # Ventana previa de 2 horas (parametrizable)
-WINDOW_POST_HOURS = 2  # Ventana posterior de 2 horas (parametrizable)
-IOB_WINDOW_HOURS = 4   # Ventana de 4 horas para insulinOnBoard
-SAMPLES_PER_HOUR = 12  # 1 dato cada 5 min = 12 datos por hora
-PREV_SAMPLES = WINDOW_PREV_HOURS * SAMPLES_PER_HOUR  # 24 datos previos
-POST_SAMPLES = WINDOW_POST_HOURS * SAMPLES_PER_HOUR  # 24 datos posteriores
+```python
+WINDOW_PREV_HOURS = 2
+WINDOW_POST_HOURS = 2
+IOB_WINDOW_HOURS = 4
+SAMPLES_PER_HOUR = 12
 
-## Modelos entrenados
+PREV_SAMPLES = 24  # 2 horas * 12
+POST_SAMPLES = 24
+```
 
-### ID = 0:
+La función de cálculo de IOB utilizada fue la de ID = 0.
 
+## 🧠 Modelos PPO Entrenados
+
+Todos los modelos comparten la siguiente estructura:
+
+```python
 self.state_cols = [
-            *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-            "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
-        ]
+    *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
+    "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
+]
 self.action_col = "normal"
 self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
+```
 
-Hiperparametros:
+---
 
-model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        device="cpu"
-    )
+## 🧩 Modelos PPO por ID
 
-Pasos:
+Cada modelo se entrena con una combinación específica de pasos (`total_timesteps`), hiperparámetros y función de recompensa.
 
+### ID = 0
+
+```python
 model.learn(total_timesteps=1000000)
+```
 
-Funcion de recompensa:
+**Recompensa:**
 
-def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-        avg_mgdl = np.mean(mgdl_post)
-        
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD = 1.0
-        
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0
-            else:
-                return -0.5
-        elif avg_mgdl > NORMAL_HIGH:
-            if pred_dose > real_dose:
-                return 0.5
-            else:
-                return -1.0
-        else:
-            if pred_dose < real_dose:
-                return 0.5
-            else:
-                return -1.0
+```python
+if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+    return 1.0 if abs(pred_dose - real_dose) < 1.0 else -0.5
+elif avg_mgdl > NORMAL_HIGH:
+    return 0.5 if pred_dose > real_dose else -1.0
+else:
+    return 0.5 if pred_dose < real_dose else -1.0
+```
 
-### ID = 1:
+### ID = 1
 
-self.state_cols = [
-            *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-            "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
-        ]
-self.action_col = "normal"
-self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
-
-Hiperparametros:
-
-model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        device="cpu"
-    )
-
-Pasos:
-
+```python
 model.learn(total_timesteps=1000000)
+```
 
-Funcion de recompensa:
+**Recompensa:**
 
-def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-        avg_mgdl = np.mean(mgdl_post)
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD_PERCENT = 0.10
-        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+```python
+DOSE_THRESHOLD = real_dose * 0.10
+abs_diff = abs(pred_dose - real_dose)
 
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0 #prediccion similar a la real
-            else:
-                return -0.5
-        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
-            if pred_dose > real_dose: #prediccion mayor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -1.0
-            else:
-                return 2.0
-        else: #hipoglucemia
-            if pred_dose < real_dose: #prediccion menor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -1.0
-            else:
-                return 2.0
+if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+    return 1.0 if abs_diff < DOSE_THRESHOLD else -0.5
+elif avg_mgdl > NORMAL_HIGH:
+    if pred_dose > real_dose: return 1.0
+    elif abs_diff < DOSE_THRESHOLD: return -1.0
+    else: return 2.0
+else:
+    if pred_dose < real_dose: return 1.0
+    elif abs_diff < DOSE_THRESHOLD: return -1.0
+    else: return 2.0
+```
 
-### ID = 2:
+### ID = 2
 
-self.state_cols = [
-            *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-            "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
-        ]
-self.action_col = "normal"
-self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
-
-Hiperparametros:
-
-model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        device="cpu"
-    )
-
-Pasos:
-
+```python
 model.learn(total_timesteps=1000000)
+```
 
-Funcion de recompensa:
+**Recompensa:** igual a ID = 1, pero con penalización más severa ante errores.
 
-def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-        avg_mgdl = np.mean(mgdl_post)
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD_PERCENT = 0.10
-        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+```python
+DOSE_THRESHOLD = real_dose * 0.10
+abs_diff = abs(pred_dose - real_dose)
 
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0 #prediccion similar a la real
-            else:
-                return -0.5
-        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
-            if pred_dose > real_dose: #prediccion mayor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD: #prediccion similar a la real
-                return -1.0
-            else:
-                return -2.0
-        else: #hipoglucemia
-            if pred_dose < real_dose: #prediccion menor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -1.0
-            else:
-                return -2.0
+if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+    return 1.0 if abs_diff < DOSE_THRESHOLD else -0.5
+elif avg_mgdl > NORMAL_HIGH:
+    if pred_dose > real_dose: return 1.0
+    elif abs_diff < DOSE_THRESHOLD: return -1.0
+    else: return -2.0
+else:
+    if pred_dose < real_dose: return 1.0
+    elif abs_diff < DOSE_THRESHOLD: return -1.0
+    else: return -2.0
+```
 
-### ID = 3:
+### ID = 3
 
-self.state_cols = [
-            *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-            "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
-        ]
-self.action_col = "normal"
-self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
+```python
+model.learn(total_timesteps=100000)
+```
 
-Hiperparametros:
+**Recompensa:** igual a ID = 2.
 
-model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        device="cpu"
-    )
+### ID = 4
 
-Pasos:
-
-model.learn(total_timesteps=100000) # Igual que el anterior pero 100 mil pasos en vez de un millon
-
-Funcion de recompensa:
-
-def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-        avg_mgdl = np.mean(mgdl_post)
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD_PERCENT = 0.10
-        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
-
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 1.0 #prediccion similar a la real
-            else:
-                return -0.5
-        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
-            if pred_dose > real_dose: #prediccion mayor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD: #prediccion similar a la real
-                return -1.0
-            else:
-                return -2.0
-        else: #hipoglucemia
-            if pred_dose < real_dose: #prediccion menor a la real
-                return 1.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -1.0
-            else:
-                return -2.0
-
-### ID = 4:
-
-self.state_cols = [
-            *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
-            "carbInput", "insulinCarbRatio", "bgInput", "insulinOnBoard", "targetBloodGlucose"
-        ]
-self.action_col = "normal"
-self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
-
-Hiperparametros:
-
-model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        device="cpu"
-    )
-
-Pasos:
-
+```python
 model.learn(total_timesteps=1000000)
+```
 
-Funcion de recompensa:
+**Recompensa:** busca acentuar el castigo o premio según severidad de la condición.
 
-    def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-        avg_mgdl = np.mean(mgdl_post)
-        NORMAL_LOW = 70
-        NORMAL_HIGH = 180
-        DOSE_THRESHOLD_PERCENT = 0.10
-        DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
+```python
+DOSE_THRESHOLD = real_dose * 0.10
+abs_diff = abs(pred_dose - real_dose)
 
-        if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH: #rango normal
-            if abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return 2.0 #prediccion similar a la real
-            else:
-                return -2.0
-        elif avg_mgdl > NORMAL_HIGH: #hiperglucemia
-            if pred_dose > real_dose: #prediccion mayor a la real
-                return 2.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD: #prediccion similar a la real
-                return -2.0
-            else:
-                return -3.0
-        else: #hipoglucemia
-            if pred_dose < real_dose: #prediccion menor a la real
-                return 4.0
-            elif abs(pred_dose - real_dose) < DOSE_THRESHOLD:
-                return -2.0
-            else:
-                return -4.0
+if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+    return 2.0 if abs_diff < DOSE_THRESHOLD else -2.0
+elif avg_mgdl > NORMAL_HIGH:
+    if pred_dose > real_dose: return 2.0
+    elif abs_diff < DOSE_THRESHOLD: return -2.0
+    else: return -3.0
+else:
+    if pred_dose < real_dose: return 4.0
+    elif abs_diff < DOSE_THRESHOLD: return -2.0
+    else: return -4.0
+```
 
-### ID = 5:
+### ID = 5
 
-Pasos:
+```python
+model.learn(total_timesteps=300000)
+```
 
-model.learn(total_timesteps=300000)  # 🔄 Más pasos que ID 3
+**Recompensa:** basada en el error relativo, penalizando más cuanto mayor sea la diferencia entre predicción y realidad.
 
-Función de recompensa:
+```python
+abs_diff = abs(pred_dose - real_dose)
 
-def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
-    avg_mgdl = np.mean(mgdl_post)
-    NORMAL_LOW = 70
-    NORMAL_HIGH = 180
-    DOSE_THRESHOLD_PERCENT = 0.10
-    DOSE_THRESHOLD = real_dose * DOSE_THRESHOLD_PERCENT
-
-    if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:  # Rango normal
-        return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
-    elif avg_mgdl > NORMAL_HIGH:  # Hiperglucemia
-        if pred_dose >= real_dose:
-            return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
-        else:
-            return - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
-    else:  # Hipoglucemia
-        if pred_dose < real_dose:
-            return 1.0 - (abs(pred_dose - real_dose) / (real_dose + 1e-5))
-        else:
-            return -2.0
+if NORMAL_LOW <= avg_mgdl <= NORMAL_HIGH:
+    return 1.0 - (abs_diff / (real_dose + 1e-5))
+elif avg_mgdl > NORMAL_HIGH:
+    if pred_dose >= real_dose:
+        return 1.0 - (abs_diff / (real_dose + 1e-5))
+    else:
+        return - (abs_diff / (real_dose + 1e-5))
+else:
+    if pred_dose < real_dose:
+        return 1.0 - (abs_diff / (real_dose + 1e-5))
+    else:
+        return -2.0
+```
 
 ### ID = 6
-
-**Hiperparámetros:**
 
 ```python
 model = PPO(
     "MlpPolicy",
     env,
     verbose=1,
-    learning_rate=1e-4,      # más conservador
+    learning_rate=1e-4,  # más conservador
     n_steps=2048,
-    batch_size=256,          # batch más grande
+    batch_size=256,      # batch más grande
     n_epochs=10,
     gamma=0.99,
     gae_lambda=0.95,
@@ -370,53 +200,89 @@ model = PPO(
 )
 ```
 
-**Pasos:**
 ```python
 model.learn(total_timesteps=500000)
 ```
 
-Misma función de recompensa del ID = 5.
+**Recompensa:** igual a la del modelo ID = 5.
 
 ### ID = 7
 
-Igual que el 6 pero 1 millón de pasos
+Igual que ID = 6 pero con más pasos de entrenamiento.
 
-**Pasos:**
 ```python
 model.learn(total_timesteps=1000000)
 ```
 
-### ID = 8:
+**Recompensa:** igual a la del modelo ID = 5.
 
-Como el 7 pero:
+### ID = 8
 
+Como el ID = 7, pero cambia el espacio de acción a discreto:
 
-**Espacio de acción:**
 ```python
-self.action_space = Discrete(41)  # Acciones de 0.0 a 20.0 en pasos de 0.5
+self.action_space = Discrete(41)  # 41 acciones: 0.0, 0.5, ..., 20.0
 pred_dose = float(action.item()) * 0.5
 ```
 
+```python
+model.learn(total_timesteps=1000000)
+```
 
-## Resultados:
+**Recompensa:** igual a la del modelo ID = 5.
 
-### ID de modelo 0 con ID de preprocesamiento 0:
+### ID = 9
 
-Predicciones para dataset de validacion guardado en ppo_predictions_val_0_0.csv.
+Extiende la recompensa del ID = 5, con penalización explícita por hipoglucemia e hiperglucemia severas y bonificación por buena glucemia postprandial:
 
-### ID de modelo 1 con ID de preprocesamiento 0:
+```python
+reward = base_reward(...)  # misma lógica que ID 5
 
-Predicciones para dataset de validacion guardado en ppo_predictions_val_0_1.csv.
+if mgdl_post[-1] < 70:
+    reward -= 1.0  # hipoglucemia severa
+elif mgdl_post[-1] > 300:
+    reward -= 0.5  # hiperglucemia grave
+elif 70 <= mgdl_post[-1] <= 180:
+    reward += 0.5  # buen control postprandial
+```
 
-### ID de modelo 2 con ID de preprocesamiento 0:
+```python
+model.learn(total_timesteps=1000000)
+```
 
-Predicciones para dataset de validacion guardado en ppo_predictions_val_0_2.csv.
+## 📈 Resultados
 
-### ID de modelo 3 con ID de preprocesamiento 0:
+Los archivos de predicción generados por los modelos se guardan en:
 
-Predicciones para dataset de validacion guardado en ppo_predictions_val_0_3.csv.
+```
+/data/results/ppo_predictions_val_<PREPROCESSING_ID>_<MODEL_ID>.csv
+```
 
-### ID de modelo 4 con ID de preprocesamiento 0:
+**Ejemplos:**
 
-Predicciones para dataset de validacion guardado en ppo_predictions_val_0_4.csv.
+- `ppo_predictions_val_0_0.csv` → modelo ID = 0, preprocesamiento ID = 0
+- `ppo_predictions_val_0_9.csv` → modelo ID = 9, preprocesamiento ID = 0
 
+## 🧩 Resumen de Modelos
+
+| Modelo ID | Timesteps | LR   | Batch | Acción          | Recompensa                          |
+| --------- | --------- | ---- | ----- | --------------- | ----------------------------------- |
+| 0         | 1000000   | 3e-4 | 64    | Continua        | Rango + dosis fija ±1.0             |
+| 1         | 1000000   | 3e-4 | 64    | Continua        | ±10% real con ajustes en hipo/hiper |
+| 2         | 1000000   | 3e-4 | 64    | Continua        | Penalización severa (-2.0)          |
+| 3         | 100000    | 3e-4 | 64    | Continua        | Igual a ID=2                        |
+| 4         | 1000000   | 3e-4 | 64    | Continua        | Premios más agresivos               |
+| 5         | 300000    | 3e-4 | 64    | Continua        | Error relativo                      |
+| 6         | 500000    | 1e-4 | 256   | Continua        | Igual a ID=5                        |
+| 7         | 1000000   | 1e-4 | 256   | Continua        | Igual a ID=5                        |
+| 8         | 1000000   | 1e-4 | 256   | Discreta (0–20) | Igual a ID=5                        |
+| 9         | 1000000   | 1e-4 | 256   | Discreta (0–20) | ID=5 + penalización por extremos    |
+
+---
+
+Este archivo debe mantenerse actualizado con cada nuevo modelo entrenado o cambio en el preprocesamiento.
+
+> **Nota:**  
+> - **MAE** = *Mean Absolute Error* (error absoluto medio)  
+> - **RMSE** = *Root Mean Squared Error* (raíz del error cuadrático medio)  
+> - **% Similares (±10%)** = porcentaje de predicciones cuya diferencia con la dosis real es menor o igual al 10%

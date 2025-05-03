@@ -107,12 +107,15 @@ class InsulinEnv(gym.Env):
         error = abs(pred_dose - real_dose)
         rel_error = error / (real_dose + 1e-5)
 
-        # Penalización suave
         reward = np.exp(-1.5 * rel_error)
 
-        # Bonus si termina en buen rango
-        if 70 <= mgdl_post[-1] <= 180:
-            reward += 0.5
+        # Penalización explícita por valores finales inseguros
+        if mgdl_post[-1] < 70:
+            reward -= 1.0  # fuerte castigo por hipoglucemia
+        elif mgdl_post[-1] > 300:
+            reward -= 0.5  # castigo leve por hiperglucemia severa
+        elif 70 <= mgdl_post[-1] <= 180:
+            reward += 0.5  # bonus por buen control
 
         # Reforzar correcciones deseadas según caso clínico
         if avg_mgdl > 180 and delta_glucose < 0:
