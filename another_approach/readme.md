@@ -249,6 +249,31 @@ elif 70 <= mgdl_post[-1] <= 180:
 ```python
 model.learn(total_timesteps=1000000)
 ```
+### ID = 10
+
+```python
+model.learn(total_timesteps=1000000)
+```
+
+**Recompensa:**  extiende la del ID = 9 con penalización por `std_post` solo si el CGM final está en rango, e incorpora la última dosis predicha al estado.
+
+```python
+reward = np.exp(-1.5 * rel_error)
+
+if mgdl_post[-1] < 70:
+    reward -= 1.0
+elif mgdl_post[-1] > 300:
+    reward -= 0.5
+elif 70 <= mgdl_post[-1] <= 180:
+    reward += 0.5
+    reward -= std_post / 100
+
+# Bonus por correcciones efectivas
+if avg_mgdl > 180 and delta_glucose < 0:
+    reward += 0.5
+elif avg_mgdl < 70 and delta_glucose > 0:
+    reward += 0.5
+```
 
 ## 📈 Resultados
 
@@ -277,6 +302,7 @@ Los archivos de predicción generados por los modelos se guardan en:
 | 7         | 1000000   | 1e-4 | 256   | Continua        | Igual a ID=5                        |
 | 8         | 1000000   | 1e-4 | 256   | Discreta (0–20) | Igual a ID=5                        |
 | 9         | 1000000   | 1e-4 | 256   | Discreta (0–20) | ID=5 + penalización por extremos    |
+| 10        | 1000000   | 1e-4 | 256   | Discreta (0–20) | ID=9 + `std_post` (si está en rango) + memoria corta |
 
 ---
 

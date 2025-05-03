@@ -21,30 +21,24 @@ class InsulinEnv(gym.Env):
     def __init__(self, data_path, standardization_params_path, permute_feature=None):
         super().__init__()
 
-        # Verificar que los archivos existen
         if not os.path.exists(data_path):
             raise FileNotFoundError(f"No se encontró el archivo: {data_path}")
         if not os.path.exists(standardization_params_path):
             raise FileNotFoundError(f"No se encontró el archivo: {standardization_params_path}")
 
-        # Cargar datos (ya normalizados)
         self.data = pl.read_parquet(data_path)
 
-        # Aplicar permutación si se especifica
         if permute_feature is not None:
             if permute_feature not in self.data.columns:
                 raise ValueError(f"Feature {permute_feature} not in data columns")
-            # Permutar los valores de la característica especificada
             permuted_values = np.random.permutation(self.data[permute_feature].to_numpy())
             self.data = self.data.with_columns(pl.Series(permute_feature, permuted_values))
 
-        # Cargar parámetros de estandarización (para referencia)
         with open(standardization_params_path, "r") as f:
             params = json.load(f)
         self.means = params["means"]
         self.stds = params["stds"]
 
-        # Definir columnas
         self.state_cols = [
             *[f"mg/dl_prev_{i+1}" for i in range(PREV_SAMPLES)],
             "carbInput",
@@ -56,21 +50,22 @@ class InsulinEnv(gym.Env):
         self.action_col = "normal"
         self.post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
 
-        # Verificar que las columnas necesarias existen
         required_cols = self.state_cols + [self.action_col] + self.post_cols + ["subject_id", "bolus_date"]
         missing_cols = [col for col in required_cols if col not in self.data.columns]
         if missing_cols:
             raise ValueError(f"Faltan columnas: {missing_cols}")
-        # Espacios de estado y acción
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.state_cols),), dtype=np.float32)
+
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.state_cols) + 1,), dtype=np.float32)
         self.action_space = spaces.Box(low=0.0, high=20.0, shape=(1,), dtype=np.float32)
 
         self.current_step = 0
         self.max_steps = self.data.height
+        self.last_pred_dose = 0.0
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.current_step = 0
+        self.last_pred_dose = 0.0
         return self._get_state(), {}
 
     def step(self, action):
@@ -90,34 +85,35 @@ class InsulinEnv(gym.Env):
             "reward": float(reward),
         }
 
+        self.last_pred_dose = float(pred_dose)
         self.current_step += 1
         terminated = self.current_step >= self.max_steps
         truncated = False
-        next_state = self._get_state() if not terminated else np.zeros(len(self.state_cols), dtype=np.float32)
+        next_state = self._get_state() if not terminated else np.zeros(len(self.state_cols) + 1, dtype=np.float32)
 
         return next_state, reward, terminated, truncated, info
 
     def _get_state(self):
         state = self.data[self.state_cols].row(self.current_step)
-        return np.array(state, dtype=np.float32)
+        return np.array(list(state) + [self.last_pred_dose], dtype=np.float32)
 
     def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
         avg_mgdl = np.mean(mgdl_post)
         delta_glucose = mgdl_post[-1] - mgdl_post[0]
         error = abs(pred_dose - real_dose)
         rel_error = error / (real_dose + 1e-5)
+        std_post = np.std(mgdl_post)
 
         reward = np.exp(-1.5 * rel_error)
 
-        # Penalización explícita por valores finales inseguros
         if mgdl_post[-1] < 70:
-            reward -= 1.0  # fuerte castigo por hipoglucemia
+            reward -= 1.0
         elif mgdl_post[-1] > 300:
-            reward -= 0.5  # castigo leve por hiperglucemia severa
+            reward -= 0.5
         elif 70 <= mgdl_post[-1] <= 180:
-            reward += 0.5  # bonus por buen control
+            reward += 0.5
+            reward -= std_post / 100
 
-        # Reforzar correcciones deseadas según caso clínico
         if avg_mgdl > 180 and delta_glucose < 0:
             reward += 0.5
         elif avg_mgdl < 70 and delta_glucose > 0:
