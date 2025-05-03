@@ -60,7 +60,7 @@ class InsulinEnv(gym.Env):
         required_cols = self.state_cols + [self.action_col] + self.post_cols + ["subject_id", "bolus_date"]
         missing_cols = [col for col in required_cols if col not in self.data.columns]
         if missing_cols:
-            raise ValueError(f"Faltan columnas: {missing}")
+            raise ValueError(f"Faltan columnas: {missing_cols}")
         # Espacios de estado y acción
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.state_cols),), dtype=np.float32)
         self.action_space = spaces.Box(low=0.0, high=20.0, shape=(1,), dtype=np.float32)
