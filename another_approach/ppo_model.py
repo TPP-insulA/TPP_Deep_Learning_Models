@@ -103,21 +103,24 @@ class InsulinEnv(gym.Env):
         error = abs(pred_dose - real_dose)
         rel_error = error / (real_dose + 1e-5)
         std_post = np.std(mgdl_post)
+        final_mgdl = mgdl_post[-1]
 
         reward = np.exp(-1.5 * rel_error)
 
-        if mgdl_post[-1] < 70:
+        # Penalización por extremos
+        if final_mgdl < 70:
             reward -= 1.0
-        elif mgdl_post[-1] > 300:
+        elif final_mgdl > 300:
             reward -= 0.5
-        elif 70 <= mgdl_post[-1] <= 180:
+        elif 70 <= final_mgdl <= 180:
             reward += 0.5
-            reward -= std_post / 100
+            reward -= std_post / 100  # penaliza variabilidad solo si está en rango
 
-        if avg_mgdl > 180 and delta_glucose < 0:
-            reward += 0.5
-        elif avg_mgdl < 70 and delta_glucose > 0:
-            reward += 0.5
+        # Correcciones clínicas explícitas
+        if avg_mgdl > 180 and pred_dose > real_dose:
+            reward += 0.5  # buena corrección de hiperglucemia
+        elif avg_mgdl < 70 and pred_dose < real_dose:
+            reward += 0.5  # buena corrección de hipoglucemia
 
         return float(reward)
 

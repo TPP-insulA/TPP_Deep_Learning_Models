@@ -9,7 +9,7 @@ CONFIG = {
 }
 
 PREPROCESSSING_ID = 0
-MODEL_ID = 10
+MODEL_ID = 11
 
 WINDOW_PREV_HOURS = 2  # Ventana previa de 2 horas (parametrizable)
 WINDOW_POST_HOURS = 2  # Ventana posterior de 2 horas (parametrizable)
