@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 
 from config.models_config import EARLY_STOPPING_POLICY
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_log, print_success, print_error, print_warning
 
@@ -122,7 +122,7 @@ class RLModelWrapperTF(ModelWrapper):
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo RL con los datos proporcionados.
 
@@ -613,7 +613,7 @@ class RLModelWrapperJAX(ModelWrapper):
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
               validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-              epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+              epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el agente JAX por épocas.
 
@@ -1688,7 +1688,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
     
     def fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo RL con los datos proporcionados.
         
@@ -2115,7 +2115,7 @@ class RLModelWrapper(ModelWrapper):
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo/agente.
         

@@ -23,7 +23,7 @@ CONST_EPOCHS = 2 if DEBUG else CONST_DEFAULT_EPOCHS
 def create_dataset(x_cgm: np.ndarray, 
                   x_other: np.ndarray, 
                   y: np.ndarray, 
-                  batch_size: int = 32) -> tf.data.Dataset:
+                  batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> tf.data.Dataset:
     """
     Crea un dataset optimizado usando tf.data.
     

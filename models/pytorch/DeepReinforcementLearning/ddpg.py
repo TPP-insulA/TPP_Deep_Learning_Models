@@ -16,7 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG, EARLY_STOPPING_POLICY
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -1187,8 +1187,8 @@ class DDPGWrapper(nn.Module):
         x: List[torch.Tensor], 
         y: torch.Tensor, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -1204,7 +1204,7 @@ class DDPGWrapper(nn.Module):
         validation_data : Optional[Tuple], opcional
             Datos de validación como ([cgm_val, other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional

@@ -13,7 +13,7 @@ from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import TRPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -1725,8 +1725,8 @@ class TRPOWrapper:
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: list = None,
         verbose: int = 0
     ) -> Dict:
@@ -1742,7 +1742,7 @@ class TRPOWrapper:
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : list, opcional

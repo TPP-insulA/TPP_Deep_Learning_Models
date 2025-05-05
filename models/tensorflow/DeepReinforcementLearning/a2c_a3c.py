@@ -16,7 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import A2C_A3C_CONFIG
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.printer import print_success
 
 
@@ -579,7 +579,7 @@ class A2C:
         
         return episode_rewards
 
-    def train(self, env, n_steps: int = 10, epochs: int = 1000, 
+    def train(self, env, n_steps: int = 10, epochs: int = CONST_DEFAULT_EPOCHS, 
              render: bool = False) -> Dict:
         """
         Entrena el modelo A2C en el entorno dado.
@@ -1251,8 +1251,8 @@ class A2CWrapper(Model):
         self, 
         x: Union[List[tf.Tensor], tf.data.Dataset], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1270,7 +1270,7 @@ class A2CWrapper(Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -1673,8 +1673,8 @@ class A3CWrapper(A2CWrapper):
         self, 
         x: Union[List[tf.Tensor], tf.data.Dataset], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1692,7 +1692,7 @@ class A3CWrapper(A2CWrapper):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional

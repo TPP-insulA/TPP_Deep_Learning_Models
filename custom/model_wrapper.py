@@ -4,6 +4,8 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+
 class ModelWrapper:
     """
     Clase base para encapsular modelos de aprendizaje profundo y por refuerzo.
@@ -37,7 +39,7 @@ class ModelWrapper:
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo con los datos proporcionados.
         

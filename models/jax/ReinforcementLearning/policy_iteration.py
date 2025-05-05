@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import POLICY_ITERATION_CONFIG, EARLY_STOPPING_POLICY
-from constants.constants import CONST_LOSS, CONST_VAL_LOSS, CONST_DEFAULT_SEED # Importar constantes comunes
+from constants.constants import CONST_LOSS, CONST_VAL_LOSS, CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper # Import base class
 from custom.printer import print_info, print_warning # For better logging
 
@@ -952,8 +952,8 @@ class PolicyIterationWrapper(ModelWrapper):
         x_other: np.ndarray,
         y: np.ndarray,
         validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-        epochs: int = 1, # Policy Iteration no usa épocas tradicionalmente
-        batch_size: int = 32, # No aplica a PI clásico
+        epochs: int = CONST_DEFAULT_EPOCHS, # Policy Iteration no usa épocas tradicionalmente
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, # No aplica a PI clásico
         callbacks: Optional[List] = None,
         verbose: int = 1
     ) -> Dict[str, List[float]]:
@@ -971,7 +971,7 @@ class PolicyIterationWrapper(ModelWrapper):
         validation_data : Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]], opcional
             Datos de validación como ((x_cgm_val, x_other_val), y_val) (default: None)
         epochs : int, opcional
-            Número de épocas (no usado directamente por PI) (default: 1)
+            Número de épocas (no usado directamente por PI) (default: 10)
         batch_size : int, opcional
             Tamaño de lote (no usado directamente por PI) (default: 32)
         callbacks : Optional[List], opcional

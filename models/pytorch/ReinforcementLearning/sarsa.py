@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SARSA_CONFIG
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 
 # Constantes para rutas de figuras y etiquetas comunes
@@ -915,8 +915,8 @@ class SARSAModel(nn.Module):
         x: List[torch.Tensor], 
         y: np.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: list = None,
         verbose: int = 0
     ) -> Dict:
@@ -932,7 +932,7 @@ class SARSAModel(nn.Module):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         callbacks : list, opcional

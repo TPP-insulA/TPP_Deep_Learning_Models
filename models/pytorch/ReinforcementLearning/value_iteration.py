@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 from custom.printer import print_success, print_warning, print_error, print_info
 
@@ -1100,8 +1100,8 @@ class ValueIterationModel(nn.Module):
         x: List[torch.Tensor], 
         y: np.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1, 
-        batch_size: int = 32, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 1, 
         **kwargs
     ) -> Dict[str, List[float]]:
@@ -1117,7 +1117,7 @@ class ValueIterationModel(nn.Module):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         verbose : int, opcional
@@ -1222,7 +1222,7 @@ class ValueIterationModel(nn.Module):
         self, 
         x: List[torch.Tensor], 
         y: np.ndarray, 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 1, 
         **kwargs
     ) -> float:
@@ -1261,7 +1261,7 @@ class ValueIterationModel(nn.Module):
     def predict(
         self, 
         x: List[torch.Tensor], 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 0, 
         **kwargs
     ) -> np.ndarray:

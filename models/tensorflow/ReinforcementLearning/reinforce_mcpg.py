@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import REINFORCE_CONFIG
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para mensajes y valores
 CONST_ENTRENANDO = "Entrenando agente REINFORCE..."
@@ -1053,8 +1053,8 @@ class REINFORCEModel(tf.keras.models.Model):
         self, 
         x: List[tf.Tensor], 
         y: tf.Tensor, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         validation_data: Optional[Tuple] = None,
         verbose: int = 0
@@ -1069,7 +1069,7 @@ class REINFORCEModel(tf.keras.models.Model):
         y : tf.Tensor
             Valores objetivo (dosis)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional

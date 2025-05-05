@@ -11,7 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import QLEARNING_CONFIG
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 class QLearning:
     """
@@ -990,8 +990,8 @@ class QLearningModel(tf.keras.models.Model):
         x: List[tf.Tensor], 
         y: tf.Tensor, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -1007,7 +1007,7 @@ class QLearningModel(tf.keras.models.Model):
         validation_data : Optional[Tuple], opcional
             Datos de validación como (x_val, y_val) (default: None)
         epochs : int, opcional
-            Número de épocas para entrenamiento (default: 1)
+            Número de épocas para entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         callbacks : List, opcional

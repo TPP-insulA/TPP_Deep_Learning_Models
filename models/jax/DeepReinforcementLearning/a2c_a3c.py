@@ -14,7 +14,7 @@ from tqdm import tqdm
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import A2C_A3C_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -685,7 +685,7 @@ class A2C:
         
         return episode_rewards
 
-    def train(self, env, n_steps: int = 10, epochs: int = 1000, 
+    def train(self, env, n_steps: int = 10, epochs: int = CONST_DEFAULT_EPOCHS, 
              render: bool = False) -> Dict:
         """
         Entrena el modelo A2C en el entorno dado.
@@ -1488,8 +1488,8 @@ class A2CWrapper:
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 1
     ) -> Dict:
@@ -1902,8 +1902,8 @@ class A3CWrapper(A2CWrapper):
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 1
     ) -> Dict:
@@ -1919,7 +1919,7 @@ class A3CWrapper(A2CWrapper):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional

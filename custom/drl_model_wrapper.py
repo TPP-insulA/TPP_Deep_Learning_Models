@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm.auto import tqdm
 
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import EARLY_STOPPING_POLICY
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_warning, print_error, print_success
@@ -303,7 +303,7 @@ class DRLModelWrapperTF(ModelWrapper):
         
     def fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
            validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-           epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+           epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -475,45 +475,84 @@ class DRLModelWrapperTF(ModelWrapper):
     
     def save(self, path: str) -> None:
         """
-        Guarda el modelo en disco.
-        
+        Guarda el estado del modelo DRL JAX en disco.
+
         Parámetros:
         -----------
         path : str
             Ruta donde guardar el modelo
-        
+    
         Retorna:
         --------
         None
         """
+        # Verificar si el modelo está inicializado
         if self.model is None:
             raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
         
+        # Crear directorio si es necesario
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
         try:
-            # Verificar si el modelo tiene método save
+            # Intentar guardar usando el método del modelo subyacente si existe
             if hasattr(self.model, 'save'):
                 self.model.save(path)
-                print_success(f"Modelo guardado en {path}")
-            # Verificar si se pueden guardar los pesos
-            elif hasattr(self.model, 'save_weights'):
-                self.model.save_weights(f"{path}_weights.h5")
-                print_success(f"Pesos del modelo guardados en {path}_weights.h5")
-            else:
-                # Intentar guardar modelo completo con SavedModel
-                tf.saved_model.save(self.model, path)
-                print_success(f"Modelo guardado usando SavedModel en {path}")
-        except Exception as e:
-            # Fallback a pickle si los métodos anteriores fallan
-            print_warning(f"No se pudo guardar con métodos estándar: {e}")
-            print_warning("Guardando con pickle como alternativa")
-            with open(f"{path}.pkl", 'wb') as f:
-                save_data = {
-                    'model_kwargs': self.model_kwargs,
-                    'weights': self.model.get_weights() if hasattr(self.model, 'get_weights') else None
-                }
+                print_success(f"Modelo guardado usando método nativo en: {path}")
+                return
+                
+            # Determinar qué estado guardar
+            state_to_save = None
+            if self.params is not None:
+                state_to_save = self.params
+            elif self.state is not None:
+                state_to_save = self.state
+            elif self.states:  # Si hay estados (actor, crítico, etc.)
+                state_to_save = self.states
+                
+            # Intentar guardar con checkpoint de Flax
+            if state_to_save is not None:
+                try:
+                    save_checkpoint(path, state_to_save, step=0, keep=1)
+                    print_success(f"Estado del modelo guardado en: {path}")
+                    return
+                except Exception as e:
+                    print_warning(f"No se pudo guardar con checkpoint de Flax: {e}")
+                    
+            # Fallback: guardar con pickle
+            print_warning("Guardando con pickle como alternativa.")
+            save_data = {
+                'params': self.params,
+                'state': self.state,
+                'states': self.states,
+                'model_kwargs': self.model_kwargs,
+                'algorithm': self.algorithm,
+                'rng_key': self.rng_key
+            }
+                
+            # Asegurar que no haya duplicación de extensión
+            save_path = path if path.endswith('.pkl') else f"{path}.pkl"
+            
+            with open(save_path, 'wb') as f:
                 pickle.dump(save_data, f)
-            print_success(f"Modelo guardado como pickle en {path}.pkl")
-
+            print_success(f"Estado del modelo guardado como pickle en: {save_path}")
+                
+        except Exception as e:
+            print_error(f"Error al guardar modelo: {e}")
+            
+            # Último recurso - intentar guardar solo información básica
+            try:
+                basic_info = {
+                    'model_kwargs': self.model_kwargs,
+                    'algorithm': self.algorithm
+                }
+                
+                fallback_path = f"{path}_info.pkl"
+                with open(fallback_path, 'wb') as f:
+                    pickle.dump(basic_info, f)
+                print_warning(f"No se pudo guardar el modelo completo, pero la información básica fue guardada en: {fallback_path}")
+            except Exception as inner_e:
+                print_error(f"No se pudo guardar ni siquiera la información básica: {inner_e}")
+        
     def load(self, path: str) -> None:
         """
         Carga el modelo desde disco.
@@ -651,6 +690,15 @@ class DRLModelWrapperJAX(ModelWrapper):
         self.params = None
         self.state = None
         self.states = {}  # Múltiples estados (actor, crítico, etc.)
+        
+        self.early_stopping_config = {
+            'patience': EARLY_STOPPING_POLICY['early_stopping_patience'],
+            'min_delta': EARLY_STOPPING_POLICY['early_stopping_min_delta'],
+            'restore_best_weights': EARLY_STOPPING_POLICY['early_stopping_restore_best_weights'],
+            'best_val_loss': EARLY_STOPPING_POLICY['early_stopping_best_val_loss'],
+            'counter': EARLY_STOPPING_POLICY['early_stopping_counter'],
+            'best_weights': EARLY_STOPPING_POLICY['early_stopping_best_weights']
+        }
     
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              rng_key: Any = None) -> Any:
@@ -1131,7 +1179,7 @@ class DRLModelWrapperJAX(ModelWrapper):
     
     def _run_epoch_updates(self, x_cgm_arr: jnp.ndarray, x_other_arr: jnp.ndarray, 
                           y_arr: jnp.ndarray, rewards: jnp.ndarray, 
-                          batch_size: int, updates_per_epoch: int) -> Dict[str, float]:
+                          batch_size: int, updates_per_epoch: int, verbose: int = 1) -> Dict[str, float]:
         """
         Ejecuta las actualizaciones durante una época.
         
@@ -1149,6 +1197,8 @@ class DRLModelWrapperJAX(ModelWrapper):
             Tamaño del lote
         updates_per_epoch : int
             Número de actualizaciones por época
+        verbose : int, opcional
+            Nivel de verbosidad (0=silencioso, 1=progreso) (default: 1)
             
         Retorna:
         --------
@@ -1157,14 +1207,39 @@ class DRLModelWrapperJAX(ModelWrapper):
         """
         epoch_metrics = {key: 0.0 for key in ["actor_loss", "critic_loss", "q_loss", "total_loss"]}
         
-        for _ in range(updates_per_epoch):
+        # Crear iterador con barra de progreso
+        iterator = tqdm(
+            range(updates_per_epoch), 
+            desc="Procesando lotes", 
+            leave=False,  # No dejar la barra al terminar
+            disable=verbose == 0,  # Deshabilitar si verbose=0
+            unit="batch"
+        )
+        
+        # Iterar con la barra de progreso
+        for _ in iterator:
             # Obtener un lote del buffer
             batch = self._get_batch_from_buffer(x_cgm_arr, x_other_arr, y_arr, rewards, batch_size)
             
             # Actualizar redes
             batch_metrics = self._update_networks(batch)
+            
+            # Actualizar métricas acumuladas
             for key, value in batch_metrics.items():
                 epoch_metrics[key] += value
+            
+            # Actualizar la barra de progreso con métricas actuales
+            if verbose > 0:
+                postfix = {
+                    "loss": f"{batch_metrics.get('total_loss', 0.0):.4f}"
+                }
+                # Use an epsilon value for floating point comparisons
+                epsilon = 1e-10
+                if abs(batch_metrics.get('actor_loss', 0.0)) > epsilon:
+                    postfix["actor"] = f"{batch_metrics.get('actor_loss', 0.0):.4f}"
+                if abs(batch_metrics.get('critic_loss', 0.0)) > epsilon:
+                    postfix["critic"] = f"{batch_metrics.get('critic_loss', 0.0):.4f}"
+                iterator.set_postfix(**postfix)
                 
         return epoch_metrics
     
@@ -1188,7 +1263,7 @@ class DRLModelWrapperJAX(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         
@@ -1255,7 +1330,7 @@ class DRLModelWrapperJAX(ModelWrapper):
             # Ejecutar actualizaciones durante la época
             updates_per_epoch = max(1, len(x_cgm) // batch_size)
             epoch_metrics = self._run_epoch_updates(
-                x_cgm_arr, x_other_arr, y_arr, rewards, batch_size, updates_per_epoch
+                x_cgm_arr, x_other_arr, y_arr, rewards, batch_size, updates_per_epoch, verbose=verbose
             )
             
             # Procesar métricas y registrarlas en el historial
@@ -1376,63 +1451,240 @@ class DRLModelWrapperJAX(ModelWrapper):
     
     def save(self, path: str) -> None:
         """
-        Guarda el estado del agente JAX en disco.
+        Guarda el estado del modelo DRL JAX en disco.
 
         Parámetros:
         -----------
         path : str
-            Ruta donde guardar el estado del agente.
-
+            Ruta donde guardar el modelo
+    
         Retorna:
         --------
         None
         """
-        if self.agent_state is None:
-            raise ValueError("El estado del agente debe estar inicializado antes de guardarlo.")
+        # Verificar si el modelo está inicializado
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
+        
+        # Crear directorio si es necesario
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
         try:
-            save_checkpoint(path, self.agent_state, step=0, keep=1)
-            print_success(f"Estado del agente guardado en: {path}")
+            # Intentar guardar usando el método del modelo subyacente si existe
+            if hasattr(self.model, 'save'):
+                self.model.save(path)
+                print_success(f"Modelo guardado usando método nativo en: {path}")
+                return
+                
+            # Determinar qué estado guardar
+            state_to_save = None
+            if self.params is not None:
+                state_to_save = self.params
+            elif self.state is not None:
+                state_to_save = self.state
+            elif self.states:  # Si hay estados (actor, crítico, etc.)
+                state_to_save = self.states
+                
+            # Intentar guardar con checkpoint de Flax
+            if state_to_save is not None:
+                try:
+                    save_checkpoint(path, state_to_save, step=0, keep=1)
+                    print_success(f"Estado del modelo guardado en: {path}")
+                    return
+                except Exception as e:
+                    print_warning(f"No se pudo guardar con checkpoint de Flax: {e}")
+                
         except Exception as e:
-            print_warning(f"No se pudo guardar con checkpoint de Flax: {e}")
-            print_warning("Guardando con pickle como alternativa.")
-            save_data = {
-                'agent_state': self.agent_state,
-                'cgm_shape': self.cgm_shape,
-                'other_features_shape': self.other_features_shape,
-                'model_kwargs': self.model_kwargs
-            }
-            with open(f"{path}.pkl", 'wb') as f:
-                pickle.dump(save_data, f)
-            print_success(f"Estado del agente guardado como pickle en: {path}.pkl")
-
+            print_error(f"Error al guardar modelo: {e}")
+        
+        # Fallback: guardar con pickle
+        print_warning("Guardando con pickle como alternativa.")
+        save_data = {
+            'params': self.params,
+            'state': self.state,
+            'states': self.states,
+            'model_kwargs': self.model_kwargs,
+            'algorithm': self.algorithm,
+            'rng_key': self.rng_key
+        }
+            
+        # Asegurar que no haya duplicación de extensión
+        save_path = path if path.endswith('.pkl') else f"{path}.pkl"
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump(save_data, f)
+        print_success(f"Estado del modelo guardado como pickle en: {save_path}")
+            
+    def _try_load_checkpoint(self, path: str) -> bool:
+        """
+        Intenta cargar el modelo desde un checkpoint de Flax.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el checkpoint
+            
+        Retorna:
+        --------
+        bool
+            True si el checkpoint se cargó correctamente, False en caso contrario
+        """
+        try:
+            # Determinar qué estado cargar (usando el mismo orden de prioridad que en save)
+            if self.params is not None:
+                restored_params = restore_checkpoint(path, self.params)
+                if restored_params is not None:
+                    self.params = restored_params
+                    print_success(f"Parámetros restaurados desde: {path}")
+                    return True
+                return False
+                
+            if self.state is not None:
+                restored_state = restore_checkpoint(path, self.state)
+                if restored_state is not None:
+                    self.state = restored_state
+                    print_success(f"Estado restaurado desde: {path}")
+                    return True
+                return False
+                
+            if self.states:
+                restored_states = restore_checkpoint(path, self.states)
+                if restored_states is not None:
+                    self.states = restored_states
+                    print_success(f"Estados restaurados desde: {path}")
+                    return True
+                return False
+                
+            # Si no hay estado previo, intentar restaurar en un diccionario nuevo
+            loaded_state = restore_checkpoint(path, {})
+            if loaded_state is not None and loaded_state:  # Verificar que no sea None y no esté vacío
+                self._assign_loaded_state(loaded_state)
+                print_success(f"Estado del modelo restaurado desde: {path}")
+                return True
+            
+            # Si llegamos aquí, no se pudo cargar ningún estado
+            print_warning(f"No se pudo cargar un estado válido desde: {path}")
+            return False
+            
+        except Exception as e:
+            print_error(f"Error al cargar checkpoint: {e}")
+            return False
+    
+    def _assign_loaded_state(self, loaded_state):
+        """
+        Asigna el estado cargado a la propiedad correcta.
+        
+        Parámetros:
+        -----------
+        loaded_state : Any
+            Estado cargado desde el checkpoint
+        """
+        if isinstance(loaded_state, dict) and 'params' in loaded_state:
+            self.params = loaded_state
+        else:
+            self.state = loaded_state
+    
+    def _load_from_pickle(self, path: str) -> None:
+        """
+        Carga el modelo desde un archivo pickle.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo pickle
+        """
+        pickle_path = path if path.endswith('.pkl') else f"{path}.pkl"
+        with open(pickle_path, 'rb') as f:
+            data = pickle.load(f)
+            
+        # Restaurar los componentes relevantes
+        self._restore_model_components(data)
+        
+        # Restaurar metadatos y configuración
+        self._restore_model_metadata(data)
+        
+        print_success(f"Estado del modelo restaurado desde pickle: {pickle_path}")
+    
+    def _restore_model_components(self, data: Dict) -> None:
+        """
+        Restaura los componentes principales del modelo desde los datos cargados.
+        
+        Parámetros:
+        -----------
+        data : Dict
+            Datos del modelo cargados
+        """
+        if 'params' in data and data['params'] is not None:
+            self.params = data['params']
+            
+        if 'state' in data and data['state'] is not None:
+            self.state = data['state']
+            
+        if 'states' in data and data['states'] is not None:
+            self.states = data['states']
+    
+    def _restore_model_metadata(self, data: Dict) -> None:
+        """
+        Restaura los metadatos del modelo desde los datos cargados.
+        
+        Parámetros:
+        -----------
+        data : Dict
+            Datos del modelo cargados
+        """
+        if 'model_kwargs' in data:
+            self.model_kwargs.update(data['model_kwargs'])
+            
+        if 'algorithm' in data:
+            self.algorithm = data['algorithm']
+            
+        if 'rng_key' in data:
+            self.rng_key = data['rng_key']
+    
     def load(self, path: str) -> None:
         """
-        Carga el estado del agente JAX desde disco.
+        Carga el estado del modelo DRL JAX desde disco.
 
         Parámetros:
         -----------
         path : str
-            Ruta desde donde cargar el estado del agente.
+            Ruta desde donde cargar el modelo
 
         Retorna:
         --------
         None
         """
         try:
-            self.agent_state = restore_checkpoint(path, self.agent_state)
-            print_success(f"Estado del agente restaurado desde: {path}")
+            # Intentar cargar con checkpoint de Flax
+            self._try_load_checkpoint(path)
         except Exception as e:
             print_warning(f"No se pudo cargar desde checkpoint de Flax: {e}")
+            
+            # Intentar cargar desde pickle como último recurso
             print_warning("Intentando cargar desde pickle.")
-            with open(f"{path}.pkl", 'rb') as f:
-                data = pickle.load(f)
-            self.agent_state = data.get('agent_state')
-            self.cgm_shape = data.get('cgm_shape', self.cgm_shape)
-            self.other_features_shape = data.get('other_features_shape', self.other_features_shape)
-            self.model_kwargs.update(data.get('model_kwargs', {}))
-            print_success(f"Estado del agente restaurado desde pickle: {path}.pkl")
+            try:
+                self._load_from_pickle(path)
+            except Exception as inner_e:
+                print_error(f"Error al cargar desde pickle: {inner_e}")
+                print_error("No se pudo restaurar el modelo.")
+        
+    def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
+        """
+        Agrega early stopping al modelo.
 
+        Parámetros:
+        -----------
+        patience : int, opcional
+            Número de épocas a esperar para detener el entrenamiento (default: 10)
+        min_delta : float, opcional
+            Mínima mejora requerida para considerar una mejora (default: 0.0)
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar (default: True)
+        """
+        # Actualizar la configuración existente de early stopping
+        self.early_stopping_config['patience'] = patience
+        self.early_stopping_config['min_delta'] = min_delta
+        self.early_stopping_config['restore_best_weights'] = restore_best_weights
 class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
     """
     Wrapper para modelos de aprendizaje por refuerzo profundo implementados en PyTorch.
@@ -2103,7 +2355,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
     
     def fit(self, x: List[np.ndarray], y: np.ndarray,
            validation_data: Optional[Tuple] = None,
-           epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+           epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados usando PyTorch.
 
@@ -2296,7 +2548,7 @@ class DRLModelWrapper(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32, verbose: int = 1) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE, verbose: int = 1) -> Dict[str, List[float]]:
         """
         Entrena el modelo DRL con los datos proporcionados.
         

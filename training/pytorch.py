@@ -79,7 +79,7 @@ class CGMDataset(Dataset):
 def create_dataloaders(x_cgm: np.ndarray, 
                      x_other: np.ndarray, 
                      y: np.ndarray, 
-                     batch_size: int = 32,
+                     batch_size: int = CONST_DEFAULT_BATCH_SIZE,
                      shuffle: bool = True) -> DataLoader:
     """
     Crea DataLoaders para el entrenamiento PyTorch.
