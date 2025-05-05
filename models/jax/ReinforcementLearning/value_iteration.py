@@ -1476,12 +1476,20 @@ def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shap
         Wrapper de Iteración de Valor que implementa la interfaz compatible con la API del sistema
     """
     # Devolver el wrapper con el agente de Iteración de Valor
-    return RLModelWrapperJAX(
+    model = RLModelWrapperJAX(
         agent_creator=create_value_iteration_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
         **kwargs
     )
+
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]:
     """

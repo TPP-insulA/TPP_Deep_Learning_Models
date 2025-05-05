@@ -12,9 +12,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED
-from config.models_config import MONTE_CARLO_CONFIG
+from config.models_config import EARLY_STOPPING_POLICY, MONTE_CARLO_CONFIG
 from custom.rl_model_wrapper import RLModelWrapperJAX
-from custom.printer import print_warning # Importar print_warning
+from custom.printer import print_warning
 
 FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'monte_carlo')
 
@@ -409,12 +409,20 @@ def create_monte_carlo_model(cgm_shape: Tuple[int, ...], other_features_shape: T
         Wrapper RL para el agente Monte Carlo.
     """
     # Pasar la función creadora del agente y los kwargs al wrapper JAX
-    return RLModelWrapperJAX(
+    model = RLModelWrapperJAX(
         agent_creator=create_monte_carlo_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
         **model_kwargs # Pasar kwargs al wrapper, que los pasará al creador
     )
+    
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...], Dict], RLModelWrapperJAX]:
     """

@@ -4,14 +4,15 @@
 ###                Global Configuration                 ###
 ###########################################################
 EARLY_STOPPING_POLICY = {
-    'early_stopping': True,              # Activar/desactivar early stopping
-    'early_stopping_patience': 10,       # Épocas a esperar antes de detener
-    'early_stopping_min_delta': 0.001,   # Mejora mínima considerada significativa
-    'early_stopping_restore_best_weights': True, # Restaurar mejores pesos al finalizar
-    'early_stopping_best_val_loss': float('inf'), # Mejor pérdida de validación
-    'early_stopping_counter': 0,         # Contador de épocas sin mejora
-    'early_stopping_best_epoch': 0,      # Época con mejor pérdida de validación
-    'early_stopping_best_weights': None, # Mejores pesos del modelo
+    'early_stopping': True,                         # Activar/desactivar early stopping
+    'early_stopping_patience': 10,                  # Épocas a esperar antes de detener
+    'early_stopping_min_delta': 0.001,              # Mejora mínima considerada significativa
+    'early_stopping_restore_best_weights': True,    # Restaurar mejores pesos al finalizar
+    'early_stopping_best_val_loss': float('inf'),   # Mejor pérdida de validación
+    'early_stopping_best_loss': float('inf'),       # Mejor pérdida de entrenamiento
+    'early_stopping_counter': 0,                    # Contador de épocas sin mejora
+    'early_stopping_best_epoch': 0,                 # Época con mejor pérdida de validación
+    'early_stopping_best_weights': None,            # Mejores pesos del modelo
 }
 ###########################################################
 ###                Deep Learning Models                 ###
@@ -45,10 +46,10 @@ ATTENTION_CONFIG = {
 
 CNN_CONFIG = {
     # Arquitectura
-    'filters': [32, 64, 128, 256], # Número de filtros en cada capa convolucional
-    'kernel_size': 3,             # Tamaño del kernel para las convoluciones
-    'pool_size': 2,               # Tamaño del pool para capas de pooling
-    'dilation_rates': [1, 2, 4],  # Tasas de dilatación para convoluciones dilatadas
+    'filters': [32, 64, 128, 256],  # Número de filtros en cada capa convolucional
+    'kernel_size': 3,               # Tamaño del kernel para las convoluciones
+    'pool_size': 2,                 # Tamaño del pool para capas de pooling
+    'dilation_rates': [1, 2, 4],    # Tasas de dilatación para convoluciones dilatadas
     
     # Bloques especiales
     'use_se_block': True,         # Si usar bloques Squeeze-and-Excitation
@@ -462,7 +463,7 @@ REINFORCE_CONFIG = {
     'smoothing_window': 10,            # Ventana para suavizado de gráficos
 
     'policy_lr': 1e-3,               # Tasa de aprendizaje para la política
-    'value_lr': 1e-3,             # Tasa de aprendizaje para la función de valor
+    'value_lr': 1e-3,                # Tasa de aprendizaje para la función de valor
     'continuous': False,             # Si la acción es continua (True) o discreta (False)
 }
 

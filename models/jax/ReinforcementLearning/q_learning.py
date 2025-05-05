@@ -14,7 +14,7 @@ from custom.printer import print_debug
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import QLEARNING_CONFIG
+from config.models_config import EARLY_STOPPING_POLICY, QLEARNING_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.rl_model_wrapper import RLModelWrapperJAX
 
@@ -651,12 +651,20 @@ def create_q_learning_model(cgm_shape: Tuple[int, ...], other_features_shape: Tu
         Wrapper RL para el agente Q-Learning
     """
     # Crear el wrapper RLModelWrapperJAX con la función creadora del agente
-    return RLModelWrapperJAX(
+    model = RLModelWrapperJAX(
         agent_creator=create_q_learning_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
         **model_kwargs
     )
+    
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
 
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...], Dict], RLModelWrapperJAX]:

@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from constants.constants import CONST_DEFAULT_SEED
-from config.models_config import SARSA_CONFIG
+from config.models_config import SARSA_CONFIG, EARLY_STOPPING_POLICY
 from custom.rl_model_wrapper import RLModelWrapperJAX
 
 # Constantes para rutas de figuras y etiquetas comunes
@@ -84,7 +84,10 @@ class SARSA:
         self.rng_key = jax.random.PRNGKey(seed)
         
         # Configurar espacio de estados y tabla Q
-        self.discrete_state_space = hasattr(env.observation_space, 'n')
+        if isinstance(self.env.observation_space, tuple):
+            self.discrete_state_space = False
+        else:
+            self.discrete_state_space = hasattr(env.observation_space, 'n')
         
         if self.discrete_state_space:
             self._setup_discrete_state_space()
@@ -168,15 +171,26 @@ class SARSA:
         """
         Configura SARSA para un espacio de estados continuo con discretización.
         """
-        self.state_dim = self.env.observation_space.shape[0]
+        # Definir dimensiones del estado de forma explícita y fija
+        # En lugar de usar las dimensiones brutas que son demasiado grandes
+        if isinstance(self.env.observation_space, tuple):
+            # Usar un número fijo de características para representar el estado
+            # 4 para CGM: media, último valor, pendiente, variabilidad
+            # 3 para otras características: carbohidratos, glucosa, IOB
+            self.state_dim = 7
+        else:
+            # Para entornos estándar de gym
+            self.state_dim = self.env.observation_space.shape[0]
+            
         self.bins_per_dim = self.config['bins']
         
         # Configurar límites de estado y bins
         self._setup_state_bounds()
         self._create_discretization_bins()
         
-        # Crear y configurar tabla Q
+        # Crear tabla Q con tamaño manejable
         q_shape = tuple([self.bins_per_dim] * self.state_dim + [self.action_space_size])
+        print(f"Creando tabla Q con forma: {q_shape}")
         self.q_table = jnp.zeros(q_shape)
         
         if self.config['optimistic_initialization']:
@@ -201,10 +215,25 @@ class SARSA:
             Lista de tuplas (min, max) para cada dimensión
         """
         bounds = []
-        for i in range(self.state_dim):
-            low = self.env.observation_space.low[i]
-            high = self.env.observation_space.high[i]
-            bounds.append((low, high))
+        
+        if isinstance(self.env.observation_space, tuple):
+            # 4 características de CGM
+            bounds.append((0.0, 300.0))  # media
+            bounds.append((0.0, 300.0))  # último valor
+            bounds.append((-20.0, 20.0))  # pendiente
+            bounds.append((0.0, 50.0))    # variabilidad
+
+            # 3 características adicionales
+            bounds.append((0.0, 100.0))   # carbohidratos
+            bounds.append((0.0, 300.0))   # nivel de glucosa
+            bounds.append((0.0, 10.0))    # insulina a bordo
+        else:
+            # Entorno estándar de gym
+            for i in range(self.state_dim):
+                low = self.env.observation_space.low[i]
+                high = self.env.observation_space.high[i]
+                bounds.append((low, high))
+    
         return bounds
     
     def _create_discretization_bins(self) -> None:
@@ -280,14 +309,14 @@ class SARSA:
         action = jnp.where(should_explore, random_action, best_action)
         return action, rng_key  # Devolver como array, no como int
     
-    def get_action(self, state: np.ndarray, explore: bool = True) -> int:
+    def get_action(self, state: Union[np.ndarray, int], explore: bool = True) -> int:
         """
         Selecciona una acción usando política epsilon-greedy.
         
         Parámetros:
         -----------
-        state : np.ndarray
-            Estado actual
+        state : Union[np.ndarray, int]
+            Estado actual (array de observación o índice discreto)
         explore : bool, opcional
             Si debe explorar (True) o ser greedy (False) (default: True)
             
@@ -296,7 +325,12 @@ class SARSA:
         int
             Acción seleccionada
         """
-        discrete_state = self.discretize_state(state)
+        # Verificar si el estado ya está discretizado
+        if isinstance(state, (int, np.integer)):
+            discrete_state = state  # El estado ya es un índice discreto
+        else:
+            discrete_state = self.discretize_state(state)
+            
         action_array, new_rng_key = self._get_action_fn(
             self.state.q_table, discrete_state, self.state.rng_key, explore
         )
@@ -309,10 +343,10 @@ class SARSA:
     
     def update_q_value(
         self, 
-        state: np.ndarray, 
+        state: Union[np.ndarray, int], 
         action: int, 
         reward: float, 
-        next_state: np.ndarray, 
+        next_state: Union[np.ndarray, int], 
         next_action: int
     ) -> None:
         """
@@ -320,20 +354,28 @@ class SARSA:
         
         Parámetros:
         -----------
-        state : np.ndarray
-            Estado actual
+        state : Union[np.ndarray, int]
+            Estado actual u observación
         action : int
             Acción tomada
         reward : float
             Recompensa recibida
-        next_state : np.ndarray
-            Siguiente estado
+        next_state : Union[np.ndarray, int]
+            Siguiente estado u observación
         next_action : int
             Siguiente acción (según política actual)
         """
-        discrete_state = self.discretize_state(state)
-        discrete_next_state = self.discretize_state(next_state)
-        
+        # Verificar si los estados ya están discretizados
+        if not isinstance(state, (int, np.integer)):
+            discrete_state = self.discretize_state(state)
+        else:
+            discrete_state = state
+            
+        if not isinstance(next_state, (int, np.integer)):
+            discrete_next_state = self.discretize_state(next_state)
+        else:
+            discrete_next_state = next_state
+    
         # Actualizar tabla Q con función pura
         new_q_table = self._update_q_value_fn(
             self.state.q_table,
@@ -660,20 +702,73 @@ def create_sarsa_agent(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
         Agente SARSA inicializado
     """
     # Crear entorno ficticio para inicialización
+    # Definir a nivel de módulo (fuera de cualquier función)
     class TempEnv:
-        def __init__(self):
+        """
+        Entorno temporal simplificado para el agente SARSA.
+        Simula un entorno básico para permitir la inicialización del agente.
+        
+        Parámetros:
+        -----------
+        cgm_shape : Tuple[int, ...]
+            Forma de los datos CGM
+        other_features_shape : Tuple[int, ...]
+            Forma de otras características
+        action_dim : int, opcional
+            Dimensión del espacio de acción (default: 1)
+        """
+        def __init__(self, cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], action_dim: int = 1) -> None:
             # Configurar espacios de acción y observación
-            # Espacio de acción: 20 niveles discretos (0-15 unidades)
-            self.action_space = SimpleNamespace(n=20)
+            self.action_space = SimpleNamespace(n=20)  # 20 niveles discretos para dosis
+            self.observation_space = (cgm_shape, other_features_shape)
+            self.action_dim = action_dim
+            self.state = (np.zeros(cgm_shape), np.zeros(other_features_shape))
             
-            # Espacio de observación: basado en la discretización de características
-            cgm_bins = 10
-            other_bins = 5
-            n_states = cgm_bins**4 * other_bins**3  # 4 características CGM, 3 otras
-            self.observation_space = SimpleNamespace(n=n_states)
+        def reset(self) -> Tuple[np.ndarray, np.ndarray]:
+            """
+            Reinicia el entorno y devuelve el estado inicial.
+            
+            Retorna:
+            --------
+            Tuple[np.ndarray, np.ndarray]
+                Estado inicial (cgm_zeros, other_zeros)
+            """
+            self.state = (np.zeros(self.observation_space[0]), np.zeros(self.observation_space[1]))
+            return self.state
+        
+        def step(self, action: int) -> Tuple[Tuple[np.ndarray, np.ndarray], float, bool, Dict]:
+            """
+            Simula un paso en el entorno.
+            
+            Parámetros:
+            -----------
+            action : int
+                Acción a realizar
+                
+            Retorna:
+            --------
+            Tuple[Tuple[np.ndarray, np.ndarray], float, bool, Dict]
+                (siguiente_estado, recompensa, terminado, info_adicional)
+            """
+            # En este entorno simplificado, el estado no cambia y no hay recompensa real
+            reward = 0.0
+            done = False
+            info = {}
+            return self.state, reward, done, info
+        
+        def _get_obs(self) -> Tuple[np.ndarray, np.ndarray]:
+            """
+            Obtiene la observación actual.
+            
+            Retorna:
+            --------
+            Tuple[np.ndarray, np.ndarray]
+                Estado actual (cgm_data, other_data)
+            """
+            return self.state
     
     # Crear entorno temporal
-    temp_env = TempEnv()
+    temp_env = TempEnv(cgm_shape, other_features_shape)
     
     # Personalizar configuración SARSA
     sarsa_config = SARSA_CONFIG.copy()
@@ -719,12 +814,20 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
         Agente SARSA envuelto en RLModelWrapperJAX
     """
     # Devolver el wrapper con el agente SARSA
-    return RLModelWrapperJAX(
+    model = RLModelWrapperJAX(
         agent_creator=create_sarsa_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
         **kwargs
     )
+
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
 
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]:
@@ -962,3 +1065,180 @@ class SARSAWrapper:
             'cgm_shape': self.cgm_shape,
             'other_features_shape': self.other_features_shape
         }
+    
+    def _map_observation_to_state_batch(self, cgm_data: jnp.ndarray, other_data: jnp.ndarray) -> jnp.ndarray:
+        """
+        Mapea un lote de observaciones a estados discretos (versión vectorizada).
+        
+        Parámetros:
+        -----------
+        cgm_data : jnp.ndarray
+            Lote de datos CGM
+        other_data : jnp.ndarray
+            Lote de otras características
+            
+        Retorna:
+        --------
+        jnp.ndarray
+            Estados discretos para el lote completo
+        """
+        # Esta función es para uso con vmap
+        # Extraer características relevantes de CGM
+        cgm_flat = cgm_data.reshape(-1)
+        
+        cgm_mean = jnp.mean(cgm_flat) if cgm_flat.size > 0 else 0
+        cgm_last = cgm_flat[-1] if cgm_flat.size > 0 else 0
+        
+        # Calcular pendiente si hay suficientes puntos
+        cgm_slope = jnp.where(
+            cgm_flat.size >= 5,
+            (cgm_flat[-1] - cgm_flat[-5]) / 5,
+            0.0
+        )
+        
+        cgm_std = jnp.std(cgm_flat) if cgm_flat.size > 0 else 0
+        
+        # Discretizar características CGM
+        cgm_bins = 10
+        cgm_mean_bin = jnp.minimum(jnp.floor(cgm_mean / 300 * cgm_bins).astype(jnp.int32), cgm_bins - 1)
+        cgm_last_bin = jnp.minimum(jnp.floor(cgm_last / 300 * cgm_bins).astype(jnp.int32), cgm_bins - 1)
+        cgm_slope_bin = jnp.minimum(jnp.floor((cgm_slope + 100) / 200 * cgm_bins).astype(jnp.int32), cgm_bins - 1)
+        cgm_std_bin = jnp.minimum(jnp.floor(cgm_std / 50 * cgm_bins).astype(jnp.int32), cgm_bins - 1)
+        
+        # Extraer características relevantes de otras variables
+        other_bins = 5
+        carb_bin = jnp.where(
+            other_data.size > 0, 
+            jnp.minimum(jnp.floor(other_data[0] / 100 * other_bins).astype(jnp.int32), other_bins - 1),
+            0
+        )
+        bg_bin = jnp.where(
+            other_data.size > 1, 
+            jnp.minimum(jnp.floor(other_data[1] / 300 * other_bins).astype(jnp.int32), other_bins - 1),
+            0
+        )
+        iob_bin = jnp.where(
+            other_data.size > 2, 
+            jnp.minimum(jnp.floor(other_data[2] / 10 * other_bins).astype(jnp.int32), other_bins - 1),
+            0
+        )
+        
+        # Combinar bins en un único índice usando aritmética
+        state_index = cgm_mean_bin
+        state_index = state_index * cgm_bins + cgm_last_bin
+        state_index = state_index * cgm_bins + cgm_slope_bin
+        state_index = state_index * cgm_bins + cgm_std_bin
+        state_index = state_index * other_bins + carb_bin
+        state_index = state_index * other_bins + bg_bin
+        state_index = state_index * other_bins + iob_bin
+        
+        return state_index
+
+    def train_batch_vectorized(self, agent_state: Any, batch_data: Tuple, rng_key: jax.random.PRNGKey) -> Tuple[Any, Dict[str, float]]:
+        """
+        Entrena el agente con un lote de datos (versión vectorizada).
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (self)
+        batch_data : Tuple
+            Datos del lote ((cgm_data, other_data), targets)
+        rng_key : jax.random.PRNGKey
+            Clave para generación aleatoria
+            
+        Retorna:
+        --------
+        Tuple[Any, Dict[str, float]]
+            (Nuevo estado del agente, métricas)
+        """
+        # Extraer datos del lote
+        (cgm_data, other_data), targets = batch_data
+        batch_size = cgm_data.shape[0]
+        
+        # Actualizar clave RNG
+        self.state = self.state._replace(rng_key=rng_key)
+        
+        # Crear función de mapeo vectorizada
+        vmap_map_obs = jax.vmap(self._map_observation_to_state_batch)
+        
+        # Aplicar vectorización para mapear todos los estados de una vez
+        states = vmap_map_obs(cgm_data, other_data)
+        
+        # Función para obtener acciones por estado (para usar con vmap)
+        def get_action_for_state(state_idx, key):
+            action_array, _ = self._get_action_fn(
+                self.state.q_table, state_idx, key, True
+            )
+            return action_array
+        
+        # Generar claves RNG para cada muestra
+        keys = jax.random.split(self.state.rng_key, batch_size)
+        
+        # Obtener acciones para todos los estados usando vmap
+        actions = jax.vmap(get_action_for_state)(states, keys)
+        
+        # Convertir acciones a dosis
+        doses = jax.vmap(lambda a: (a / (self.action_space_size - 1)) * 15.0)(actions)
+        
+        # Calcular recompensas (-error absoluto)
+        rewards = -jnp.abs(doses - targets.flatten())
+        
+        # Actualización masiva de valores Q
+        # Como necesitamos efectos secundarios, definimos una función pura para actualizar
+        # una copia de la tabla Q
+
+        def update_q_batch(q_table, states_batch, actions_batch, rewards_batch, next_states_batch, next_actions_batch):
+            def update_one(q, s, a, r, ns, na):
+                current_q = q[s][a]
+                next_q = q[ns][na]
+                new_q = current_q + self.alpha * (r + self.gamma * next_q - current_q)
+                return q.at[s].set(q[s].at[a].set(new_q))
+            
+            # Secuencialmente (podría optimizarse más, pero evita colisiones)
+            for i in range(len(states_batch)):
+                q_table = update_one(q_table, states_batch[i], actions_batch[i], 
+                                     rewards_batch[i], next_states_batch[i], next_actions_batch[i])
+            return q_table
+        
+        # Usar los mismos estados como siguientes estados en este caso
+        next_states = states
+        
+        # Generar próximas acciones (sin exploración)
+        def get_next_action(state_idx, key):
+            action_array, _ = self._get_action_fn(
+                self.state.q_table, state_idx, key, False
+            )
+            return action_array
+            
+        next_keys = jax.random.split(keys[0], batch_size)
+        next_actions = jax.vmap(get_next_action)(next_states, next_keys)
+        
+        # Actualizar tabla Q
+        new_q_table = update_q_batch(
+            self.state.q_table, states, actions, rewards, next_states, next_actions
+        )
+        
+        # Actualizar estado del agente con nueva tabla Q
+        self.state = self.state._replace(q_table=new_q_table)
+        
+        # Calcular métricas
+        avg_loss = jnp.mean((doses - targets.flatten()) ** 2)
+        avg_reward = jnp.mean(rewards)
+        
+        # Actualizar epsilon según esquema de decaimiento
+        self._decay_epsilon(0)
+        
+        # Actualizar historial
+        self.history['loss'].append(float(avg_loss))
+        self.history['avg_reward'].append(float(avg_reward))
+        self.history['epsilon'].append(float(self.state.epsilon))
+        
+        # Preparar métricas
+        metrics = {
+            'loss': float(avg_loss),
+            'reward': float(avg_reward),
+            'epsilon': float(self.state.epsilon)
+        }
+        
+        return self, metrics
