@@ -669,7 +669,7 @@ class DRLModelWrapperJAX(ModelWrapper):
         Argumentos para el constructor del modelo
     """
     
-    def __init__(self, model_cls: Callable, **model_kwargs) -> None:
+    def __init__(self, model_cls: Callable, algorithm: str = 'generic', **model_kwargs) -> None:
         """
         Inicializa un wrapper para modelos de aprendizaje por refuerzo profundo en JAX.
         
@@ -685,7 +685,7 @@ class DRLModelWrapperJAX(ModelWrapper):
         self.model_kwargs = model_kwargs
         self.model = None
         self.buffer = None
-        self.algorithm = model_kwargs.get('algorithm', 'generic')
+        self.algorithm = model_kwargs.get('algorithm', algorithm)
         self.rng_key = jax.random.PRNGKey(0)
         self.params = None
         self.state = None
@@ -725,7 +725,13 @@ class DRLModelWrapperJAX(ModelWrapper):
             self.rng_key = rng_key
             
         if self.model is None:
-            self.model = self.model_cls(**self.model_kwargs)
+            # Verificar si model_cls es una clase o una instancia
+            if isinstance(self.model_cls, type) or (callable(self.model_cls) and not hasattr(self.model_cls, 'predict')):
+                # Es una clase o función, llamarla con los argumentos
+                self.model = self.model_cls(**self.model_kwargs)
+            else:
+                # Es probablemente una instancia, usarla directamente
+                self.model = self.model_cls
         
         # Dimensiones del espacio de estados y acciones
         state_dim = (x_cgm.shape[1:], x_other.shape[1:])
@@ -734,7 +740,7 @@ class DRLModelWrapperJAX(ModelWrapper):
         # Inicializar según el tipo de algoritmo
         if self.algorithm in ['ppo', 'a2c', 'a3c', 'sac', 'trpo']:
             self._initialize_actor_critic(state_dim, action_dim)
-        elif self.algorithm in ['dqn', 'ddpg', 'td3']:
+        elif self.algorithm in ['dqn', 'ddpg']:
             self._initialize_q_networks(state_dim, action_dim)
         else:
             # Inicialización genérica
@@ -1439,15 +1445,15 @@ class DRLModelWrapperJAX(ModelWrapper):
         np.ndarray
             Predicciones genéricas
         """
-        if hasattr(self.model, 'predict'):
-            self.rng_key, predict_key = jax.random.split(self.rng_key)
-            return np.array(self.model.predict(
-                self.params or self.state or self.states,
-                x_cgm, x_other, predict_key
-            ))
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
         
-        # Si no hay método predict, devolver ceros
-        return np.zeros((len(x_cgm),), dtype=np.float32)
+        try:
+            # Pasar los inputs como una lista, que es lo que esperan los wrappers DRL
+            return np.array(self.model.predict([x_cgm, x_other]))
+        except Exception as e:
+            print_error(f"Error en predicción: {e}")
+            return np.zeros((x_cgm.shape[0], 1))
     
     def save(self, path: str) -> None:
         """
@@ -1697,7 +1703,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         Argumentos para el constructor del modelo (usado solo si se pasa una clase)
     """
     
-    def __init__(self, model_or_cls: Union[Callable, nn.Module], **model_kwargs) -> None:
+    def __init__(self, model_or_cls: Union[Callable, nn.Module], algorithm: str = "generic", **model_kwargs) -> None:
         """
         Inicializa un wrapper para modelos de aprendizaje por refuerzo profundo en PyTorch.
         
@@ -1728,7 +1734,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             self.model_kwargs = {}
             
         self.buffer = None
-        self.algorithm = model_kwargs.get('algorithm', 'generic')
+        self.algorithm = model_kwargs.get('algorithm', algorithm)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Inicializar el modelo si ya se pasó una instancia
@@ -2481,7 +2487,7 @@ class DRLModelWrapper(ModelWrapper):
         Argumentos para el constructor del modelo
     """
     
-    def __init__(self, model_cls: Callable, framework: str = 'jax', **model_kwargs) -> None:
+    def __init__(self, model_cls: Callable, framework: str = 'jax', algorithm: str = "", **model_kwargs) -> None:
         """
         Inicializa el wrapper seleccionando el backend adecuado.
         
@@ -2491,6 +2497,8 @@ class DRLModelWrapper(ModelWrapper):
             Clase del modelo DRL a instanciar
         framework : str
             Framework a utilizar ('jax', 'tensorflow' o 'pytorch')
+        algorithm : str
+            Nombre del algoritmo (opcional)
         **model_kwargs
             Argumentos para el constructor del modelo
         """
@@ -2501,9 +2509,9 @@ class DRLModelWrapper(ModelWrapper):
         if self.framework == 'jax':
             self.wrapper = DRLModelWrapperJAX(model_cls, **model_kwargs)
         elif self.framework == 'pytorch':
-            self.wrapper = DRLModelWrapperPyTorch(model_cls, **model_kwargs)
+            self.wrapper = DRLModelWrapperPyTorch(model_cls, algorithm, **model_kwargs)
         else:
-            self.wrapper = DRLModelWrapperTF(model_cls, **model_kwargs)
+            self.wrapper = DRLModelWrapperTF(model_cls, algorithm, **model_kwargs)
     
     def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
         """

@@ -1997,7 +1997,7 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
     
     # Crear y devolver modelo wrapper
     return DRLModelWrapper(
-        lambda **kwargs: TRPOWrapper(trpo_agent, cgm_shape, other_features_shape),
+        model_cls=TRPOWrapper(trpo_agent, cgm_shape, other_features_shape),
         framework="jax", 
         algorithm="trpo"
     )

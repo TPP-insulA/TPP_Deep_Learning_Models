@@ -1411,7 +1411,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad con el sistema
-    return DRLModelWrapper(lambda **kwargs: dqn_wrapper, algorithm="dqn")
+    return DRLModelWrapper(model_cls=dqn_wrapper, framework="jax", algorithm="dqn")
 
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:

@@ -1333,7 +1333,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad completa con la interfaz del sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, framework="jax", algorithm="ppo")
+    return DRLModelWrapper(model_cls=wrapper, framework="jax", algorithm="ppo")
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

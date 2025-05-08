@@ -1624,7 +1624,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
     )
     
     # Envolver en DRLModelWrapper para compatibilidad con el sistema
-    return DRLModelWrapper(lambda **kwargs: ddpg_wrapper, algorithm="ddpg")
+    return DRLModelWrapper(model_cls=ddpg_wrapper, framework="jax", algorithm="ddpg")
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """
