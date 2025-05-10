@@ -545,7 +545,7 @@ class DQN:
     @tf.function
     def _train_step(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
                   next_states: tf.Tensor, dones: tf.Tensor, 
-                  importance_weights: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor]:
+                  importance_weights: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Realiza un paso de entrenamiento para actualizar la red Q.
         
@@ -566,8 +566,8 @@ class DQN:
             
         Retorna:
         --------
-        Tuple[tf.Tensor, tf.Tensor]
-            (pérdida, td_errors)
+        Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+            (pérdida, td_errors, q_values_mean)
         """
         # Convertir acciones a índices one-hot para gather
         action_indices = tf.one_hot(actions, self.action_dim)
@@ -609,12 +609,10 @@ class DQN:
             grads, _ = tf.clip_by_global_norm(grads, DQN_CONFIG.get('max_grad_norm', 10.0))
         self.optimizer.apply_gradients(zip(grads, self.q_network.trainable_variables))
         
-        # Actualizar métricas acumuladas
-        self.loss_sum += loss
-        self.q_value_sum += tf.reduce_mean(q_values_for_actions, axis=0)
-        self.updates_count += 1
+        # Calcular valor medio de Q para métricas (lo retornamos en lugar de actualizar directamente)
+        q_values_mean = tf.reduce_mean(q_values_for_actions, axis=0)
         
-        return loss, td_errors
+        return loss, td_errors, q_values_mean
     
     def _sample_batch(self) -> Tuple:
         """
@@ -675,10 +673,19 @@ class DQN:
             if importance_weights is not None:
                 importance_weights = tf.convert_to_tensor(importance_weights, dtype=tf.float32)
             
-            # Entrenar red
-            loss, td_errors = self._train_step(
+            # Entrenar red y recibir los valores retornados
+            loss, td_errors, q_values_mean = self._train_step(
                 states, actions, rewards, next_states, dones, importance_weights)
-            episode_loss.append(float(loss.numpy()))
+                
+            # Actualizamos las métricas fuera de la función con @tf.function
+            loss_np = loss.numpy()
+            q_values_mean_np = q_values_mean.numpy()
+            
+            self.loss_sum += loss_np
+            self.q_value_sum += q_values_mean_np
+            self.updates_count += 1
+            
+            episode_loss.append(float(loss_np))
             
             # Actualizar prioridades si es PER
             if self.prioritized and indices is not None:
@@ -747,7 +754,7 @@ class DQN:
         return episode_reward, episode_loss
         
     def _update_history(self, history: Dict, episode_reward: float, episode_loss: List[float], 
-                      episode_reward_history: List[float], log_interval: int) -> List[float]:
+                    episode_reward_history: List[float], log_interval: int) -> List[float]:
         """
         Actualiza el historial de entrenamiento y métricas.
         
@@ -781,7 +788,10 @@ class DQN:
         # Calcular y guardar promedio del valor Q
         if self.updates_count > 0:
             avg_q_value = self.q_value_sum / self.updates_count
-            avg_q_value = float(avg_q_value.numpy())
+            if hasattr(avg_q_value, 'numpy'):
+                avg_q_value = float(avg_q_value.numpy())
+            else:
+                avg_q_value = float(avg_q_value)
             self.q_value_sum = 0.0
             self.updates_count = 0
         else:
@@ -801,7 +811,7 @@ class DQN:
             episode_reward_history.pop(0)
             
         return episode_reward_history
-        
+
     def train(self, env: Any, episodes: int = 1000, max_steps: int = 1000, 
              update_after: int = 1000, update_every: int = 4, 
              render: bool = False, log_interval: int = 10) -> Dict:
