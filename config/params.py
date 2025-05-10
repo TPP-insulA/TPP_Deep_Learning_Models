@@ -88,8 +88,8 @@ from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac
 from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
-DEBUG = True
-FRAMEWORK_OP = 1
+DEBUG = False
+FRAMEWORK_OP = 2
 PROCESSING_OP = 1
 
 # Configuración de procesamiento
