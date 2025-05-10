@@ -4,13 +4,14 @@ import matplotlib.pyplot as plt
 import time
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 import tensorflow as tf
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.saving import register_keras_serializable
 from types import SimpleNamespace
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import QLEARNING_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 class QLearning:
     """
@@ -31,7 +32,7 @@ class QLearning:
         epsilon_decay: float = QLEARNING_CONFIG['epsilon_decay'],
         use_decay_schedule: str = QLEARNING_CONFIG['use_decay_schedule'],
         decay_steps: int = QLEARNING_CONFIG['decay_steps'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente Q-Learning.
@@ -897,7 +898,7 @@ class QLearningModel(tf.keras.models.Model):
                 self.features = features
                 self.targets = targets
                 self.model = model
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -989,8 +990,8 @@ class QLearningModel(tf.keras.models.Model):
         x: List[tf.Tensor], 
         y: tf.Tensor, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -1006,7 +1007,7 @@ class QLearningModel(tf.keras.models.Model):
         validation_data : Optional[Tuple], opcional
             Datos de validación como (x_val, y_val) (default: None)
         epochs : int, opcional
-            Número de épocas para entrenamiento (default: 1)
+            Número de épocas para entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         callbacks : List, opcional
@@ -1043,12 +1044,6 @@ class QLearningModel(tf.keras.models.Model):
         self.history = {
             'loss': history['episode_rewards'],
             'val_loss': []
-        }
-        
-        # Preparar historial en formato Keras
-        keras_history = {
-            'loss': np.mean(history['episode_rewards']),
-            'val_loss': 0.0
         }
         
         return self.history
@@ -1165,7 +1160,7 @@ def create_q_learning_model(cgm_shape: Tuple[int, ...], other_features_shape: Tu
         epsilon_decay=QLEARNING_CONFIG['epsilon_decay'],
         use_decay_schedule=QLEARNING_CONFIG['use_decay_schedule'],
         decay_steps=QLEARNING_CONFIG['decay_steps'],
-        seed=QLEARNING_CONFIG.get('seed', 42)
+        seed=QLEARNING_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver el modelo wrapper

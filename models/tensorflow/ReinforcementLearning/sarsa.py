@@ -5,9 +5,9 @@ import pickle
 import os
 import sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Input, Concatenate, GlobalAveragePooling1D
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import Dense, Input, Concatenate, GlobalAveragePooling1D
+from keras._tf_keras.keras.saving import register_keras_serializable
 from types import SimpleNamespace
 import matplotlib.pyplot as plt
 
@@ -15,6 +15,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SARSA_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para prevenir duplicación
 CONST_CGM_ENCODER = 'cgm_encoder'
@@ -36,7 +37,7 @@ class SARSA:
         self, 
         env: Any, 
         config: Optional[Dict] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente SARSA.
@@ -683,8 +684,8 @@ class SARSAModel(Model):
         x: List[tf.Tensor], 
         y: np.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: list = None,
         verbose: int = 0
     ) -> Dict:
@@ -700,7 +701,7 @@ class SARSAModel(Model):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         callbacks : list, opcional
@@ -828,7 +829,7 @@ class SARSAModel(Model):
                 self.model = model
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Definir espacio de acción discreto
                 self.action_space = SimpleNamespace(
@@ -991,7 +992,7 @@ def create_sarsa_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[i
             'max_steps': SARSA_CONFIG['max_steps'],
             'smoothing_window': SARSA_CONFIG['smoothing_window']
         },
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear y devolver el modelo wrapper

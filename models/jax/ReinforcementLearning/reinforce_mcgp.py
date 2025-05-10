@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import REINFORCE_CONFIG
+from config.models_config import EARLY_STOPPING_POLICY, REINFORCE_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.rl_model_wrapper import RLModelWrapperJAX
 from custom.printer import print_debug, print_warning
 
@@ -154,7 +155,7 @@ class REINFORCE:
         continuous: bool = True,
         use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:
@@ -1573,7 +1574,7 @@ class REINFORCEWrapper:
         self.other_features_shape = other_features_shape
         
         # Inicializar clave para generación de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1874,6 +1875,52 @@ class REINFORCEWrapper:
         
         return predictions
     
+    def predict_batch(self, agent_state: Any, batch_data: Tuple[np.ndarray, np.ndarray], rng_key: jnp.ndarray) -> np.ndarray:
+        """
+        Realiza predicciones para un lote completo de entradas.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente
+        batch_data : Tuple[np.ndarray, np.ndarray]
+            Datos de entrada como una tupla (x_cgm_batch, x_other_batch)
+        rng_key : jnp.ndarray
+            Clave para generación de números aleatorios
+            
+        Retorna:
+        --------
+        np.ndarray
+            Predicciones de dosis para todo el lote
+        """
+        x_cgm, x_other = batch_data
+        
+        # Codificar entradas
+        cgm_encoded = self.encode_cgm(jnp.array(x_cgm))
+        other_encoded = self.encode_other(jnp.array(x_other)) if x_other.shape[1] > 0 else jnp.zeros(
+            (x_cgm.shape[0], self.reinforce_agent.state_dim // 2)
+        )
+        
+        # Concatenar características
+        states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+        
+        # Obtener acciones según el tipo de espacio (modo determinista)
+        if self.reinforce_agent.continuous:
+            mean, _ = self.reinforce_agent.policy_network.apply(
+                {'params': self.reinforce_agent.state.policy_params}, 
+                states
+            )
+            # Convertir a rango de dosis [0, 15]
+            actions = (mean + 1.0) * 7.5
+        else:
+            logits = self.reinforce_agent.policy_network.apply(
+                {'params': self.reinforce_agent.state.policy_params}, 
+                states
+            )
+            actions = jnp.argmax(logits, axis=1) / (self.reinforce_agent.action_dim - 1) * 15.0
+            
+        return np.array(actions.reshape(-1, 1))
+    
     def _get_verbose_int(self, verbose: Any) -> int:
         """
         Convierte el parámetro verbose a entero.
@@ -1964,8 +2011,8 @@ class REINFORCEWrapper:
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: Any = 0
     ) -> Dict:
@@ -1981,7 +2028,7 @@ class REINFORCEWrapper:
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -2063,7 +2110,7 @@ class REINFORCEWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -2555,7 +2602,7 @@ def create_reinforce_mcgp_model(cgm_shape: Tuple[int, ...], other_features_shape
         hidden_units=REINFORCE_CONFIG['hidden_units'],
         use_baseline=REINFORCE_CONFIG['use_baseline'],
         entropy_coef=REINFORCE_CONFIG['entropy_coef'],
-        seed=kwargs.get('seed', 42),
+        seed=kwargs.get('seed', CONST_DEFAULT_SEED),
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape
     )
@@ -2563,7 +2610,42 @@ def create_reinforce_mcgp_model(cgm_shape: Tuple[int, ...], other_features_shape
     # Crear y devolver wrapper
     return REINFORCEWrapper(reinforce_agent, cgm_shape, other_features_shape)
 
-def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], REINFORCEWrapper]:
+def create_reinforce_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], **model_kwargs) -> RLModelWrapperJAX:
+    """
+    Función de fábrica para crear un modelo de REINFORCE compatible con la API del sistema.
+
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características).
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características).
+    **model_kwargs
+        Argumentos para pasar al constructor de REINFORCEWrapper.
+
+    Retorna:
+    --------
+    RLModelWrapperJAX
+        Instancia del wrapper de modelo REINFORCE.
+    """
+    
+    # Pasar la función creadora del agente y los kwargs al wrapper JAX
+    model = RLModelWrapperJAX(
+        agent_creator=create_reinforce_mcgp_model,
+        cgm_shape=cgm_shape,
+        other_features_shape=other_features_shape,
+        **model_kwargs
+    )
+    
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
+
+def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]:
     """
     Retorna una función para crear un modelo REINFORCE compatible con la API del sistema.
     

@@ -373,7 +373,6 @@ class WaveNetModel(nn.Module):
         # Procesar entrada CGM
         x = self.initial_conv(cgm_input)
         
-        # Resto del método sin cambios...
         # Asegurarse de que x tiene el número correcto de canales para los bloques residuales
         if x.size(1) != self.residual_channels:
             x = self.channel_projection(x)  # Añadir esta capa en __init__

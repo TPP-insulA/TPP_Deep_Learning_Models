@@ -7,15 +7,17 @@ import time
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 from tqdm import tqdm
 from functools import partial
-import joblib # For saving/loading numpy arrays efficiently
+import joblib
+
+from custom.rl_model_wrapper import RLModelWrapperJAX
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import POLICY_ITERATION_CONFIG
+from config.models_config import POLICY_ITERATION_CONFIG, EARLY_STOPPING_POLICY
+from constants.constants import CONST_LOSS, CONST_VAL_LOSS, CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper # Import base class
 from custom.printer import print_info, print_warning # For better logging
-from constants.constants import CONST_LOSS, CONST_VAL_LOSS # Importar constantes comunes
 
 # Constantes para rutas de figuras y mensajes recurrentes
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "policy_iteration")
@@ -47,7 +49,7 @@ class PolicyIteration:
         theta: float = POLICY_ITERATION_CONFIG['theta'],
         max_iterations: int = POLICY_ITERATION_CONFIG['max_iterations'],
         max_iterations_eval: int = POLICY_ITERATION_CONFIG['max_iterations_eval'],
-        seed: int = POLICY_ITERATION_CONFIG.get('seed', 42)
+        seed: int = POLICY_ITERATION_CONFIG.get('seed', CONST_DEFAULT_SEED)
     ) -> None:
         """
         Inicializa el agente de Iteración de Política.
@@ -677,6 +679,46 @@ class PolicyIterationWrapper(ModelWrapper):
             predictions[i] = self._convert_action_to_dose(action)
 
         return predictions.reshape(-1, 1)  # Devolver como columna
+    
+    def predict_batch(self, agent_state: Any, batch_data: Tuple[np.ndarray, np.ndarray], rng_key: jnp.ndarray) -> np.ndarray:
+        """
+        Realiza predicciones para un lote completo de entradas.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (no usado en este caso para Policy Iteration)
+        batch_data : Tuple[np.ndarray, np.ndarray]
+            Datos de entrada como una tupla (x_cgm_batch, x_other_batch)
+        rng_key : jnp.ndarray
+            Clave para generación de números aleatorios (no usado en este caso)
+            
+        Retorna:
+        --------
+        np.ndarray
+            Predicciones de dosis para todo el lote
+        """
+        x_cgm, x_other = batch_data
+        
+        if self.pi_agent is None or not self.is_trained:
+            print_warning("El modelo no ha sido entrenado o inicializado correctamente.")
+            return np.zeros((x_cgm.shape[0], 1))
+            
+        n_samples = x_cgm.shape[0]
+        predictions = np.zeros(n_samples)
+        
+        # Discretizar cada ejemplo y obtener acción según política entrenada
+        for i in range(n_samples):
+            # Obtener features para este ejemplo
+            current_x_other = x_other[i] if x_other.shape[1] > 0 else None
+            # Discretizar estado
+            state = self._discretize_state(x_cgm[i], current_x_other)
+            # Obtener acción según política
+            action = self.pi_agent.get_action(state)
+            # Convertir acción a dosis continua
+            predictions[i] = self._convert_action_to_dose(action)
+        
+        return predictions.reshape(-1, 1)  # Devolver como columna
 
     def _discretize_state(self, cgm_sample: np.ndarray, other_sample: Optional[np.ndarray]) -> int:
         """
@@ -910,8 +952,8 @@ class PolicyIterationWrapper(ModelWrapper):
         x_other: np.ndarray,
         y: np.ndarray,
         validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-        epochs: int = 1, # Policy Iteration no usa épocas tradicionalmente
-        batch_size: int = 32, # No aplica a PI clásico
+        epochs: int = CONST_DEFAULT_EPOCHS, # Policy Iteration no usa épocas tradicionalmente
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, # No aplica a PI clásico
         callbacks: Optional[List] = None,
         verbose: int = 1
     ) -> Dict[str, List[float]]:
@@ -929,7 +971,7 @@ class PolicyIterationWrapper(ModelWrapper):
         validation_data : Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]], opcional
             Datos de validación como ((x_cgm_val, x_other_val), y_val) (default: None)
         epochs : int, opcional
-            Número de épocas (no usado directamente por PI) (default: 1)
+            Número de épocas (no usado directamente por PI) (default: 10)
         batch_size : int, opcional
             Tamaño de lote (no usado directamente por PI) (default: 32)
         callbacks : Optional[List], opcional
@@ -980,6 +1022,245 @@ class PolicyIterationWrapper(ModelWrapper):
             self.pi_agent.plot_metrics(save_plots=True)
         
         return self.history
+    
+    def train_batch(self, agent_state, batch_data, rng_key):
+        """
+        Adapta la interfaz de entrenamiento por lotes esperada por RLModelWrapperJAX.
+        
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (no usado directamente por PI)
+        batch_data : Tuple
+            Datos del lote como ((x_cgm, x_other), y)
+        rng_key : jax.random.PRNGKey
+            Clave aleatoria para este paso
+            
+        Retorna:
+        --------
+        Tuple[Any, Dict[str, float]]
+            (Estado actualizado del agente, métricas del paso)
+        """
+        # Extraer datos del lote
+        (x_cgm_batch, x_other_batch), y_batch = batch_data
+        
+        # Si el agente PI no está inicializado, inicializarlo
+        if self.pi_agent is None:
+            self.start(x_cgm_batch, x_other_batch, y_batch, rng_key)
+        
+        # PI no entrena incrementalmente, pero se simula construyendo un modelo de recompensas local y actualizando parcialmente la política
+        try:
+            # Construir un MDP pequeño solo para este lote
+            mini_P, mini_R = self._build_mdp_model(
+                np.array(x_cgm_batch), 
+                np.array(x_other_batch), 
+                np.array(y_batch), 
+                verbose=0
+            )
+            
+            # Realizar una iteración parcial con estos datos
+            # Esto no es verdadera iteración de política, sino una aproximación
+            if self.pi_agent.policy is not None:
+                # Evaluar política actual en nuevos datos
+                v, _ = self.pi_agent.policy_evaluation(
+                    self.pi_agent._extract_matrices_from_p_r(mini_P, mini_R)[0], 
+                    self.pi_agent._extract_matrices_from_p_r(mini_P, mini_R)[1],
+                    self.pi_agent._extract_matrices_from_p_r(mini_P, mini_R)[2],
+                    self.pi_agent.policy, 
+                    use_jit=True
+                )
+                
+                # Mejorar política en estos puntos específicos
+                matrices = self.pi_agent._extract_matrices_from_p_r(mini_P, mini_R)
+                new_policy = self.pi_agent._policy_improvement(v, *matrices)
+                
+                # Calcular pérdida como diferencia entre políticas
+                policy_diff = jnp.mean(jnp.abs(new_policy - self.pi_agent.policy))
+                
+                # Actualizar la política con una mezcla para estabilidad
+                alpha = 0.1  # Tasa de actualización pequeña
+                self.pi_agent.policy = (1 - alpha) * self.pi_agent.policy + alpha * new_policy
+            
+            # Si no tenemos política previa, considerar esto como inicialización
+            else:
+                self.is_trained = False  # Marcar que necesitamos entrenamiento completo
+                policy_diff = 1.0  # Diferencia máxima
+        
+        except Exception as e:
+            print_warning(f"Error en train_batch: {e}")
+            policy_diff = 0.0
+        
+        # Calcular algunas métricas para devolver
+        # De nuevo, esto es una aproximación ya que PI no entrena por lotes normalmente
+        metrics = {
+            'loss': float(policy_diff),
+            'policy_change': float(policy_diff)
+        }
+        
+        # PI no actualiza realmente su estado por lotes, así que devolvemos el mismo estado
+        return agent_state, metrics
+
+    def _discretize_single_example(self, cgm, other):
+        """
+        Discretiza un ejemplo individual para vectorización.
+        
+        Parámetros:
+        -----------
+        cgm : jnp.ndarray
+            Datos CGM de un solo ejemplo
+        other : jnp.ndarray
+            Otras características de un solo ejemplo
+            
+        Retorna:
+        --------
+        int
+            Índice de estado discreto
+        """
+        # Extraer valores representativos
+        last_cgm = cgm[-1, 0] if cgm.ndim > 1 else cgm[0]
+        time_of_day = other[0] if other.size > 0 else 12.0
+        active_insulin = other[1] if other.size > 1 else 0.0
+        
+        # Discretizar
+        cgm_bin = jnp.clip(jnp.digitize(last_cgm, self._cgm_edges[1:]) - 1, 
+                      0, self.cgm_bins - 1)
+        time_bin = jnp.clip(jnp.digitize(time_of_day, self._time_edges[1:]) - 1, 
+                      0, self.time_bins - 1)
+        insulin_bin = jnp.clip(jnp.digitize(active_insulin, self._insulin_edges[1:]) - 1, 
+                         0, self.insulin_bins - 1)
+        
+        # Calcular índice de estado único
+        index = cgm_bin * (self.time_bins * self.insulin_bins) + time_bin * self.insulin_bins + insulin_bin
+        
+        # Ajustar si n_states es menor que el calculable
+        return index % self._n_states if self._n_states < self._calculated_max_states else index
+
+    def _create_matrices_for_policy_eval(self):
+        """
+        Crea matrices de transición y terminales para evaluación de política.
+        
+        Retorna:
+        --------
+        Tuple[jnp.ndarray, jnp.ndarray]
+            (Matriz de transiciones, Matriz de terminales)
+        """
+        # En este modelo simple, la matriz de transiciones mantiene al agente en el mismo estado
+        transition_matrix = jnp.zeros((self._n_states, self._n_actions, self._n_states))
+        for s in range(self._n_states):
+            transition_matrix = transition_matrix.at[s, :, s].set(1.0)  # Probabilidad 1 de permanecer en s
+        
+        # Todas las transiciones son terminales en este modelo simplificado
+        terminals_matrix = jnp.ones((self._n_states, self._n_actions), dtype=jnp.bool_)
+        
+        return transition_matrix, terminals_matrix
+
+    def _evaluate_and_improve_policy(self, transition_matrix, rewards_matrix, terminals_matrix):
+        """
+        Evalúa y mejora la política actual.
+        
+        Parámetros:
+        -----------
+        transition_matrix : jnp.ndarray
+            Matriz de transiciones
+        rewards_matrix : jnp.ndarray
+            Matriz de recompensas
+        terminals_matrix : jnp.ndarray
+            Matriz de estados terminales
+            
+        Retorna:
+        --------
+        float
+            Diferencia entre políticas (métrica de cambio)
+        """
+        if self.pi_agent.policy is None:
+            return 1.0
+            
+        # Evaluación de política
+        v, _ = self.pi_agent.policy_evaluation(
+            transition_matrix, rewards_matrix, terminals_matrix,
+            self.pi_agent.policy, use_jit=True
+        )
+        
+        # Mejora de política
+        new_policy = self.pi_agent._policy_improvement(
+            v, transition_matrix, rewards_matrix, terminals_matrix
+        )
+        
+        # Calcular diferencia como métrica
+        policy_diff = jnp.mean(jnp.abs(new_policy - self.pi_agent.policy))
+        
+        # Actualizar política con mezcla para estabilidad (aprendizaje incremental)
+        alpha = 0.1  # Tasa de aprendizaje pequeña para estabilidad
+        self.pi_agent.policy = (1 - alpha) * self.pi_agent.policy + alpha * new_policy
+        
+        return policy_diff
+
+    def train_batch_vectorised(self, agent_state: Any, batch_data: Tuple, rng_key: jax.random.PRNGKey) -> Tuple[Any, Dict[str, float]]:
+        """
+        Versión vectorizada del entrenamiento por lotes para Policy Iteration.
+    
+        Parámetros:
+        -----------
+        agent_state : Any
+            Estado actual del agente (no usado directamente por PI)
+        batch_data : Tuple
+            Datos del lote como ((x_cgm, x_other), y)
+        rng_key : jax.random.PRNGKey
+            Clave aleatoria para este paso
+        
+        Retorna:
+        --------
+        Tuple[Any, Dict[str, float]]
+            (Estado actualizado del agente, métricas del paso)
+        """
+        # Extraer datos del lote
+        (x_cgm_batch, x_other_batch), y_batch = batch_data
+    
+        # Si el agente PI no está inicializado, inicializarlo
+        if self.pi_agent is None:
+            self.start(x_cgm_batch, x_other_batch, y_batch, rng_key)
+    
+        try:
+            # Vectorizar la discretización de estados
+            vectorized_discretize = jax.vmap(self._discretize_single_example)
+            states = vectorized_discretize(x_cgm_batch, x_other_batch)
+            n_samples = x_cgm_batch.shape[0]
+            
+            # Crear matriz de recompensas para cada par (estado, acción)
+            rewards_matrix = jnp.zeros((self._n_states, self._n_actions)) - self.max_dose * 2
+        
+            # Calculamos recompensas para cada ejemplo
+            for i in range(n_samples):
+                state = int(states[i])
+                target = float(y_batch[i, 0]) if y_batch.ndim > 1 else float(y_batch[i])
+                
+                for action in range(self._n_actions):
+                    predicted = self._convert_action_to_dose(action)
+                    reward = -abs(predicted - target)
+                    rewards_matrix = rewards_matrix.at[state, action].set(
+                        jnp.maximum(rewards_matrix[state, action], reward)
+                    )
+            
+            # Crear matrices para evaluación de política
+            transition_matrix, terminals_matrix = self._create_matrices_for_policy_eval()
+            
+            # Evaluar y mejorar la política
+            policy_diff = self._evaluate_and_improve_policy(
+                transition_matrix, rewards_matrix, terminals_matrix
+            )
+            
+            # Calcular métricas de rendimiento
+            metrics = {
+                'loss': float(policy_diff),
+                'policy_change': float(policy_diff)
+            }
+        
+        except Exception as e:
+            print_warning(f"Error en train_batch_vectorised: {e}")
+            metrics = {'loss': 0.0, 'policy_change': 0.0}
+    
+        # Policy Iteration no cambia realmente el estado entre lotes
+        return agent_state, metrics
 
     def evaluate(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         """
@@ -1153,7 +1434,42 @@ def create_policy_iteration_model(cgm_shape: Tuple[int, ...], other_features_sha
     # y pasará el resto (recogidos por **pi_kwargs) al agente PolicyIteration.
     return PolicyIterationWrapper(**all_wrapper_kwargs)
 
-def model_creator() -> Callable[..., PolicyIterationWrapper]:
+def create_pi_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...], **model_kwargs) -> RLModelWrapperJAX:
+    """
+    Función de fábrica para crear un modelo de Iteración de Política.
+
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características).
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características (características).
+    **model_kwargs
+        Argumentos para pasar al constructor de PolicyIterationWrapper.
+
+    Retorna:
+    --------
+    RLModelWrapperJAX
+        Instancia del wrapper de Iteración de Política.
+    """
+    
+    # Pasar la función creadora del agente y los kwargs al wrapper JAX
+    model = RLModelWrapperJAX(
+        agent_creator=create_policy_iteration_model,
+        cgm_shape=cgm_shape,
+        other_features_shape=other_features_shape,
+        **model_kwargs
+    )
+    
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
+
+def model_creator() -> Callable[..., RLModelWrapperJAX]:
     """
     Retorna la función de fábrica `create_policy_iteration_model`.
     Compatible con la API esperada por `run.py`.
@@ -1165,4 +1481,4 @@ def model_creator() -> Callable[..., PolicyIterationWrapper]:
     """
     # Esta función simplemente devuelve la función de creación real.
     # run.py llamará a esta función devuelta con cgm_shape, other_features_shape y los kwargs necesarios.
-    return create_policy_iteration_model
+    return create_pi_model

@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import MONTE_CARLO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 from custom.printer import print_warning
 
@@ -44,7 +45,7 @@ class MonteCarlo:
         epsilon_decay: float = MONTE_CARLO_CONFIG['epsilon_decay'],
         first_visit: bool = MONTE_CARLO_CONFIG['first_visit'],
         evaluation_mode: bool = False,
-        seed: int = 42,
+        seed: int = CONST_DEFAULT_SEED,
         cgm_shape: Optional[Tuple[int, ...]] = None,
         other_features_shape: Optional[Tuple[int, ...]] = None
     ) -> None:

@@ -88,15 +88,19 @@ from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac
 from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
-DEBUG = False 
+DEBUG = False
+FRAMEWORK_OP = 2
+PROCESSING_OP = 1
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
 ## Opciones: "tensorflow", "jax", "pytorch"
-FRAMEWORK = "tensorflow"
+FRAMEWORK_OPTIONS = ["tensorflow", "jax", "pytorch"]
+FRAMEWORK = FRAMEWORK_OPTIONS[FRAMEWORK_OP] 
 ## Procesamiento de datos. Puede ser con pandas o polars.
 ## Opciones: "pandas", "polars"
-PROCESSING = "polars"
+PROCESSING_OPTIONS = ["pandas", "polars"]
+PROCESSING = PROCESSING_OPTIONS[PROCESSING_OP]
 ## Modelos TensorFlow disponibles.
 TF_MODELS = {
     # TensorFlow
@@ -223,23 +227,23 @@ USE_TF_MODELS = {
 # Modelos JAX a utilizar
 USE_JAX_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "jax_attention_only": True,
-    "jax_cnn": True,
-    "jax_fnn": True,
-    "jax_gru": True,
-    "jax_lstm": True,
-    "jax_rnn": True,
-    "jax_tabnet": True,
-    "jax_tcn": True,
-    "jax_transformer": True,
-    "jax_wavenet": True,
+    "jax_attention_only": False,
+    "jax_cnn": False,
+    "jax_fnn": False,
+    "jax_gru": False,
+    "jax_lstm": False,
+    "jax_rnn": False,
+    "jax_tabnet": False,
+    "jax_tcn": False,
+    "jax_transformer": False,
+    "jax_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "jax_monte_carlo": True,
-    "jax_policy_iteration": True,
-    "jax_q_learning": True,
-    "jax_reinforce_mcpg": True,
-    "jax_sarsa": True,
-    "jax_value_iteration": True,
+    "jax_monte_carlo": False,
+    "jax_policy_iteration": False,
+    "jax_q_learning": False,
+    "jax_reinforce_mcpg": False,
+    "jax_sarsa": False,
+    "jax_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "jax_a2c": True,
     "jax_a3c": True,

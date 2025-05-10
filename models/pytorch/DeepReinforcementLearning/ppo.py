@@ -16,6 +16,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import PPO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -246,7 +247,7 @@ class PPO:
         entropy_coef: float = PPO_CONFIG['entropy_coef'],
         value_coef: float = PPO_CONFIG['value_coef'],
         max_grad_norm: float = PPO_CONFIG['max_grad_norm'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         torch.manual_seed(seed)
@@ -580,7 +581,7 @@ class PPO:
         
         return episode_rewards
 
-    def train(self, env, n_steps: int = 10, epochs: int = 1000, 
+    def train(self, env, n_steps: int = 10, epochs: int = CONST_DEFAULT_EPOCHS, 
              render: bool = False) -> Dict:
         """
         Entrena el modelo PPO en un entorno dado.
@@ -812,8 +813,8 @@ class PPOWrapper(nn.Module):
         x: List[torch.Tensor], 
         y: torch.Tensor, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 1
     ) -> Dict:
@@ -829,7 +830,7 @@ class PPOWrapper(nn.Module):
         validation_data : Optional[Tuple], opcional
             Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de épocas de entrenamiento (default: 1)
+            Número de épocas de entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         callbacks : List, opcional
@@ -926,7 +927,7 @@ class PPOWrapper(nn.Module):
                 self.wrapper = wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Definir espacios de observación y acción
                 self.observation_space = SimpleNamespace(
@@ -1137,7 +1138,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             entropy_coef=PPO_CONFIG['entropy_coef'],
             value_coef=PPO_CONFIG['value_coef'],
             max_grad_norm=PPO_CONFIG['max_grad_norm'],
-            seed=42
+            seed=CONST_DEFAULT_SEED
         )
         
         # Crear wrapper PPO

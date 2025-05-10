@@ -1,11 +1,10 @@
 import os, sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Dropout, BatchNormalization, LayerNormalization,
-    Concatenate, Multiply, Add, Reshape, Activation
+    Concatenate, Multiply, Add, Reshape, Activation, Layer
 )
-from keras.layers import Layer
 from typing import Tuple, Dict, List, Any, Optional, Union, Callable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
@@ -518,6 +517,211 @@ def attention_block(inputs: tf.Tensor, input_dim: int,
     return attention_mask
 
 
+def _prepare_inputs(cgm_shape: Tuple[int, ...], 
+                   other_features_shape: Tuple[int, ...]) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, bool, int]:
+    """
+    Prepara las entradas del modelo TabNet.
+    
+    Parámetros:
+    -----------
+    cgm_shape : Tuple[int, ...]
+        Forma de los datos CGM (pasos_temporales, características)
+    other_features_shape : Tuple[int, ...]
+        Forma de otras características
+        
+    Retorna:
+    --------
+    Tuple[tf.Tensor, tf.Tensor, tf.Tensor, bool, int]
+        Tuple con (cgm_input, other_input, combined_input, has_other_features, input_dim)
+    """
+    # Si other_features_shape es una tupla vacía (), establecerla a (1,)
+    if not other_features_shape:
+        other_features_shape = (1,)
+    
+    # Asegurar que cgm_shape tenga al menos 2 dimensiones
+    if len(cgm_shape) < 2:
+        raise ValueError(f"CGM shape debe tener al menos 2 dimensiones, pero tiene {len(cgm_shape)}: {cgm_shape}")
+    
+    # Entradas
+    cgm_input = Input(shape=cgm_shape, name='cgm_input')
+    
+    # Crear other_input solo si hay características adicionales
+    if other_features_shape and other_features_shape[0] > 0:
+        other_input = Input(shape=other_features_shape, name='other_input')
+        has_other_features = True
+    else:
+        other_input = Input(shape=(1,), name='other_input')
+        has_other_features = False
+    
+    # Aplanar entrada CGM
+    flattened_cgm = Reshape((-1,), name='flatten_cgm')(cgm_input)
+    
+    # Combinar entradas
+    if has_other_features:
+        combined_input = Concatenate(axis=-1, name='combine_inputs')([flattened_cgm, other_input])
+    else:
+        combined_input = flattened_cgm
+    
+    # Obtener dimensión de entrada
+    input_dim = combined_input.shape[-1]
+    
+    return cgm_input, other_input, combined_input, has_other_features, input_dim
+
+
+def _process_decision_steps(x: tf.Tensor, combined_input: tf.Tensor, input_dim: int, 
+                          feature_dim: int, num_decision_steps: int,
+                          num_attention_heads: int, virtual_batch_size: Optional[int],
+                          attention_dropout: float) -> Tuple[List[tf.Tensor], tf.Tensor]:
+    """
+    Procesa los pasos de decisión del modelo TabNet.
+    
+    Parámetros:
+    -----------
+    x : tf.Tensor
+        Tensor de entrada procesado
+    combined_input : tf.Tensor
+        Entrada combinada original
+    input_dim : int
+        Dimensión de entrada
+    feature_dim : int
+        Dimensión de características
+    num_decision_steps : int
+        Número de pasos de decisión
+    num_attention_heads : int
+        Número de cabezas de atención
+    virtual_batch_size : Optional[int]
+        Tamaño de lote virtual
+    attention_dropout : float
+        Tasa de dropout para atención
+        
+    Retorna:
+    --------
+    Tuple[List[tf.Tensor], tf.Tensor]
+        Tuple con (step_outputs, features)
+    """
+    # Salidas de los pasos de decisión para usarse en la combinación final
+    step_outputs = []
+    
+    # Estado inicial
+    features = combined_input
+    
+    # Pasos de decisión
+    for step in range(num_decision_steps):
+        # Transformador de características compartido
+        transformer_output = feature_transformer(
+            inputs=x,
+            feature_dim=feature_dim,
+            step_idx=step,
+            num_heads=num_attention_heads,
+            use_bn=True,
+            virtual_batch_size=virtual_batch_size,
+            dropout_rate=attention_dropout
+        )
+        
+        # Bloque de atención
+        attention_mask = attention_block(
+            inputs=transformer_output,
+            input_dim=input_dim,
+            step_idx=step,
+            use_bn=True,
+            virtual_batch_size=virtual_batch_size
+        )
+        
+        # Aplicar máscara y obtener features para este paso
+        masked_features = Multiply(name=f"masked_features_{step}")([features, attention_mask])
+        
+        # Guardar salida del paso para uso en capas finales
+        step_outputs.append(masked_features)
+        
+        # Actualizar features restantes para el siguiente paso
+        if step < num_decision_steps - 1:
+            features = _update_features(features, attention_mask, step)
+    
+    return step_outputs, features
+
+
+def _update_features(features: tf.Tensor, attention_mask: tf.Tensor, step: int) -> tf.Tensor:
+    """
+    Actualiza las características disponibles para el siguiente paso.
+    
+    Parámetros:
+    -----------
+    features : tf.Tensor
+        Características actuales
+    attention_mask : tf.Tensor
+        Máscara de atención
+    step : int
+        Índice del paso actual
+        
+    Retorna:
+    --------
+    tf.Tensor
+        Características actualizadas
+    """
+    # Restar características usadas (escaladas por sparsity)
+    sparsity_coeff = TABNET_CONFIG.get('sparsity_coefficient', 1e-4)
+    relaxation_factor = TABNET_CONFIG.get('relaxation_factor', 1.5)
+    
+    # Calcular el factor de escala
+    scale_value = sparsity_coeff * relaxation_factor
+    
+    # Usar capas personalizadas para evitar operaciones TF directas
+    features_scaled = ScaleLayer(scale_value, name=f"scale_{step}")(attention_mask)
+    ones = OnesLikeLayer(name=f"ones_{step}")(features_scaled)
+    scaled_subtract = SubtractLayer(name=f"subtract_{step}")(features_scaled)
+    scales = Add(name=f"add_scales_{step}")([ones, scaled_subtract])
+    
+    return Multiply(name=f"update_features_{step}")([features, scales])
+
+
+def _combine_step_outputs(step_outputs: List[tf.Tensor], combined_input: tf.Tensor, 
+                         num_decision_steps: int) -> tf.Tensor:
+    """
+    Combina las salidas de los pasos de decisión.
+    
+    Parámetros:
+    -----------
+    step_outputs : List[tf.Tensor]
+        Lista de salidas de los pasos
+    combined_input : tf.Tensor
+        Entrada combinada original
+    num_decision_steps : int
+        Número de pasos de decisión
+        
+    Retorna:
+    --------
+    tf.Tensor
+        Salida combinada
+    """
+    if not step_outputs:
+        return combined_input
+        
+    # Transformar cada salida a la misma forma
+    reshaped_outputs = []
+    for i, output in enumerate(step_outputs):
+        reshaped = Reshape((1, -1), name=f"reshape_step_{i}")(output)
+        reshaped_outputs.append(reshaped)
+    
+    # Concatenar a lo largo del eje de pasos de decisión
+    if len(reshaped_outputs) > 1:
+        stacked_outputs = Concatenate(axis=1, name="stack_steps")(reshaped_outputs)
+    else:
+        stacked_outputs = reshaped_outputs[0]
+    
+    # Red para calcular pesos de atención para cada paso
+    step_mean = ReduceMeanLayer(axis=2, name="step_mean")(stacked_outputs)
+    step_attn = Dense(num_decision_steps, activation='softmax', name="step_attention")(step_mean)
+    
+    # Reshape para multiplicación por broadcasting
+    step_attn_reshaped = Reshape((num_decision_steps, 1), name="reshape_attn")(step_attn)
+    
+    # Multiplicar directamente usando broadcasting de Keras
+    weighted_outputs = Multiply(name="weight_outputs")([stacked_outputs, step_attn_reshaped])
+    
+    # Sumar a lo largo del eje de pasos
+    return ReduceSumLayer(axis=1, name="combine_steps")(weighted_outputs)
+
+
 def create_tabnet_model(cgm_shape: Tuple[int, ...], 
                        other_features_shape: Tuple[int, ...]) -> Model:
     """
@@ -542,134 +746,26 @@ def create_tabnet_model(cgm_shape: Tuple[int, ...],
     num_attention_heads = TABNET_CONFIG.get('num_attention_heads', 4)
     attention_dropout = TABNET_CONFIG.get('attention_dropout', 0.2)
     feature_dropout = TABNET_CONFIG.get('feature_dropout', 0.1)
-    batch_momentum = TABNET_CONFIG.get('batch_momentum', 0.98)
     virtual_batch_size = TABNET_CONFIG.get('virtual_batch_size', 128)
     
-    # Verificación segura de las formas de entrada para evitar errores de índice
-    # Si other_features_shape es una tupla vacía (), establecerla a (1,)
-    if not other_features_shape:
-        other_features_shape = (1,)
-    
-    # Asegurar que cgm_shape tenga al menos 2 dimensiones
-    if len(cgm_shape) < 2:
-        raise ValueError(f"CGM shape debe tener al menos 2 dimensiones, pero tiene {len(cgm_shape)}: {cgm_shape}")
-    
-    # Entradas
-    cgm_input = Input(shape=cgm_shape, name='cgm_input')
-    
-    # Crear other_input solo si hay características adicionales
-    if other_features_shape and other_features_shape[0] > 0:
-        other_input = Input(shape=other_features_shape, name='other_input')
-        has_other_features = True
-    else:
-        # Crear un input simbólico que no se utilizará
-        other_input = Input(shape=(1,), name='other_input')
-        has_other_features = False
-    
-    # Aplanar entrada CGM (asumiendo forma (timesteps, features))
-    flattened_cgm = Reshape((-1,), name='flatten_cgm')(cgm_input)
-    
-    # Combinar entradas
-    if has_other_features:
-        combined_input = Concatenate(axis=-1, name='combine_inputs')([flattened_cgm, other_input])
-    else:
-        combined_input = flattened_cgm
-    
-    # Obtener dimensión de entrada
-    input_dim = combined_input.shape[-1]
+    # Preparar entradas del modelo
+    cgm_input, other_input, combined_input, _, input_dim = _prepare_inputs(
+        cgm_shape, other_features_shape)
     
     # Transformación inicial
     x = Dense(feature_dim, name="initial_transform")(combined_input)
     x = LayerNormalization(name="initial_norm")(x)
-    
-    # Feature dropout en entrenamiento
     x = Dropout(feature_dropout, name="feature_dropout")(x)
     
-    # Salidas de los pasos de decisión para usarse en la combinación final
-    step_outputs = []
+    # Procesar pasos de decisión
+    step_outputs, _ = _process_decision_steps(
+        x, combined_input, input_dim, feature_dim, 
+        num_decision_steps, num_attention_heads, 
+        virtual_batch_size, attention_dropout
+    )
     
-    # Estado inicial
-    features = combined_input
-    
-    # Pasos de decisión
-    for step in range(num_decision_steps):
-        step_name = f"{CONST_STEP}_{step}"
-        
-        # Transformador de características compartido con nombre único por paso
-        transformer_output = feature_transformer(
-            inputs=x,
-            feature_dim=feature_dim,
-            step_idx=step,  # Pasar índice para nombres únicos
-            num_heads=num_attention_heads,
-            use_bn=True,
-            virtual_batch_size=virtual_batch_size,
-            dropout_rate=attention_dropout
-        )
-        
-        # Bloque de atención con nombre único por paso
-        attention_mask = attention_block(
-            inputs=transformer_output,
-            input_dim=input_dim,
-            step_idx=step,  # Pasar índice para nombres únicos
-            use_bn=True,
-            virtual_batch_size=virtual_batch_size
-        )
-        
-        # Aplicar máscara y obtener features para este paso
-        masked_features = Multiply(name=f"masked_features_{step}")([features, attention_mask])
-        
-        # Guardar salida del paso para uso en capas finales
-        step_outputs.append(masked_features)
-        
-        # Actualizar features restantes
-        if step < num_decision_steps - 1:
-            # Restar características usadas (escaladas por sparsity)
-            sparsity_coeff = TABNET_CONFIG.get('sparsity_coefficient', 1e-4)
-            relaxation_factor = TABNET_CONFIG.get('relaxation_factor', 1.5)
-            
-            # Calcular el factor de escala
-            scale_value = sparsity_coeff * relaxation_factor
-            
-            # Usar capas personalizadas para evitar operaciones TF directas
-            features_scaled = ScaleLayer(scale_value, 
-                                        name=f"scale_{step}")(attention_mask)
-            ones = OnesLikeLayer(name=f"ones_{step}")(features_scaled)
-            scaled_subtract = SubtractLayer(name=f"subtract_{step}")(features_scaled)
-            scales = Add(name=f"add_scales_{step}")([ones, scaled_subtract])
-            features = Multiply(name=f"update_features_{step}")([features, scales])
-    
-    # Procesamiento final: combinar salidas ponderadas de los pasos
-    if step_outputs:
-        # Transformar cada salida a la misma forma
-        reshaped_outputs = []
-        for i, output in enumerate(step_outputs):
-            reshaped = Reshape((1, -1), name=f"reshape_step_{i}")(output)
-            reshaped_outputs.append(reshaped)
-        
-        # Concatenar a lo largo del eje de pasos de decisión
-        if len(reshaped_outputs) > 1:
-            stacked_outputs = Concatenate(axis=1, name="stack_steps")(reshaped_outputs)
-        else:
-            stacked_outputs = reshaped_outputs[0]
-        
-        # Red para calcular pesos de atención para cada paso
-        step_mean = ReduceMeanLayer(axis=2, name="step_mean")(stacked_outputs)
-        step_attn = Dense(num_decision_steps, activation='softmax', name="step_attention")(step_mean)
-        
-        # Reshape para multiplicación por broadcasting
-        step_attn_reshaped = Reshape((num_decision_steps, 1), name="reshape_attn")(step_attn)
-        
-        # Multiplicar directamente usando broadcasting de Keras
-        weighted_outputs = Multiply(name="weight_outputs")([
-            stacked_outputs, 
-            step_attn_reshaped
-        ])
-        
-        # Sumar a lo largo del eje de pasos
-        combined = ReduceSumLayer(axis=1, name="combine_steps")(weighted_outputs)
-    else:
-        # Si no hay pasos (caso extremo), usar la entrada directamente
-        combined = combined_input
+    # Combinar salidas de los pasos
+    combined = _combine_step_outputs(step_outputs, combined_input, num_decision_steps)
     
     # MLP final con conexiones residuales
     x = Dense(output_dim, activation='selu', name="final_dense_1")(combined)

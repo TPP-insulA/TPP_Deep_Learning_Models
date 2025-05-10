@@ -3,21 +3,21 @@ import tensorflow as tf
 import numpy as np
 import time
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, LSTM, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import MeanSquaredError
+from keras._tf_keras.keras.saving import register_keras_serializable
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable, TypeVar
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import TRPO_CONFIG
-
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 class ActorCriticModel:
     """
@@ -157,7 +157,7 @@ class ActorCriticModel:
                 return mu[0]
             
             # Muestrear de la distribución normal usando Generator
-            seed = TRPO_CONFIG.get('seed', 42)
+            seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
             rng = np.random.default_rng(seed)
             action = mu + rng.normal(size=mu.shape) * std
             return action[0]
@@ -418,7 +418,7 @@ class TRPO:
         damping: float = TRPO_CONFIG['damping']
     ) -> None:
         # Configurar semilla para reproducibilidad
-        seed = TRPO_CONFIG.get('seed', 42)
+        seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         tf.random.set_seed(seed)
         np.random.seed(seed)
         
@@ -738,7 +738,7 @@ class TRPO:
         losses = []
         
         # Crear generador con semilla fija para reproducibilidad
-        seed = TRPO_CONFIG.get('seed', 42)
+        seed = TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         rng = np.random.default_rng(seed)
         
         for _ in range(epochs):
@@ -1391,8 +1391,8 @@ class TRPOModelWrapper(Model):
         self, 
         x: Union[tf.data.Dataset, List[tf.Tensor]], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1410,7 +1410,7 @@ class TRPOModelWrapper(Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -1486,7 +1486,7 @@ class TRPOModelWrapper(Model):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(TRPO_CONFIG.get('seed', 42)))
+                self.rng = np.random.Generator(np.random.PCG64(TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 

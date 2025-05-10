@@ -2,7 +2,8 @@ import os
 import sys
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers, Model
+from  keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras import layers
 from typing import Dict, Tuple, List, Any, Optional, Callable
 
 # Asegurarse de que el directorio raíz del proyecto esté en el path

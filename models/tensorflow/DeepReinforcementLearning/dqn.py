@@ -1,14 +1,14 @@
 import os, sys
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import Huber
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import Huber
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import gym
@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DQN_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.drl_model_wrapper import DRLModelWrapper, DRLModelWrapperTF
 
 class ReplayBuffer:
@@ -169,7 +170,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             probabilities /= np.sum(probabilities)
             
             # Muestreo según distribución
-            rng = np.random.default_rng(seed=42)
+            rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
             idx = rng.choice(len(self.buffer), batch_size, p=probabilities, replace=False).tolist()
         
         # Extraer batch
@@ -414,7 +415,7 @@ class QNetwork(Model):
         int
             Acción seleccionada según la política
         """
-        rng = np.random.default_rng(seed=42)
+        rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
         if rng.random() < epsilon:
             # Explorar: acción aleatoria
             return int(rng.integers(0, self.action_dim))
@@ -451,7 +452,7 @@ class DQN:
         action_dim: int,
         config: Optional[Dict[str, Any]] = None,
         hidden_units: Optional[List[int]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         tf.random.set_seed(seed)
@@ -542,11 +543,17 @@ class DQN:
         """
         self.target_q_network.set_weights(self.q_network.get_weights())
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),                        # states
+        tf.TensorSpec(shape=(None,), dtype=tf.int32),                               # actions
+        tf.TensorSpec(shape=(None,), dtype=tf.float32),                             # rewards
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),                        # next_states
+        tf.TensorSpec(shape=(None,), dtype=tf.float32),                             # dones
+        tf.TensorSpec(shape=(None,), dtype=tf.float32, name="importance_weights")   # importance_weights
+    ])
     def _train_step(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
-                  next_states: tf.Tensor, dones: tf.Tensor, 
-                  importance_weights: Optional[tf.Tensor] = None) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        """
+                  next_states: tf.Tensor, dones: tf.Tensor,
+                  importance_weights: tf.Tensor = None) -> Tuple[tf.Tensor, tf.Tensor]:
         Realiza un paso de entrenamiento para actualizar la red Q.
         
         Parámetros:
@@ -1172,8 +1179,8 @@ class DQNModelWrapper(Model):
         self, 
         x: Union[tf.data.Dataset, List[tf.Tensor]], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1191,7 +1198,7 @@ class DQNModelWrapper(Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -1287,7 +1294,7 @@ class DQNModelWrapper(Model):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1532,7 +1539,7 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_dim=action_dim,
         config=config,
         hidden_units=DQN_CONFIG['hidden_units'],
-        seed=DQN_CONFIG.get('seed', 42)
+        seed=DQN_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear wrapper DQN directamente sin usar DRLModelWrapperTF

@@ -1,12 +1,12 @@
 import os, sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Conv1D, Dense, Dropout, BatchNormalization, 
     LayerNormalization, Concatenate, Add, Activation, 
     GlobalAveragePooling1D, GlobalMaxPooling1D, SeparableConv1D
 )
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.saving import register_keras_serializable
 from typing import Dict, Tuple, Any, Optional, Callable, Union, List
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())

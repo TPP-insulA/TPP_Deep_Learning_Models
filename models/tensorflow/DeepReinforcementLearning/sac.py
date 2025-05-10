@@ -2,13 +2,13 @@ import os, sys
 import tensorflow as tf
 import numpy as np
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import matplotlib.pyplot as plt
@@ -18,7 +18,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SAC_CONFIG
-
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 class ReplayBuffer:
     """
@@ -407,7 +407,7 @@ class SAC:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         tf.random.set_seed(seed)
@@ -782,7 +782,7 @@ class SAC:
         """
         if total_steps < warmup_steps:
             # Acciones aleatorias uniformes durante el calentamiento
-            rng = np.random.default_rng(seed=42)  # Providing a fixed seed for reproducibility
+            rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)  # Providing a fixed seed for reproducibility
             return rng.uniform(self.action_low, self.action_high, self.action_dim)
         else:
             return self.get_action(state, deterministic=False)
@@ -1465,8 +1465,8 @@ class SACModelWrapper(tf.keras.models.Model):
         self, 
         x: Union[tf.data.Dataset, List[tf.Tensor]], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1484,7 +1484,7 @@ class SACModelWrapper(tf.keras.models.Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -1558,7 +1558,7 @@ class SACModelWrapper(tf.keras.models.Model):
                 self.model = model_wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Para compatibilidad con algoritmos RL
                 self.observation_space = gym.spaces.Box(
@@ -1859,7 +1859,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_high=action_high,
         action_low=action_low,
         config=config,
-        seed=SAC_CONFIG.get('seed', 42)
+        seed=SAC_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear el modelo wrapper

@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -5,12 +6,17 @@ import torch.optim as optim
 import jax
 import jax.numpy as jnp
 from flax.training import train_state
-from typing import Dict, List, Tuple, Any, Optional, Callable, Union
-from tqdm.auto import tqdm
+from flax.training.checkpoints import save_checkpoint, restore_checkpoint
+import pickle
+import tensorflow as tf
 import time
+from tqdm.auto import tqdm
+from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 
+from config.models_config import EARLY_STOPPING_POLICY
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper
-from custom.printer import print_debug, print_info, print_log
+from custom.printer import print_debug, print_info, print_log, print_success, print_error, print_warning
 
 # Constantes para mensajes de error y campos comunes
 CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
@@ -36,7 +42,7 @@ class RLModelWrapperTF(ModelWrapper):
         self.model_cls = model_cls
         self.model_kwargs = model_kwargs
         self.model = None # El modelo se instancia en start
-        self.rng = np.random.default_rng(model_kwargs.get('seed', 42)) # Generador aleatorio para mezclar datos
+        self.rng = np.random.default_rng(model_kwargs.get('seed', CONST_DEFAULT_SEED)) # Generador aleatorio para mezclar datos
 
     def _get_input_shapes(self, x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[Tuple, Tuple]:
         """
@@ -116,7 +122,7 @@ class RLModelWrapperTF(ModelWrapper):
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo RL con los datos proporcionados.
 
@@ -397,7 +403,103 @@ class RLModelWrapperTF(ModelWrapper):
              return self.model.predict(state)[0]
         else:
              raise NotImplementedError("No se encontró método de predicción individual.")
+    
+    def save(self, path: str) -> None:
+        """
+        Guarda el modelo en disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
+        
+        if hasattr(self.model, 'save'):
+            # Método estándar de Keras
+            self.model.save(path)
+        elif hasattr(self.model, 'save_weights'):
+            # Algunos modelos RL solo pueden guardar pesos
+            self.model.save_weights(path)
+        else:
+            try:
+                # Intentar exportar como SavedModel si es posible
+                tf.saved_model.save(self.model, path)
+            except Exception as e:
+                # Si todo falla, intentar guardar con pickle
+                with open(f"{path}.pkl", 'wb') as f:
+                    pickle.dump({
+                        'model_kwargs': self.model_kwargs,
+                        'model_weights': self.model.get_weights() if hasattr(self.model, 'get_weights') else None
+                    }, f)
+                print_warning(f"Modelo guardado como pickle en {path}.pkl debido a: {e}")
 
+    def load(self, path: str) -> None:
+        """
+        Carga el modelo desde disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        # Verificar si es un archivo .pkl
+        if path.endswith('.pkl'):
+            self._load_from_pickle(path)
+        # Intentar cargar como modelo Keras estándar
+        elif os.path.isdir(path) or path.endswith('.h5') or path.endswith('.keras'):
+            self._load_keras_model(path)
+        else:
+            raise ValueError(f"Formato de archivo no reconocido: {path}")
+            
+    def _load_from_pickle(self, path: str) -> None:
+        """
+        Carga el modelo desde un archivo pickle.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo pickle
+        """
+        with open(path, 'rb') as f:
+            data = pickle.load(f)
+            
+        # Recrear el modelo si es necesario
+        if self.model is None:
+            self._create_model_instance(data.get('cgm_shape', (1,)), data.get('other_shape', (1,)))
+            
+        # Establecer pesos si están disponibles
+        if 'model_weights' in data and data['model_weights'] is not None and hasattr(self.model, 'set_weights'):
+            self.model.set_weights(data['model_weights'])
+            
+    def _load_keras_model(self, path: str) -> None:
+        """
+        Carga un modelo Keras desde un archivo o directorio.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo o directorio del modelo Keras
+        """
+        try:
+            # Cargar modelo completo
+            self.model = tf.keras.models.load_model(path)
+        except Exception as e:
+            print_error(f"Error al cargar modelo completo: {e}")
+            # Intentar cargar solo los pesos
+            if self.model is None:
+                self._create_model_instance((1,), (1,))
+            if hasattr(self.model, 'load_weights'):
+                self.model.load_weights(path)
 
 # Clase para modelos RL con JAX
 class RLModelWrapperJAX(ModelWrapper):
@@ -429,7 +531,16 @@ class RLModelWrapperJAX(ModelWrapper):
         self.agent = None # El agente se instancia en start
         self.rng = None # Clave JAX principal
         self.history = {"loss": [], "val_loss": []} # Historial de entrenamiento
-        self.early_stopping = None
+        self.early_stopping_config = {
+            'patience': EARLY_STOPPING_POLICY['early_stopping_patience'],
+            'min_delta': EARLY_STOPPING_POLICY['early_stopping_min_delta'],
+            'restore_best_weights': EARLY_STOPPING_POLICY['early_stopping_restore_best_weights'],
+            'best_val_loss': EARLY_STOPPING_POLICY['early_stopping_best_val_loss'],
+            'best_loss': EARLY_STOPPING_POLICY['early_stopping_best_loss'],
+            'counter': EARLY_STOPPING_POLICY['early_stopping_counter'],
+            'best_weights': EARLY_STOPPING_POLICY['early_stopping_best_weights'],
+            'wait': 0
+        }
         self.best_agent_state = None # Para guardar el mejor estado si hay early stopping
 
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
@@ -478,19 +589,31 @@ class RLModelWrapperJAX(ModelWrapper):
         return self.agent_state # Devolver el estado inicial
 
     def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
-        """Configura el early stopping."""
-        self.early_stopping = {
-            'patience': patience,
-            'min_delta': min_delta,
-            'restore_best_weights': restore_best_weights,
-            'best_loss': float('inf'),
-            'best_agent_state': None, # Guardar el estado completo del agente
-            'wait': 0
-        }
+        """
+        Agrega early stopping al modelo.
+
+        Parámetros:
+        -----------
+        patience : int, opcional
+            Número de épocas a esperar para detener el entrenamiento (default: 10)
+        min_delta : float, opcional
+            Mínima mejora requerida para considerar una mejora (default: 0.0)
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar (default: True)
+        """
+        # Actualizar la configuración existente de early stopping
+        self.early_stopping_config['patience'] = patience
+        self.early_stopping_config['min_delta'] = min_delta
+        self.early_stopping_config['restore_best_weights'] = restore_best_weights
+        self.early_stopping_config['best_loss'] = EARLY_STOPPING_POLICY['early_stopping_best_val_loss'],
+        self.early_stopping_config['counter'] = EARLY_STOPPING_POLICY['early_stopping_counter'],
+        self.early_stopping_config['best_weights'] = EARLY_STOPPING_POLICY['early_stopping_best_weights']
+        self.early_stopping_config['wait'] = 0
+        
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
               validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-              epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+              epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el agente JAX por épocas.
 
@@ -580,42 +703,80 @@ class RLModelWrapperJAX(ModelWrapper):
         print_log(metrics)
     
     def _run_validation(self, validation_info: Dict[str, Any]) -> float:
-        """Ejecuta la validación y actualiza el estado del early stopping."""
-        val_rng, self.rng = jax.random.split(self.rng)
-        val_loss = self._validate(
-            validation_info['x_cgm'], 
-            validation_info['x_other'], 
-            validation_info['y'], 
-            val_rng
-        )
-        self.history["val_loss"].append(val_loss)
+        """
+        Ejecuta validación y actualiza historial.
         
-        # Actualizar estado del early stopping
-        if self.early_stopping:
-            self._update_early_stopping(val_loss)
+        Parámetros:
+        -----------
+        validation_info : Dict[str, Any]
+            Información de validación como diccionario con claves 'x_cgm', 'x_other', 'y'
             
+        Retorna:
+        --------
+        float
+            Pérdida de validación
+        """
+        x_cgm_val = validation_info.get('x_cgm')
+        x_other_val = validation_info.get('x_other')
+        y_val = validation_info.get('y')
+        val_preds = self.predict(x_cgm_val, x_other_val)
+        
+        # Asegurar que val_loss sea un float
+        val_loss = float(np.mean((val_preds - y_val) ** 2))
+        self.history[CONST_VAL_LOSS].append(val_loss)
+        
+        # Actualizar early stopping con el valor float
+        self._update_early_stopping(val_loss)
+        
         return val_loss
         
     def _update_early_stopping(self, val_loss: float) -> None:
-        """Actualiza el estado del early stopping."""
-        if val_loss < self.early_stopping['best_loss'] - self.early_stopping['min_delta']:
-            # Mejoró la pérdida
-            self.early_stopping['best_loss'] = val_loss
-            self.early_stopping['wait'] = 0
-            if self.early_stopping['restore_best_weights']:
-                self.best_agent_state = self.agent_state
+        """
+        Actualiza el estado de early stopping basado en la pérdida de validación.
+        
+        Parámetros:
+        -----------
+        val_loss : float
+            Pérdida de validación actual
+            
+        Retorna:
+        --------
+        None
+        """
+        # Asegurarse de acceder a la configuración correcta
+        if not hasattr(self, 'early_stopping_config'):
+            # Si no existe, inicializarla con valores predeterminados
+            self.early_stopping_config = {
+                'patience': EARLY_STOPPING_POLICY['early_stopping_patience'],
+                'min_delta': EARLY_STOPPING_POLICY['early_stopping_min_delta'],
+                'restore_best_weights': EARLY_STOPPING_POLICY['early_stopping_restore_best_weights'],
+                'best_val_loss': float('inf'),
+                'counter': 0,
+                'best_weights': None,
+                'best_agent_state': None
+            }
+        
+        # Extraer el valor float correcto de val_loss si es una tupla
+        if isinstance(val_loss, tuple):
+            val_loss = val_loss[0]
+        
+        if val_loss < (self.early_stopping_config['best_val_loss'] - self.early_stopping_config['min_delta']):
+            self.early_stopping_config['best_val_loss'] = val_loss
+            self.early_stopping_config['counter'] = 0
+            if self.early_stopping_config['restore_best_weights'] and self.agent_state is not None:
+                # Guardar copia del mejor estado del agente
+                self.early_stopping_config['best_agent_state'] = jax.tree_map(lambda x: x, self.agent_state)
         else:
-            # No mejoró la pérdida
-            self.early_stopping['wait'] += 1
+            self.early_stopping_config['counter'] += 1
             
     def _should_stop_early(self) -> bool:
         """Determina si se debe detener el entrenamiento temprano."""
-        if not self.early_stopping:
+        if not self.early_stopping_config:
             return False
             
-        if self.early_stopping['wait'] >= self.early_stopping['patience']:
+        if self.early_stopping_config['wait'] >= self.early_stopping_config['patience']:
             print("\nEarly stopping activado")
-            if self.early_stopping['restore_best_weights'] and self.best_agent_state is not None:
+            if self.early_stopping_config['restore_best_weights'] and self.best_agent_state is not None:
                 print("Restaurando el mejor estado del agente.")
                 self.agent_state = self.best_agent_state
             return True
@@ -641,26 +802,39 @@ class RLModelWrapperJAX(ModelWrapper):
         total_loss = 0.0
         all_metrics = {}
 
-        # Iterar sobre los lotes
-        for i in range(steps_per_epoch):
+        # Iterar sobre los lotes con barra de progreso
+        batch_iterator = tqdm(
+            range(steps_per_epoch), 
+            desc="Procesando lotes", 
+            leave=False,
+            unit="batch"
+        )
+        
+        for i in batch_iterator:
             batch_indices = indices[i * batch_size:(i + 1) * batch_size]
             batch_cgm = x_cgm[batch_indices]
             batch_other = x_other[batch_indices]
-            batch_y = y[batch_indices] # Los targets pueden ser necesarios para calcular recompensas o pérdidas supervisadas
+            batch_y = y[batch_indices]
 
             # Crear lote según lo que espere train_batch del agente
-            # Asumiendo que espera (observaciones, targets/acciones)
-            # Observaciones: (batch_cgm, batch_other)
-            # Targets: batch_y (puede necesitar adaptación)
-            # El formato exacto depende de la implementación de train_batch del agente
             batch_data = ((batch_cgm, batch_other), batch_y)
 
-            # Llamar al método train_batch del agente
+            # Usar train_batch_vectorized si existe, de lo contrario usar train_batch
             step_rng, rng_key = jax.random.split(rng_key)
-            # train_batch debe devolver (nuevo_estado_agente, métricas_paso)
-            self.agent_state, step_metrics = self.agent.train_batch(self.agent_state, batch_data, step_rng)
+            
+            if hasattr(self.agent, 'train_batch_vectorized'):
+                self.agent_state, step_metrics = self.agent.train_batch_vectorized(self.agent_state, batch_data, step_rng)
+            else:
+                self.agent_state, step_metrics = self.agent.train_batch(self.agent_state, batch_data, step_rng)
 
-            total_loss += step_metrics.get('loss', 0.0)
+            # Actualizar pérdida total y métricas
+            batch_loss = step_metrics.get('loss', 0.0)
+            total_loss += batch_loss
+            
+            # Actualizar descripción de la barra con la pérdida actual
+            batch_iterator.set_postfix(loss=f"{batch_loss:.4f}")
+            
+            # Acumular métricas
             for k, v in step_metrics.items():
                 if k not in all_metrics: all_metrics[k] = 0.0
                 all_metrics[k] += v
@@ -704,6 +878,272 @@ class RLModelWrapperJAX(ModelWrapper):
 
         # Convertir predicciones de vuelta a NumPy array
         return np.array(predictions)
+    
+    def save(self, path: str) -> None:
+        """
+        Guarda el agente JAX en disco, extrayendo solo componentes serializables.
+    
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+    
+        Retorna:
+        --------
+        None
+        """
+        if self.agent is None or self.agent_state is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
+        
+        # Crear directorio si no existe
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        
+        try:
+            # Intentar guardar usando métodos directos
+            if self._try_save_with_native_method(path):
+                return
+                
+            # Extraer y guardar datos serializables
+            self._save_serializable_data(path)
+                
+        except Exception as e:
+            print_error(f"Error al guardar modelo: {e}")
+            self._save_fallback_history(path)
+
+    def _try_save_with_native_method(self, path: str) -> bool:
+        """
+        Intenta guardar el modelo usando métodos nativos.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+            
+        Retorna:
+        --------
+        bool
+            True si se guardó con éxito, False en caso contrario
+        """
+        # Primera Opción: Utilizar método save nativo del agente
+        if hasattr(self.agent, 'save') and callable(self.agent.save):
+            self.agent.save(path)
+            print_success(f"Modelo guardado usando método nativo en: {path}")
+            return True
+            
+        # Segunda Opción: Caso especial para PolicyIterationWrapper
+        if hasattr(self.agent, 'pi_agent') and hasattr(self.agent, 'save'):
+            self.agent.save(path)
+            print_success(f"Modelo PolicyIteration guardado en: {path}")
+            return True
+            
+        return False
+        
+    def _extract_serializable_data(self) -> dict:
+        """
+        Extrae los datos serializables del agente.
+        
+        Retorna:
+        --------
+        dict
+            Diccionario con datos serializables
+        """
+        serializable_data = {}
+        
+        # Extraer parámetros entrenables si existen
+        if hasattr(self.agent_state, 'params'):
+            serializable_data['params'] = jax.tree_util.tree_map(
+                lambda x: np.array(x), self.agent_state.params)
+        elif hasattr(self.agent, 'params'):
+            serializable_data['params'] = jax.tree_util.tree_map(
+                lambda x: np.array(x), self.agent.params)
+            
+        # Extraer política y función de valor
+        if hasattr(self.agent, 'policy'):
+            serializable_data['policy'] = np.array(self.agent.policy)
+        if hasattr(self.agent, 'v'):
+            serializable_data['v'] = np.array(self.agent.v)
+            
+        # Extraer estados de actor-critic
+        for attr in ['actor_params', 'critic_params', 'target_params', 'value_params', 'q_params']:
+            if hasattr(self.agent, attr):
+                serializable_data[attr] = jax.tree_util.tree_map(
+                    lambda x: np.array(x), getattr(self.agent, attr))
+                    
+        return serializable_data
+        
+    def _save_serializable_data(self, path: str) -> None:
+        """
+        Extrae y guarda los datos serializables en un archivo pickle.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+    
+        Retorna:
+        --------
+        None
+        """
+        # Extraer componentes serializables comunes
+        serializable_data = self._extract_serializable_data()
+        
+        # Guardar estado y metadatos
+        save_data = {
+            'serializable_data': serializable_data,
+            'cgm_shape': self.cgm_shape,
+            'other_features_shape': self.other_features_shape,
+            'model_kwargs': self.model_kwargs,
+            'history': self.history,
+            'algorithm': getattr(self, 'algorithm', 'unknown'),
+            'early_stopping_config': self.early_stopping_config
+        }
+        
+        # Verificar si el path ya tiene extensión .pkl
+        save_path = path if path.endswith('.pkl') else f"{path}.pkl"
+        
+        with open(save_path, 'wb') as f:
+            pickle.dump(save_data, f)
+        print_success(f"Componentes serializables guardados en: {save_path}")
+        
+    def _save_fallback_history(self, path: str) -> None:
+        """
+        Guarda solo el historial como último recurso.
+
+        Parámetros:
+        -----------
+        path : str
+            Ruta base donde guardar el historial
+    
+        Retorna:
+        --------
+        None
+        """
+        try:
+            base_path = path[:-4] if path.endswith('.pkl') else path
+            history_path = f"{base_path}_history.pkl"
+        
+            with open(history_path, 'wb') as f:
+                pickle.dump({'history': self.history}, f)
+            print_warning(f"No se pudo guardar el modelo completo, pero el historial fue guardado en: {history_path}")
+        except Exception as inner_e:
+            print_error(f"No se pudo guardar ni siquiera el historial: {inner_e}")
+
+    def load(self, path: str) -> None:
+        """
+        Carga el agente JAX desde disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        # Intentar cargar con checkpoint de Flax primero
+        if self._try_load_from_flax_checkpoint(path):
+            return
+            
+        # Si falla, intentar cargar desde pickle
+        self._load_from_pickle(path)
+            
+    def _try_load_from_flax_checkpoint(self, path: str) -> bool:
+        """
+        Intenta cargar el agente desde un checkpoint de Flax.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del checkpoint
+            
+        Retorna:
+        --------
+        bool
+            True si la carga fue exitosa, False en caso contrario
+        """
+        try:
+            self._ensure_agent_is_initialized()
+                
+            # Cargar estado del checkpoint
+            restored_state = restore_checkpoint(path, self.agent_state)
+            if restored_state is not None:
+                self.agent_state = restored_state
+                print_success(f"Agente restaurado desde checkpoint de Flax: {path}")
+                return True
+        except Exception as e:
+            print_error(f"No se pudo cargar desde checkpoint de Flax: {e}")
+            
+        return False
+        
+    def _ensure_agent_is_initialized(self) -> None:
+        """Asegura que el agente esté inicializado."""
+        if self.agent is None:
+            self.agent = self.agent_creator(
+                cgm_shape=self.cgm_shape,
+                other_features_shape=self.other_features_shape,
+                **self.model_kwargs
+            )
+            
+            # Crear estado inicial si es necesario
+            if not hasattr(self, 'agent_state') or self.agent_state is None:
+                if hasattr(self.agent, 'setup'):
+                    # Clave aleatoria para inicialización
+                    setup_rng = jax.random.PRNGKey(0)
+                    self.agent_state = self.agent.setup(setup_rng)
+                else:
+                    self.agent_state = self.agent
+                    
+    def _load_from_pickle(self, path: str) -> None:
+        """
+        Carga el agente desde un archivo pickle.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta del archivo pickle
+        """
+        try:
+            # Verificar si el archivo es .pkl o necesita extensión
+            pickle_path = path if path.endswith('.pkl') else f"{path}.pkl"
+            with open(pickle_path, 'rb') as f:
+                data = pickle.load(f)
+                
+            # Restaurar datos
+            self._restore_agent_data(data)
+                
+            print_success(f"Agente restaurado desde pickle: {pickle_path}")
+        except Exception as e:
+            raise ValueError(f"No se pudo cargar el agente desde {path}: {e}")
+            
+    def _restore_agent_data(self, data: Dict) -> None:
+        """
+        Restaura los datos del agente desde un diccionario.
+        
+        Parámetros:
+        -----------
+        data : Dict
+            Diccionario con los datos del agente
+        """
+        # Restaurar estado y metadatos
+        if 'agent_state' in data:
+            self.agent_state = data['agent_state']
+        if 'history' in data:
+            self.history = data['history']
+        if 'early_stopping' in data:
+            self.early_stopping_config = data['early_stopping']
+            
+        # Recrear agente si no existe
+        if self.agent is None and 'cgm_shape' in data and 'other_features_shape' in data:
+            self.cgm_shape = data.get('cgm_shape', self.cgm_shape)
+            self.other_features_shape = data.get('other_shape', self.other_features_shape)
+            model_kwargs = data.get('model_kwargs', {})
+            
+            self.agent = self.agent_creator(
+                cgm_shape=self.cgm_shape,
+                other_features_shape=self.other_features_shape,
+                **model_kwargs
+            )
 
 # Clase para modelos RL con PyTorch
 class RLModelWrapperPyTorch(ModelWrapper):
@@ -746,7 +1186,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
         Parámetros:
         -----------
         *args, **kwargs
-            Argumentos a pasar al método forward del modelo
+            Argumentos a pasar al método forward del modelo interno
                 
         Retorna:
         --------
@@ -907,7 +1347,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
                     self.rng = np.random.Generator(np.random.PCG64(seed_val))
                 except (TypeError, IndexError):
                     # Usar valor por defecto si falla
-                    seed_val = 42
+                    seed_val = CONST_DEFAULT_SEED
                     torch.manual_seed(seed_val)
                     self.rng = np.random.Generator(np.random.PCG64(seed_val))
         
@@ -1248,7 +1688,7 @@ class RLModelWrapperPyTorch(ModelWrapper):
     
     def fit(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo RL con los datos proporcionados.
         
@@ -1510,6 +1950,88 @@ class RLModelWrapperPyTorch(ModelWrapper):
         if self.model is not None:
             self.model.load_state_dict(state_dict)
         return self
+    
+    def save(self, path: str) -> None:
+        """
+        Guarda el modelo RL de PyTorch en disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta donde guardar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("guardar"))
+        
+        # Guardar modelo, optimizador y configuración
+        save_dict = {
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
+            'model_cls': self.model_cls.__name__,
+            'model_kwargs': self.model_kwargs,
+            'device': str(self.device),
+            'rng_state': torch.get_rng_state()
+        }
+        
+        # Guardar configuraciones específicas de RL
+        if hasattr(self.model, 'get_save_dict'):
+            # Algunos modelos RL tienen datos adicionales para guardar
+            model_specific_data = self.model.get_save_dict()
+            save_dict.update(model_specific_data)
+        
+        torch.save(save_dict, path)
+        print_success(f"Modelo RL guardado en: {path}")
+
+    def load(self, path: str) -> None:
+        """
+        Carga el modelo RL de PyTorch desde disco.
+        
+        Parámetros:
+        -----------
+        path : str
+            Ruta desde donde cargar el modelo
+        
+        Retorna:
+        --------
+        None
+        """
+        # Cargar estado guardado
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        # Crear modelo si no existe
+        if self.model is None or isinstance(self.model, self._create_dummy_model().__class__):
+            # Si tenemos formas guardadas, usarlas para la inicialización
+            cgm_shape = checkpoint.get('cgm_shape', (1,))
+            other_shape = checkpoint.get('other_shape', (1,))
+            self._create_model_instance(cgm_shape, other_shape)
+        
+        # Cargar estado del modelo
+        if 'model_state_dict' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Cargar estado del optimizador si existe
+        if 'optimizer_state_dict' in checkpoint and checkpoint['optimizer_state_dict'] and self.optimizer:
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Restaurar estado RNG si existe
+        if 'rng_state' in checkpoint:
+            torch.set_rng_state(checkpoint['rng_state'])
+        
+        # Cargar datos específicos de RL
+        if hasattr(self.model, 'set_from_save_dict'):
+            # Algunos modelos RL necesitan restaurar estados internos
+            model_specific_data = {k: v for k, v in checkpoint.items() 
+                                if k not in ['model_state_dict', 'optimizer_state_dict', 
+                                            'model_cls', 'model_kwargs', 'device', 'rng_state']}
+            self.model.set_from_save_dict(model_specific_data)
+        
+        # Mover modelo al dispositivo correcto
+        self.model = self.model.to(self.device)
+        print_success(f"Modelo RL cargado desde: {path}")
 
 # Clase principal que selecciona el wrapper adecuado según el framework
 class RLModelWrapper(ModelWrapper):
@@ -1532,6 +2054,27 @@ class RLModelWrapper(ModelWrapper):
     """
 
     def __init__(self, model_creator_func: Callable, framework: str = 'jax', cgm_shape: Optional[Tuple[int,...]]=None, other_features_shape: Optional[Tuple[int,...]]=None, **model_kwargs) -> None:
+        """
+        Inicializa el wrapper con un creador de modelo.
+        
+        Parámetros:
+        -----------
+        model_creator_func : Callable
+            Función que crea la instancia del agente RL (ej. create_monte_carlo_agent para JAX,
+            o la clase del modelo para TF). Debe aceptar cgm_shape y other_features_shape.
+        framework : str, opcional
+            Framework a utilizar ('pytorch', 'jax' o 'tensorflow') (default: 'jax').
+        cgm_shape : Tuple[int, ...], opcional
+            Forma de los datos CGM (necesario para JAX wrapper).
+        other_features_shape : Tuple[int, ...], opcional
+            Forma de otras características (necesario para JAX wrapper).
+        **model_kwargs
+            Argumentos adicionales para el creador del agente/modelo.
+            
+        Retorna:
+        --------
+        None
+        """
         super().__init__()
         self.framework = framework
         if framework == 'jax':
@@ -1549,36 +2092,105 @@ class RLModelWrapper(ModelWrapper):
     # Delegación de métodos al wrapper específico
     def start(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
              rng_key: Any = None) -> Any:
-        """Inicializa el modelo/agente."""
+        """
+        Inicializa el modelo/agente.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM de entrada
+        x_other : np.ndarray
+            Otras características de entrada
+        y : np.ndarray
+            Valores objetivo
+        rng_key : Any, opcional
+            Clave para generación aleatoria (default: None)
+            
+        Retorna:
+        --------
+        Any
+            Estado del modelo inicializado
+        """
         return self.wrapper.start(x_cgm, x_other, y, rng_key)
 
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray,
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
-        """Entrena el modelo/agente."""
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
+        """
+        Entrena el modelo/agente.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM de entrenamiento
+        x_other : np.ndarray
+            Otras características de entrenamiento
+        y : np.ndarray
+            Valores objetivo
+        validation_data : Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]], opcional
+            Datos de validación como ((x_cgm_val, x_other_val), y_val) (default: None)
+        epochs : int, opcional
+            Número de épocas de entrenamiento (default: 10)
+        batch_size : int, opcional
+            Tamaño de lote (default: 32)
+            
+        Retorna:
+        --------
+        Dict[str, List[float]]
+            Historial de entrenamiento con métricas
+        """
         return self.wrapper.train(x_cgm, x_other, y, validation_data, epochs, batch_size)
 
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
-        """Realiza predicciones."""
+        """
+        Realiza predicciones.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        
+        Retorna:
+        --------
+        np.ndarray
+            Predicciones del modelo
+        """
         return self.wrapper.predict(x_cgm, x_other)
 
     def save(self, filepath: str) -> None:
-        """Guarda el modelo/agente (si el wrapper lo soporta)."""
+        """
+        Guarda el modelo/agente (si el wrapper lo soporta).
+        
+        Parámetros:
+        -----------
+        filepath : str
+            Ruta donde guardar el modelo
+            
+        Retorna:
+        --------
+        None
+        """
         if hasattr(self.wrapper, 'save'):
             self.wrapper.save(filepath)
         else:
-            print(f"Advertencia: El guardado no está implementado para el wrapper {type(self.wrapper).__name__}.")
+            print_warning(f"El guardado no está implementado para el wrapper {type(self.wrapper).__name__}.")
 
     def load(self, filepath: str) -> None:
-        """Carga el modelo/agente (si el wrapper lo soporta)."""
+        """
+        Carga el modelo/agente (si el wrapper lo soporta).
+        
+        Parámetros:
+        -----------
+        filepath : str
+            Ruta desde donde cargar el modelo
+            
+        Retorna:
+        --------
+        None
+        """
         if hasattr(self.wrapper, 'load'):
             self.wrapper.load(filepath)
         else:
-            print(f"Advertencia: La carga no está implementada para el wrapper {type(self.wrapper).__name__}.")
-
-    def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
-        """Configura early stopping (si el wrapper lo soporta)."""
-        if hasattr(self.wrapper, 'add_early_stopping'):
-            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
-        else:
-            print(f"Advertencia: Early stopping no está implementado para el wrapper {type(self.wrapper).__name__}.")
+            print_warning(f"La carga no está implementada para el wrapper {type(self.wrapper).__name__}.")

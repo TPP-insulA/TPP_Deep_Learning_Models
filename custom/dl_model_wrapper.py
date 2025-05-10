@@ -12,8 +12,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper
-from custom.printer import cprint, print_debug, print_info
+from custom.printer import cprint, print_debug, print_info, print_error
 
 # Constantes para mensajes de error
 CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
@@ -75,7 +76,7 @@ class DLModelWrapperTF(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo con los datos proporcionados.
         
@@ -318,7 +319,7 @@ class DLModelWrapperJAX(ModelWrapper):
         """
         # Si no se proporciona una clave, crea una con una semilla predeterminada
         if rng_key is None:
-            rng_key = jax.random.PRNGKey(42)
+            rng_key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         
         # Inicializa el modelo
         self.initialize(x_cgm, x_other, y, seed=int(rng_key[0]))
@@ -523,7 +524,7 @@ class DLModelWrapperJAX(ModelWrapper):
         num_samples = len(y)
         indices = np.arange(num_samples)
         # Create a random generator with a seed for reproducibility
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         rng.shuffle(indices)
         
         # Calculate number of batches for the progress bar
@@ -618,7 +619,7 @@ class DLModelWrapperJAX(ModelWrapper):
             # Sin mejora
             self.early_stopping['wait'] += 1
             if self.early_stopping['wait'] >= self.early_stopping['patience']:
-                print(f"\nEarly stopping activado en época {epoch+1}")
+                print_debug(f"\nEarly stopping activado en época {epoch+1}")
                 
                 # Restaurar mejores parámetros si se solicitó
                 if self.early_stopping['restore_best_weights'] and self.early_stopping['best_params'] is not None:
@@ -884,7 +885,7 @@ class DLModelWrapperJAX(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo con los datos proporcionados.
         
@@ -1188,7 +1189,7 @@ class DLModelWrapperPyTorch(ModelWrapper):
                     torch.manual_seed(seed_val)
                     np.random.seed(seed_val)
                 except (TypeError, IndexError):
-                    torch.manual_seed(42)  # Valor por defecto
+                    torch.manual_seed(CONST_DEFAULT_SEED)  # Valor por defecto
         
         return self.model
     
@@ -1263,7 +1264,7 @@ class DLModelWrapperPyTorch(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo con los datos proporcionados.
         
@@ -1578,7 +1579,7 @@ class DLModelWrapper(ModelWrapper):
         model_creator : Callable
             Función que crea una instancia del modelo
         framework : str, opcional
-            Framework a utilizar ('jax' o 'tensorflow') (default: 'jax')
+            Framework a utilizar ('pytorch', 'jax' o 'tensorflow') (default: 'jax')
         """
         super().__init__()
         
@@ -1616,7 +1617,7 @@ class DLModelWrapper(ModelWrapper):
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
-             epochs: int = 10, batch_size: int = 32) -> Dict[str, List[float]]:
+             epochs: int = CONST_DEFAULT_EPOCHS, batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> Dict[str, List[float]]:
         """
         Entrena el modelo con los datos proporcionados.
         
@@ -1719,4 +1720,4 @@ class DLModelWrapper(ModelWrapper):
         if isinstance(self.wrapper, DLModelWrapperJAX):
             self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
         else:
-            print("Early stopping solo está disponible para modelos JAX")
+            print_error("Early stopping solo está disponible para modelos JAX")

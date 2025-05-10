@@ -5,14 +5,15 @@ import time
 import pickle
 from typing import Dict, List, Tuple, Optional, Union, Any
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, Concatenate, GlobalAveragePooling1D
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import Input, Dense, Concatenate, GlobalAveragePooling1D
+from keras._tf_keras.keras.saving import register_keras_serializable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import VALUE_ITERATION_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para cadenas repetidas
 CONST_ITERACION = "Iteración"
@@ -966,8 +967,8 @@ class ValueIterationModel(Model):
         self, 
         x: Any, 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 1, 
         validation_data: Optional[Tuple] = None, 
         **kwargs
@@ -984,7 +985,7 @@ class ValueIterationModel(Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 1)
         validation_data : Optional[Tuple], opcional
@@ -1046,7 +1047,7 @@ class ValueIterationModel(Model):
         self, 
         x: Any, 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 1, 
         **kwargs
     ) -> float:
@@ -1089,7 +1090,7 @@ class ValueIterationModel(Model):
     def predict(
         self, 
         x: Any, 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 0, 
         **kwargs
     ) -> np.ndarray:
@@ -1179,7 +1180,7 @@ def _prepare_data_for_env(
     max_samples = min(500, len(target_np))  # Reducido a 500 muestras máximo
     if len(target_np) > max_samples:
         # Usar una semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(42))
+        rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
         indices = rng.choice(len(target_np), max_samples, replace=False)
         cgm_np = cgm_np[indices]
         other_np = other_np[indices]

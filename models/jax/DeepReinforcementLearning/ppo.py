@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import PPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -152,7 +153,7 @@ class PPO:
         entropy_coef: float = PPO_CONFIG['entropy_coef'],
         value_coef: float = PPO_CONFIG['value_coef'],
         max_grad_norm: Optional[float] = PPO_CONFIG['max_grad_norm'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         key = jax.random.PRNGKey(seed)
@@ -622,7 +623,7 @@ class PPO:
         indices = np.arange(len(states))
         
         # Crear un generador de números aleatorios con semilla fija para reproducibilidad
-        rng = np.random.Generator(np.random.PCG64(seed=42))
+        rng = np.random.Generator(np.random.PCG64(seed=CONST_DEFAULT_SEED))
         
         # Múltiples épocas de actualización con los mismos datos
         for _ in range(update_iters):
@@ -661,7 +662,7 @@ class PPO:
         
         return metrics_avg
     
-    def train(self, env: Any, epochs: int = 100, steps_per_epoch: int = 4000, batch_size: int = 64, 
+    def train(self, env: Any, epochs: int = CONST_DEFAULT_EPOCHS, steps_per_epoch: int = 4000, batch_size: int = 64, 
              update_iters: int = 10, gae_lambda: float = 0.95,
              log_interval: int = 10) -> Dict[str, List[float]]:
         """
@@ -950,7 +951,7 @@ class PPOWrapper:
         self.other_features_shape = other_features_shape
         
         # Inicializar generador de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1070,8 +1071,8 @@ class PPOWrapper:
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -1087,7 +1088,7 @@ class PPOWrapper:
         validation_data : Optional[Tuple], opcional
             Datos de validación como ([x_cgm_val, x_other_val], y_val) (default: None)
         epochs : int, opcional
-            Número de episodios de entrenamiento (default: 1)
+            Número de episodios de entrenamiento (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1173,7 +1174,7 @@ class PPOWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1321,7 +1322,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         entropy_coef=PPO_CONFIG['entropy_coef'],
         value_coef=PPO_CONFIG['value_coef'],
         max_grad_norm=PPO_CONFIG['max_grad_norm'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators
@@ -1332,7 +1333,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad completa con la interfaz del sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, framework="jax", algorithm="ppo")
+    return DRLModelWrapper(model_cls=wrapper, framework="jax", algorithm="ppo")
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

@@ -5,18 +5,19 @@ import matplotlib.pyplot as plt
 import time
 from types import SimpleNamespace
 from typing import Dict, List, Tuple, Optional, Union, Any, Callable
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, LayerNormalization, Dropout, Activation, GlobalAveragePooling1D,
     Flatten, Reshape, Conv1D, LSTM, GRU, BatchNormalization, Concatenate
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import REINFORCE_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para mensajes y valores
 CONST_ENTRENANDO = "Entrenando agente REINFORCE..."
@@ -369,7 +370,7 @@ class REINFORCE:
         use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
         hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente REINFORCE.
@@ -473,7 +474,7 @@ class REINFORCE:
             
             # Calcular entropía para regularización
             entropy = self.policy.get_entropy(states)
-            mean_entropy = tf.reduce_mean(entropy)
+            mean_entropy = tf.reduce_mean(entropy, axis=0)
             
             # Si se usa baseline, usar valores como ventaja
             if self.use_baseline:
@@ -485,7 +486,7 @@ class REINFORCE:
                 advantages = returns
             
             # Calcular pérdida de política (negativo porque queremos maximizar)
-            policy_loss = -tf.reduce_mean(log_probs * advantages)
+            policy_loss = -tf.reduce_mean(log_probs * advantages, axis=0)
             
             # Agregar término de entropía para fomentar exploración
             loss = policy_loss - self.entropy_coef * mean_entropy
@@ -497,7 +498,7 @@ class REINFORCE:
         # Actualizar métricas
         self.policy_loss_metric.update_state(policy_loss)
         self.entropy_metric.update_state(mean_entropy)
-        self.returns_metric.update_state(tf.reduce_mean(returns))
+        self.returns_metric.update_state(tf.reduce_mean(returns, axis=0))
         
         return policy_loss, mean_entropy
     
@@ -524,7 +525,7 @@ class REINFORCE:
             values = tf.squeeze(values, axis=-1)
             
             # Calcular pérdida MSE
-            baseline_loss = tf.reduce_mean(tf.square(returns - values))
+            baseline_loss = tf.reduce_mean(tf.square(returns - values), axis=0)
         
         # Calcular gradientes y actualizar red de valor
         grads = tape.gradient(baseline_loss, self.value_network.trainable_variables)
@@ -896,7 +897,7 @@ class REINFORCEModel(tf.keras.models.Model):
                 self.features = features
                 self.targets = targets
                 self.model = model
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1052,8 +1053,8 @@ class REINFORCEModel(tf.keras.models.Model):
         self, 
         x: List[tf.Tensor], 
         y: tf.Tensor, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         validation_data: Optional[Tuple] = None,
         verbose: int = 0
@@ -1068,7 +1069,7 @@ class REINFORCEModel(tf.keras.models.Model):
         y : tf.Tensor
             Valores objetivo (dosis)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1184,7 +1185,7 @@ def create_reinforce_mcpg_model(cgm_shape: Tuple[int, ...], other_features_shape
         use_baseline=REINFORCE_CONFIG['use_baseline'],
         entropy_coef=REINFORCE_CONFIG['entropy_coef'],
         hidden_sizes=REINFORCE_CONFIG['hidden_units'],
-        seed=REINFORCE_CONFIG.get('seed', 42)
+        seed=REINFORCE_CONFIG.get('seed', CONST_DEFAULT_SEED)
     )
     
     # Crear y devolver el modelo wrapper

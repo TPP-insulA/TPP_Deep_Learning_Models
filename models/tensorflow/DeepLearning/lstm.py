@@ -1,7 +1,7 @@
 import os, sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, LSTM, Dense, Dropout, LayerNormalization, Concatenate,
     MultiHeadAttention, Add, GlobalAveragePooling1D, GlobalMaxPooling1D,
     BatchNormalization, Bidirectional

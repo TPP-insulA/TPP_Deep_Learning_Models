@@ -1,7 +1,7 @@
 import os, sys
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Conv1D, Dense, Dropout, Add, Activation, LayerNormalization,
     BatchNormalization, GlobalAveragePooling1D, Concatenate, SpatialDropout1D,
     Reshape

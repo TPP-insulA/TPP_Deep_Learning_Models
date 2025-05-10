@@ -13,7 +13,9 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TRPO_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.drl_model_wrapper import DRLModelWrapperPyTorch
+from custom.printer import print_info, print_warning, print_error
 
 # Constantes para uso repetido
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -188,7 +190,7 @@ class TRPO:
         backtrack_coeff: float = TRPO_CONFIG['backtrack_coeff'],
         cg_iters: int = TRPO_CONFIG['cg_iters'],
         damping: float = TRPO_CONFIG['damping'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         torch.manual_seed(seed)
@@ -1006,17 +1008,26 @@ class TRPOWrapper(nn.Module):
             actions = torch.zeros((batch_size, 1), device=state.device)
             
             for i in range(batch_size):
-                s = state[i].cpu().numpy()  # No usar detach() aquí
+                s = state[i].cpu().numpy()
                 action = self.trpo_agent.get_action(s, deterministic=True)
+                
                 if self.trpo_agent.continuous:
-                    actions[i] = torch.tensor(action, device=state.device)
+                    actions[i] = torch.tensor(action[0], device=state.device)
                 else:
-                    action_scaled = action[0] / (self.trpo_agent.action_dim - 1) * 15.0
-                    actions[i] = torch.tensor(action_scaled, device=state.device)
-            
+                    # Manejar el caso discreto
+                    if isinstance(action, np.ndarray) and action.size > 0:
+                        action_val = int(action[0])
+                    else:
+                        action_val = int(action)
+                    
+                    # Escalar de discreto a continuo
+                    if self.trpo_agent.continuous:
+                        action_scaled = float(action_val) / (self.trpo_agent.action_dim - 1) * 15.0
+                        actions[i, 0] = action_scaled
+        
             return actions
 
-    def predict(self, x_cgm: torch.Tensor, x_other: torch.Tensor) -> np.ndarray:
+    def predict(self, x_cgm: torch.Tensor, x_other: torch.Tensor = None) -> np.ndarray:
         """
         Realiza predicciones usando el modelo TRPO entrenado.
         
@@ -1044,10 +1055,13 @@ class TRPOWrapper(nn.Module):
         
         # Hacer predicción usando forward
         with torch.no_grad():
-            predictions = self.forward(x_cgm, x_other)
-        
-        # Convertir a numpy array
-        return predictions.cpu().numpy()
+            try:
+                predictions = self.forward(x_cgm, x_other)
+                return predictions.cpu().numpy()
+            except Exception as e:
+                print_error(f"Error en la predicción: {e}")
+                # Devolver ceros si hay error
+                return np.zeros((x_cgm.shape[0], 1))
 
     def _prepare_tensor(self, x: Any) -> torch.Tensor:
         """
@@ -1132,8 +1146,8 @@ class TRPOWrapper(nn.Module):
         x_other: torch.Tensor, 
         y: torch.Tensor, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -1151,7 +1165,7 @@ class TRPOWrapper(nn.Module):
         validation_data : Optional[Tuple]
             Datos de validación ((x_cgm_val, x_other_val), y_val)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1210,7 +1224,7 @@ class TRPOWrapper(nn.Module):
         x_cgm: torch.Tensor, 
         x_other: torch.Tensor, 
         y: torch.Tensor, 
-        batch_size: int = 32,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         verbose: int = 0
     ) -> Dict[str, float]:
         """
@@ -1264,7 +1278,6 @@ class TRPOWrapper(nn.Module):
             'mae': mae
         }
 
-    # También necesitamos actualizar el método _create_training_environment
     def _create_training_environment(
         self, 
         cgm_data: torch.Tensor, 
@@ -1301,7 +1314,7 @@ class TRPOWrapper(nn.Module):
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1351,7 +1364,7 @@ class TRPOWrapper(nn.Module):
                 
                 # Calcular recompensa como negativo del error absoluto
                 target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                reward = -10 * abs(dose - target) if abs(dose - target) > 1.0 else -abs(dose - target)
                 
                 # Avanzar al siguiente ejemplo
                 self.current_idx = (self.current_idx + 1) % self.max_idx
@@ -1360,7 +1373,7 @@ class TRPOWrapper(nn.Module):
                 next_state = self._get_state()
                 
                 # Episodio siempre termina después de una acción
-                done = True
+                done = False
                 truncated = False
                 
                 return next_state, reward, done, truncated, {}
@@ -1373,8 +1386,8 @@ class TRPOWrapper(nn.Module):
                 
                 # Codificar a estado
                 with torch.no_grad():
-                    cgm_tensor = torch.FloatTensor(cgm_batch).to(CONST_DEVICE)
-                    other_tensor = torch.FloatTensor(features_batch).to(CONST_DEVICE)
+                    cgm_tensor = self.model._prepare_tensor(cgm_batch)
+                    other_tensor = self.model._prepare_tensor(features_batch)
                     
                     cgm_encoded = self.model.cgm_encoder(cgm_tensor)
                     other_encoded = self.model.other_encoder(other_tensor)
@@ -1426,7 +1439,7 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
             backtrack_coeff=TRPO_CONFIG['backtrack_coeff'],
             cg_iters=TRPO_CONFIG['cg_iters'],
             damping=TRPO_CONFIG['damping'],
-            seed=TRPO_CONFIG.get('seed', 42)
+            seed=TRPO_CONFIG.get('seed', CONST_DEFAULT_SEED)
         )
         
         wrapper = TRPOWrapper(

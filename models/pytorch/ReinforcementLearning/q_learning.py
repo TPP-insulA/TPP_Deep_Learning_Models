@@ -8,12 +8,12 @@ from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 from torch import nn
 from types import SimpleNamespace
 
-from custom.rl_model_wrapper import RLModelWrapperPyTorch
-
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import QLEARNING_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
+from custom.rl_model_wrapper import RLModelWrapperPyTorch
 
 # Constantes para archivos
 QTABLE_SUFFIX = "_qtable.npy"
@@ -48,7 +48,7 @@ class QLearning:
         epsilon_decay: float = QLEARNING_CONFIG['epsilon_decay'],
         use_decay_schedule: str = QLEARNING_CONFIG['use_decay_schedule'],
         decay_steps: int = QLEARNING_CONFIG['decay_steps'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         """
         Inicializa el agente Q-Learning.

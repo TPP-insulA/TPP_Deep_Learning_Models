@@ -1,13 +1,13 @@
 import os, sys
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.saving import register_keras_serializable
 from collections import deque
 import random
 import gym
@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.printer import print_debug
 
 # Constantes para evitar duplicación
@@ -129,7 +130,7 @@ class OUActionNoise:
         Semilla para la generación de números aleatorios (default: 42)
     """
     def __init__(self, mean: np.ndarray, std_deviation: np.ndarray, theta: float = 0.15, 
-                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = 42):
+                dt: float = 1e-2, x_initial: Optional[np.ndarray] = None, seed: int = CONST_DEFAULT_SEED):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -414,7 +415,7 @@ class DDPG:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ):
         # Use provided config or default
         self.config = config or DDPG_CONFIG
@@ -569,9 +570,16 @@ class DDPG:
         
         return action
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # states
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # actions
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # rewards
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # next_states
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # dones
+        tf.TensorSpec(shape=(), dtype=tf.float32)  # gamma
+    ])
     def _update_networks(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
-                        next_states: tf.Tensor, dones: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+                        next_states: tf.Tensor, dones: tf.Tensor, gamma: float) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
         """
         Actualiza las redes del actor y crítico usando el algoritmo DDPG.
         
@@ -587,6 +595,8 @@ class DDPG:
             Estados siguientes
         dones : tf.Tensor
             Indicadores de finalización
+        gamma : float
+            Factor de descuento para recompensas futuras
             
         Retorna:
         --------
@@ -601,7 +611,7 @@ class DDPG:
             target_q_values = self.target_critic([next_states, target_actions], training=False)
             
             # Calcular Q-values objetivo usando la ecuación de Bellman
-            targets = rewards + (1 - dones) * self.gamma * target_q_values
+            targets = rewards + (1 - dones) * gamma * target_q_values
             
             # Predecir Q-values actuales
             current_q_values = self.critic([states, actions], training=True)
@@ -628,8 +638,9 @@ class DDPG:
         actor_gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
         self.actor_optimizer.apply_gradients(zip(actor_gradients, self.actor.trainable_variables))
         
-        return critic_loss, actor_loss, tf.reduce_mean(current_q_values, axis=0)
-    
+        # Retornar las pérdidas y el valor Q para seguimiento
+        return critic_loss, actor_loss, current_q_values
+        
     def train_step(self) -> Tuple[float, float, float]:
         """
         Realiza un paso de entrenamiento DDPG con un lote de experiencias.
@@ -653,8 +664,11 @@ class DDPG:
         rewards = tf.reshape(rewards, (-1, 1))
         dones = tf.reshape(dones, (-1, 1))
         
+        # Convertir gamma a tensor constante para tf.function
+        gamma_tensor = tf.constant(self.gamma, dtype=tf.float32)
+        
         # Actualizar redes
-        critic_loss, actor_loss, q_value = self._update_networks(states, actions, rewards, next_states, dones)
+        critic_loss, actor_loss, q_value = self._update_networks(states, actions, rewards, next_states, dones, gamma_tensor)
         
         # Actualizar redes target con soft update
         self.update_target_networks()
@@ -693,7 +707,7 @@ class DDPG:
         if step_counter < warmup_steps:
             # Exploración inicial uniforme - usando el generador np.random.default_rng con semilla
             # para asegurar reproducibilidad
-            rng = np.random.default_rng(seed=42)  # Using a default seed
+            rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)  # Using a default seed
             return rng.uniform(
                 low=self.action_low,
                 high=self.action_high,
@@ -1211,8 +1225,8 @@ class DDPGWrapper(Model):
         self, 
         x: Union[tf.data.Dataset, List[tf.Tensor]], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -1230,7 +1244,7 @@ class DDPGWrapper(Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -1356,7 +1370,7 @@ class DDPGWrapper(Model):
                 
                 # Definir espacios de observación y acción
                 # Estado: combinación de CGM y otras características codificadas
-                self.rng = np.random.default_rng(42)  # Crear una instancia de Generator
+                self.rng = np.random.default_rng(CONST_DEFAULT_SEED)  # Crear una instancia de Generator
             def reset(self) -> Tuple[np.ndarray, Dict]:
                 """
                 Reinicia el entorno y devuelve la observación inicial.
@@ -1596,7 +1610,7 @@ def create_ddpg_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
         'epsilon': DDPG_CONFIG['epsilon'],
         'actor_activation': DDPG_CONFIG['actor_activation'],
         'critic_activation': DDPG_CONFIG['critic_activation'],
-        'seed': DDPG_CONFIG.get('seed', 42)
+        'seed': DDPG_CONFIG.get('seed', CONST_DEFAULT_SEED)
     }
     
     # Crear agente DDPG

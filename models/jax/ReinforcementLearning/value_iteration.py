@@ -10,6 +10,7 @@ import pickle
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
 from custom.rl_model_wrapper import RLModelWrapperJAX
 from custom.printer import print_success, print_error
@@ -903,8 +904,8 @@ class ValueIterationWrapper:
         x: List[np.ndarray], 
         y: np.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 0
     ) -> Dict:
@@ -920,7 +921,7 @@ class ValueIterationWrapper:
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -1017,7 +1018,7 @@ class ValueIterationWrapper:
                 self.features = features
                 self.targets = targets
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1475,12 +1476,20 @@ def create_value_iteration_model(cgm_shape: Tuple[int, ...], other_features_shap
         Wrapper de Iteración de Valor que implementa la interfaz compatible con la API del sistema
     """
     # Devolver el wrapper con el agente de Iteración de Valor
-    return RLModelWrapperJAX(
+    model = RLModelWrapperJAX(
         agent_creator=create_value_iteration_agent,
         cgm_shape=cgm_shape,
         other_features_shape=other_features_shape,
         **kwargs
     )
+
+    # Configurar early stopping
+    patience = EARLY_STOPPING_POLICY.get('patience', 10)
+    min_delta = EARLY_STOPPING_POLICY.get('min_delta', 0.01)
+    restore_best_weights = EARLY_STOPPING_POLICY.get('restore_best_weights', True)
+    model.add_early_stopping(patience=patience, min_delta=min_delta, restore_best_weights=restore_best_weights)
+    
+    return model
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], RLModelWrapperJAX]:
     """

@@ -12,6 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 from custom.printer import print_success, print_warning, print_error, print_info
 
@@ -80,7 +81,7 @@ class ValueIteration:
         self.iteration_times = []
         
         # Configurar generador de números aleatorios
-        self.rng = np.random.Generator(np.random.PCG64(42))
+        self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
     
     def _calculate_action_values(self, state: int, transitions: Dict[int, Dict[int, List]]) -> torch.Tensor:
         """
@@ -909,7 +910,7 @@ class ValueIterationModel(nn.Module):
         
         if len(targets) > max_samples:
             # Muestreo aleatorio
-            rng = np.random.Generator(np.random.PCG64(42))
+            rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
             indices = rng.choice(len(targets), max_samples, replace=False)
             cgm_data = cgm_data[indices]
             other_features = other_features[indices]
@@ -940,7 +941,7 @@ class ValueIterationModel(nn.Module):
                 self.model = model
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Preparar entorno
                 self.P = {}
@@ -1099,8 +1100,8 @@ class ValueIterationModel(nn.Module):
         x: List[torch.Tensor], 
         y: np.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1, 
-        batch_size: int = 32, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 1, 
         **kwargs
     ) -> Dict[str, List[float]]:
@@ -1116,7 +1117,7 @@ class ValueIterationModel(nn.Module):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño de lote (default: 32)
         verbose : int, opcional
@@ -1221,7 +1222,7 @@ class ValueIterationModel(nn.Module):
         self, 
         x: List[torch.Tensor], 
         y: np.ndarray, 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 1, 
         **kwargs
     ) -> float:
@@ -1260,7 +1261,7 @@ class ValueIterationModel(nn.Module):
     def predict(
         self, 
         x: List[torch.Tensor], 
-        batch_size: int = 32, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
         verbose: int = 0, 
         **kwargs
     ) -> np.ndarray:

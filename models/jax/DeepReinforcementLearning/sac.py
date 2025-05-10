@@ -17,6 +17,7 @@ import pickle
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import SAC_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -87,11 +88,11 @@ class ReplayBuffer:
         """
         if len(self.buffer) < batch_size:
             # Si no hay suficientes experiencias, muestrear con reemplazo
-            rng = np.random.Generator(np.random.PCG64(42))
+            rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
             batch = rng.choice(self.buffer, batch_size, replace=True)
         else:
             # Muestreo aleatorio sin reemplazo
-            rng = np.random.Generator(np.random.PCG64(42))
+            rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
             batch = rng.choice(self.buffer, batch_size, replace=False)
         
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -369,7 +370,7 @@ class SAC:
         action_high: np.ndarray,
         action_low: np.ndarray,
         config: Optional[Dict[str, Any]] = None,
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         key = jax.random.PRNGKey(seed)
@@ -1373,7 +1374,7 @@ class SACWrapper:
         self.other_features_shape = other_features_shape
         
         # Crear preprocesadores para convertir las entradas en estados para SAC
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1492,8 +1493,8 @@ class SACWrapper:
         x: list, 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: list = None,
         verbose: int = 0
     ) -> Dict:
@@ -1509,7 +1510,7 @@ class SACWrapper:
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : list, opcional
@@ -1595,7 +1596,7 @@ class SACWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1788,7 +1789,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         action_high=action_high,
         action_low=action_low,
         config=SAC_CONFIG,
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente
@@ -1799,7 +1800,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad completa con la interfaz del sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="sac")
+    return DRLModelWrapper(model_cls=wrapper, framework="jax", algorithm="sac")
 
 def model_creator() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

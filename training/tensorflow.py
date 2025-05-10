@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Model
+from keras._tf_keras.keras.models import Model
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
@@ -23,7 +23,7 @@ CONST_EPOCHS = 2 if DEBUG else CONST_DEFAULT_EPOCHS
 def create_dataset(x_cgm: np.ndarray, 
                   x_other: np.ndarray, 
                   y: np.ndarray, 
-                  batch_size: int = 32) -> tf.data.Dataset:
+                  batch_size: int = CONST_DEFAULT_BATCH_SIZE) -> tf.data.Dataset:
     """
     Crea un dataset optimizado usando tf.data.
     
@@ -382,7 +382,7 @@ def cross_validate_model(create_model_fn: Callable,
     Tuple[Dict[str, float], Dict[str, float]]
         (métricas_promedio, métricas_desviación)
     """
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_DEFAULT_SEED)
     scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(x_cgm)):

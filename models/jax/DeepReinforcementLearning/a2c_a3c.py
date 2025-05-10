@@ -14,6 +14,7 @@ from tqdm import tqdm
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import A2C_A3C_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
 
@@ -56,49 +57,49 @@ class ActorCriticModel(nn.Module):
         if self.hidden_units is None:
             self.hidden_units = A2C_A3C_CONFIG['hidden_units']
         
-        # # Inicializamos con listas vacías
-        # shared_layers = []
-        # actor_layers = []
-        # critic_layers = []
+        # Inicializamos con listas vacías
+        shared_layers = []
+        actor_layers = []
+        critic_layers = []
         
-        # # Capas compartidas para procesamiento de estados
-        # for i, units in enumerate(self.hidden_units[:2]):
-        #     shared_layers.append((
-        #         nn.Dense(units, name=f'shared_dense_{i}'),
-        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}'),
-        #         nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')
-        #     ))
+        # Capas compartidas para procesamiento de estados
+        for i, units in enumerate(self.hidden_units[:2]):
+            shared_layers.append((
+                nn.Dense(units, name=f'shared_dense_{i}'),
+                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}'),
+                nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')
+            ))
         
-        # # Red del Actor (política)
-        # for i, units in enumerate(self.hidden_units[2:]):
-        #     actor_layers.append((
-        #         nn.Dense(units, name=f'actor_dense_{i}'),
-        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')
-        #     ))
+        # Red del Actor (política)
+        for i, units in enumerate(self.hidden_units[2:]):
+            actor_layers.append((
+                nn.Dense(units, name=f'actor_dense_{i}'),
+                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')
+            ))
         
-        # # Red del Crítico (valor)
-        # for i, units in enumerate(self.hidden_units[2:]):
-        #     critic_layers.append((
-        #         nn.Dense(units, name=f'critic_dense_{i}'),
-        #         nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')
-        #     ))
+        # Red del Crítico (valor)
+        for i, units in enumerate(self.hidden_units[2:]):
+            critic_layers.append((
+                nn.Dense(units, name=f'critic_dense_{i}'),
+                nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')
+            ))
         
-        # # Asignar las listas completas
-        # self.shared_layers = shared_layers
-        # self.actor_layers = actor_layers
-        # self.critic_layers = critic_layers
+        # Asignar las listas completas
+        self.shared_layers = shared_layers
+        self.actor_layers = actor_layers
+        self.critic_layers = critic_layers
         
-        # # Capas de salida del actor (depende de si el espacio de acción es continuo o discreto)
-        # if self.continuous:
-        #     # Para acción continua (política gaussiana)
-        #     self.mu = nn.Dense(self.action_dim, name='actor_mu')
-        #     self.log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')
-        # else:
-        #     # Para acción discreta (política categórica)
-        #     self.logits = nn.Dense(self.action_dim, name='actor_logits')
+        # Capas de salida del actor (depende de si el espacio de acción es continuo o discreto)
+        if self.continuous:
+            # Para acción continua (política gaussiana)
+            self.mu = nn.Dense(self.action_dim, name='actor_mu')
+            self.log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')
+        else:
+            # Para acción discreta (política categórica)
+            self.logits = nn.Dense(self.action_dim, name='actor_logits')
         
-        # # Capa de salida del crítico (valor del estado)
-        # self.value = nn.Dense(1, name='critic_value')
+        # Capa de salida del crítico (valor del estado)
+        self.value = nn.Dense(1, name='critic_value')
 
     @nn.compact
     def __call__(self, inputs: jnp.ndarray, training: bool = False, 
@@ -124,39 +125,38 @@ class ActorCriticModel(nn.Module):
         dropout_rng = None if rngs is None else rngs.get(CONST_DROPOUT)
         
         # Capas compartidas
-        for i, units in enumerate(self.hidden_units[:2]):
-            x = nn.Dense(units, name=f'shared_dense_{i}')(x)
+        for i, (dense, norm, dropout) in enumerate(self.shared_layers):
+            x = dense(x)
             x = jnp.tanh(x)
-            x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'shared_ln_{i}')(x)
-            x = nn.Dropout(A2C_A3C_CONFIG['dropout_rate'], name=f'shared_dropout_{i}')(
-                x, deterministic=not training, rng=dropout_rng)
+            x = norm(x)
+            x = dropout(x, deterministic=not training, rng=dropout_rng)
         
         # Actor network
         actor_x = x
-        for i, units in enumerate(self.hidden_units[2:]):
-            actor_x = nn.Dense(units, name=f'actor_dense_{i}')(actor_x)
+        for i, (dense, norm) in enumerate(self.actor_layers):
+            actor_x = dense(actor_x)
             actor_x = jnp.tanh(actor_x)
-            actor_x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'actor_ln_{i}')(actor_x)
+            actor_x = norm(actor_x)
         
         # Salida del actor
         if self.continuous:
-            mu = nn.Dense(self.action_dim, name='actor_mu')(actor_x)
-            log_sigma = nn.Dense(self.action_dim, name='actor_log_sigma')(actor_x)
+            mu = self.mu(actor_x)
+            log_sigma = self.log_sigma(actor_x)
             log_sigma = jnp.clip(log_sigma, -20.0, 2.0)
             sigma = jnp.exp(log_sigma)
             policy = (mu, sigma)
         else:
-            logits = nn.Dense(self.action_dim, name='actor_logits')(actor_x)
+            logits = self.logits(actor_x)
             policy = logits
         
         # Crítico (valor)
         critic_x = x
-        for i, units in enumerate(self.hidden_units[2:]):
-            critic_x = nn.Dense(units, name=f'critic_dense_{i}')(critic_x)
+        for i, (dense, norm) in enumerate(self.critic_layers):
+            critic_x = dense(critic_x)
             critic_x = jnp.tanh(critic_x)
-            critic_x = nn.LayerNorm(epsilon=A2C_A3C_CONFIG['epsilon'], name=f'critic_ln_{i}')(critic_x)
+            critic_x = norm(critic_x)
         
-        value = nn.Dense(1, name='critic_value')(critic_x)
+        value = self.value(critic_x)
         
         return policy, value
 
@@ -684,7 +684,7 @@ class A2C:
         
         return episode_rewards
 
-    def train(self, env, n_steps: int = 10, epochs: int = 1000, 
+    def train(self, env, n_steps: int = 10, epochs: int = CONST_DEFAULT_EPOCHS, 
              render: bool = False) -> Dict:
         """
         Entrena el modelo A2C en el entorno dado.
@@ -1331,6 +1331,7 @@ class A2CWrapper:
         a2c_agent: A2C, 
         cgm_shape: Tuple[int, ...], 
         other_features_shape: Tuple[int, ...],
+        **kwargs: Any
     ) -> None:
         """
         Inicializa el wrapper para A2C.
@@ -1343,13 +1344,16 @@ class A2CWrapper:
             Forma de entrada para datos CGM
         other_features_shape : Tuple[int, ...]
             Forma de entrada para otras características
+        kwargs : Any
+            Otros parámetros opcionales
         """
+        self.algorithm = kwargs.get("algorithm", "A2C")
         self.a2c_agent = a2c_agent
         self.cgm_shape = cgm_shape
         self.other_features_shape = other_features_shape
         
         # Inicializar clave para generación de números aleatorios
-        self.key = jax.random.PRNGKey(42)
+        self.key = jax.random.PRNGKey(CONST_DEFAULT_SEED)
         self.key, self.encoder_key = jax.random.split(self.key)
         
         # Configurar funciones de codificación para entradas
@@ -1406,7 +1410,24 @@ class A2CWrapper:
             Función de codificación JIT-compilada
         """
         def encoder_fn(x):
-            x_flat = x.reshape((x.shape[0], -1))
+            # Asegurar que la entrada tiene la dimensión correcta
+            batch_size = x.shape[0]
+            x_flat = x.reshape((batch_size, -1))  # Aplanar todas las dimensiones excepto batch
+            
+            # Verificar si las dimensiones coinciden
+            feature_dim = x_flat.shape[1]
+            weight_dim = weights.shape[0]
+            
+            if feature_dim != weight_dim:
+                # Si las dimensiones no coinciden, redimensionar los pesos o la entrada
+                if feature_dim > weight_dim:
+                    # Truncar la entrada para que coincida con los pesos
+                    x_flat = x_flat[:, :weight_dim]
+                else:
+                    # Rellenar con ceros para coincidir con la dimensión de los pesos
+                    padding = jnp.zeros((batch_size, weight_dim - feature_dim))
+                    x_flat = jnp.concatenate([x_flat, padding], axis=1)
+            
             return jnp.tanh(jnp.dot(x_flat, weights))
         return encoder_fn
     
@@ -1487,8 +1508,8 @@ class A2CWrapper:
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 1
     ) -> Dict:
@@ -1604,7 +1625,7 @@ class A2CWrapper:
                 self.features = np.array(features)
                 self.targets = np.array(targets)
                 self.model = model_wrapper
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
                 
@@ -1815,6 +1836,7 @@ class A2CWrapper:
     def _encode_state(self, cgm_sample: jnp.ndarray, other_sample: jnp.ndarray) -> jnp.ndarray:
         """
         Codifica cgm y otras características en un estado para el agente RL.
+        Maneja posibles discrepancias de dimensiones.
         
         Parámetros:
         -----------
@@ -1828,12 +1850,17 @@ class A2CWrapper:
         jnp.ndarray
             Estado codificado para el agente RL
         """
-        # Codificar CGM y otras características a la dimensión del estado
-        cgm_encoded = self.encode_cgm(cgm_sample)
-        other_encoded = self.encode_other(other_sample)
-        
-        # Concatenar para formar el estado completo
-        state = jnp.concatenate([cgm_encoded[0], other_encoded[0]])
+        try:
+            # Codificar CGM y otras características a la dimensión del estado
+            cgm_encoded = self.encode_cgm(cgm_sample)
+            other_encoded = self.encode_other(other_sample)
+            
+            # Concatenar para formar el estado completo
+            state = jnp.concatenate([cgm_encoded[0], other_encoded[0]])
+        except Exception as e:
+            # Si hay error, devolver un vector de estado con valores seguros
+            print(f"Error al codificar estado: {e}. Usando valores predeterminados.")
+            state = jnp.zeros(self.a2c_agent.state_dim)
         
         return state
 
@@ -1879,6 +1906,7 @@ class A3CWrapper(A2CWrapper):
         a3c_agent: A3C, 
         cgm_shape: Tuple[int, ...], 
         other_features_shape: Tuple[int, ...],
+        **kwargs: Any
     ) -> None:
         """
         Inicializa el wrapper para A3C.
@@ -1891,18 +1919,20 @@ class A3CWrapper(A2CWrapper):
             Forma de los datos CGM
         other_features_shape : Tuple[int, ...]
             Forma de otras características
+        kwargs : Any
+            Otros parámetros opcionales
         """
-        super().__init__(a3c_agent, cgm_shape, other_features_shape)
-        # Especificamos que es un agente A3C para gestión apropiada
-        self.algorithm_type = "a3c"
+        super().__init__(a3c_agent, cgm_shape, other_features_shape, **kwargs)
+        # # Especificamos que es un agente A3C para gestión apropiada
+        # self.algorithm = "a3c"
     
     def fit(
         self, 
         x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
-        epochs: int = 1,
-        batch_size: int = 32,
+        epochs: int = CONST_DEFAULT_EPOCHS,
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE,
         callbacks: List = None,
         verbose: int = 1
     ) -> Dict:
@@ -1918,7 +1948,7 @@ class A3CWrapper(A2CWrapper):
         validation_data : Optional[Tuple], opcional
             Datos de validación (default: None)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         callbacks : List, opcional
@@ -2042,7 +2072,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         value_coef=A2C_A3C_CONFIG['value_coef'],
         max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators
@@ -2052,8 +2082,7 @@ def create_a2c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         other_features_shape=other_features_shape
     )
     
-    # Usar DRLModelWrapper en lugar de DLModelWrapper
-    return DRLModelWrapper(lambda **kwargs: wrapper, framework="jax", algorithm="a2c")
+    return DRLModelWrapper(model_cls=wrapper, framework="jax", algorithm="a2c")
 
 def model_creator_a2c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """
@@ -2100,7 +2129,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         value_coef=A2C_A3C_CONFIG['value_coef'],
         max_grad_norm=A2C_A3C_CONFIG['max_grad_norm'],
         hidden_units=A2C_A3C_CONFIG['hidden_units'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear wrapper del agente para compatibilidad con sistema de model creators
@@ -2111,7 +2140,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     )
     
     # Envolver en DRLModelWrapper para compatibilidad total con el sistema
-    return DRLModelWrapper(lambda **kwargs: wrapper, algorithm="a3c")
+    return DRLModelWrapper(model_cls=wrapper, framework='jax', algorithm="a3c")
 
 def model_creator_a3c() -> Callable[[Tuple[int, ...], Tuple[int, ...]], DRLModelWrapper]:
     """

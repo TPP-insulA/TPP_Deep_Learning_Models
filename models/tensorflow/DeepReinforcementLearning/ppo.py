@@ -2,15 +2,15 @@ import os, sys
 import tensorflow as tf
 import numpy as np
 import gym
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
+from keras._tf_keras.keras.models import Model
+from keras._tf_keras.keras.layers import (
     Input, Dense, Conv1D, LSTM, Flatten, Concatenate,
     BatchNormalization, Dropout, LayerNormalization, GlobalAveragePooling1D
 )
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
-from tensorflow.keras.callbacks import EarlyStopping
-from keras.saving import register_keras_serializable
+from keras._tf_keras.keras.optimizers import Adam
+from keras._tf_keras.keras.losses import MeanSquaredError
+from keras._tf_keras.keras.callbacks import EarlyStopping
+from keras._tf_keras.keras.saving import register_keras_serializable
 import matplotlib.pyplot as plt
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable
 
@@ -18,7 +18,8 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import PPO_CONFIG
-
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from custom.drl_model_wrapper import DRLModelWrapper
 
 class ActorCriticModel(Model):
     """
@@ -196,7 +197,7 @@ class PPO:
         entropy_coef: float = PPO_CONFIG['entropy_coef'],
         value_coef: float = PPO_CONFIG['value_coef'],
         max_grad_norm: Optional[float] = PPO_CONFIG['max_grad_norm'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         # Configurar semillas para reproducibilidad
         tf.random.set_seed(seed)
@@ -253,7 +254,14 @@ class PPO:
         logp_normal = -0.5 * tf.square((actions - mu) / sigma) - 0.5 * tf.math.log(2.0 * np.pi) - tf.math.log(sigma)
         return tf.reduce_sum(logp_normal, axis=-1, keepdims=True)
     
-    @tf.function
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # states
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # actions
+        tf.TensorSpec(shape=[None, None], dtype=tf.float32),  # old_log_probs
+        tf.TensorSpec(shape=[None], dtype=tf.float32),        # rewards
+        tf.TensorSpec(shape=[None], dtype=tf.float32),        # advantages
+        tf.TensorSpec(shape=[None], dtype=tf.float32)         # values
+    ])
     def train_step(self, states: tf.Tensor, actions: tf.Tensor, old_log_probs: tf.Tensor, 
                   rewards: tf.Tensor, advantages: tf.Tensor, values: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
         """
@@ -268,7 +276,7 @@ class PPO:
         old_log_probs : tf.Tensor
             Log de probabilidades de acciones bajo la política antigua
         rewards : tf.Tensor
-            Recompensas recibidas
+            Recompensas recibidas (o retornos calculados)
         advantages : tf.Tensor
             Ventajas estimadas
         values : tf.Tensor
@@ -531,7 +539,7 @@ class PPO:
         
         return metrics
     
-    def train(self, env: Any, epochs: int = 100, steps_per_epoch: int = 4000, batch_size: int = 64, 
+    def train(self, env: Any, epochs: int = CONST_DEFAULT_EPOCHS, steps_per_epoch: int = 4000, batch_size: int = 64, 
              update_iters: int = 10, gae_lambda: float = 0.95,
              log_interval: int = 10) -> Dict[str, List[float]]:
         """
@@ -877,8 +885,8 @@ class PPOModelWrapper(tf.keras.models.Model):
         self, 
         x: Union[tf.data.Dataset, List[tf.Tensor]], 
         y: Optional[tf.Tensor] = None, 
-        batch_size: int = 32, 
-        epochs: int = 1, 
+        batch_size: int = CONST_DEFAULT_BATCH_SIZE, 
+        epochs: int = CONST_DEFAULT_EPOCHS, 
         verbose: int = 0,
         callbacks: Optional[List[Any]] = None,
         validation_data: Optional[Tuple] = None,
@@ -896,7 +904,7 @@ class PPOModelWrapper(tf.keras.models.Model):
         batch_size : int, opcional
             Tamaño del lote (default: 32)
         epochs : int, opcional
-            Número de épocas (default: 1)
+            Número de épocas (default: 10)
         verbose : int, opcional
             Nivel de verbosidad (default: 0)
         callbacks : Optional[List[Any]], opcional
@@ -991,7 +999,7 @@ class PPOModelWrapper(tf.keras.models.Model):
                 self.model = model_wrapper
                 self.current_idx = 0
                 self.max_idx = len(targets) - 1
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
                 # Para compatibilidad con algoritmos RL
                 self.observation_space = gym.spaces.Box(
@@ -1227,7 +1235,7 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         entropy_coef=PPO_CONFIG['entropy_coef'],
         value_coef=PPO_CONFIG['value_coef'],
         max_grad_norm=PPO_CONFIG['max_grad_norm'],
-        seed=42
+        seed=CONST_DEFAULT_SEED
     )
     
     # Crear el wrapper - usamos directamente PPOModelWrapper en lugar de DRLModelWrapperTF

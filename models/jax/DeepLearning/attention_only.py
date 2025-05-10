@@ -258,7 +258,7 @@ class AttentionModel(nn.Module):
         
         # Aplicar bloques de atención secuencialmente
         x = x_cgm
-        # MODIFICADO: Usar los bloques predefinidos en lugar de crearlos en tiempo de ejecución
+        # Usar los bloques predefinidos en lugar de crearlos en tiempo de ejecución
         for attention_block in self.attention_blocks:
             x = attention_block(x, pos_encoding, training)
         

@@ -79,7 +79,7 @@ class CGMDataset(Dataset):
 def create_dataloaders(x_cgm: np.ndarray, 
                      x_other: np.ndarray, 
                      y: np.ndarray, 
-                     batch_size: int = 32,
+                     batch_size: int = CONST_DEFAULT_BATCH_SIZE,
                      shuffle: bool = True) -> DataLoader:
     """
     Crea DataLoaders para el entrenamiento PyTorch.
@@ -625,7 +625,7 @@ def cross_validate_model(create_model_fn: Callable,
     Tuple[Dict[str, float], Dict[str, float]]
         (métricas_promedio, métricas_desviación)
     """
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=CONST_DEFAULT_SEED)
     scores = []
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(x_cgm)):

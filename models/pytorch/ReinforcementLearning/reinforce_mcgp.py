@@ -13,6 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import REINFORCE_CONFIG
+from constants.constants import CONST_DEFAULT_SEED
 from custom.printer import print_debug, print_warning
 from custom.rl_model_wrapper import RLModelWrapperPyTorch
 
@@ -357,7 +358,7 @@ class REINFORCE(nn.Module):
         use_baseline: bool = REINFORCE_CONFIG['use_baseline'],
         entropy_coef: float = REINFORCE_CONFIG['entropy_coef'],
         hidden_sizes: List[int] = REINFORCE_CONFIG['hidden_units'],
-        seed: int = 42
+        seed: int = CONST_DEFAULT_SEED
     ) -> None:
         super(REINFORCE, self).__init__()
         self.state_dim = state_dim
@@ -1007,7 +1008,7 @@ class REINFORCEModel(nn.Module):
                 self.step_count = 0
                 self.max_idx = len(targets) - 1
                 # Usar generador para muestrar aleatorio seguro
-                self.rng = np.random.Generator(np.random.PCG64(42))
+                self.rng = np.random.Generator(np.random.PCG64(CONST_DEFAULT_SEED))
                 
             def reset(self) -> Tuple[np.ndarray, Dict]:
                 """Reinicia el entorno y devuelve la observación inicial."""
