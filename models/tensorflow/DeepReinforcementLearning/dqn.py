@@ -554,6 +554,7 @@ class DQN:
     def _train_step(self, states: tf.Tensor, actions: tf.Tensor, rewards: tf.Tensor, 
                   next_states: tf.Tensor, dones: tf.Tensor,
                   importance_weights: tf.Tensor = None) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
         Realiza un paso de entrenamiento para actualizar la red Q.
         
         Parámetros:
