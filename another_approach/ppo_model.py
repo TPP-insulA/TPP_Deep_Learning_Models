@@ -99,28 +99,39 @@ class InsulinEnv(gym.Env):
 
     def _calculate_reward(self, pred_dose, real_dose, mgdl_post):
         avg_mgdl = np.mean(mgdl_post)
-        delta_glucose = mgdl_post[-1] - mgdl_post[0]
-        error = abs(pred_dose - real_dose)
-        rel_error = error / (real_dose + 1e-5)
-        std_post = np.std(mgdl_post)
         final_mgdl = mgdl_post[-1]
+        std_post = np.std(mgdl_post)
+        rel_error = abs(pred_dose - real_dose) / (real_dose + 1e-5)
 
         reward = np.exp(-1.5 * rel_error)
 
-        # Penalización por extremos
+        # 🔴 Hipoglucemia: penalizar sobredosificación, premiar corrección
         if final_mgdl < 70:
-            reward -= 1.0
-        elif final_mgdl > 300:
-            reward -= 0.5
+            if pred_dose > real_dose:
+                reward -= 2.0  # Penaliza sobredosificación en hipo
+            elif pred_dose < real_dose:
+                reward += 1.0  # Premia corrección adecuada
+
+        # 🟢 Buen rango: premio + penalización por variabilidad
         elif 70 <= final_mgdl <= 180:
             reward += 0.5
-            reward -= std_post / 100  # penaliza variabilidad solo si está en rango
+            reward -= std_post / 100
 
-        # Correcciones clínicas explícitas
-        if avg_mgdl > 180 and pred_dose > real_dose:
-            reward += 0.5  # buena corrección de hiperglucemia
-        elif avg_mgdl < 70 and pred_dose < real_dose:
-            reward += 0.5  # buena corrección de hipoglucemia
+        # 🔶 Hiperglucemia severa
+        elif final_mgdl > 300:
+            reward -= 0.5
+
+        # 🟡 Hiperglucemia leve: evitar sobrecorrección
+        elif 180 < avg_mgdl <= 250 and pred_dose > real_dose:
+            reward += 0.3
+            if pred_dose > real_dose * 1.5:
+                reward -= 0.3  # Penaliza sobredosificación leve
+
+        # ✅ Bonus por dirección clínica deseada
+        if avg_mgdl > 180 and 70 <= final_mgdl <= 180:
+            reward += 0.5  # Corrigió hiper correctamente
+        elif avg_mgdl < 70 and 70 <= final_mgdl <= 180:
+            reward += 0.5  # Corrigió hipo correctamente
 
         return float(reward)
 

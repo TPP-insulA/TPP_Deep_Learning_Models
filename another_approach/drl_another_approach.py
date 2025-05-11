@@ -190,6 +190,32 @@ for subject_df in all_data:
     subject_df.write_parquet(output_path)
     print(f"Guardado: {output_path}")
 
+
+# %% CELL: Optional Oversampling for Hypoglycemia
+BALANCE_HYPO = True  # Cambiá a False si querés desactivar
+
+print(f"Total de archivos procesados: {len(list(Path(CONFIG['data_path']).glob('*.xlsx')))}")
+print(f"Total de sujetos con datos válidos: {len(all_data)}")
+
+if BALANCE_HYPO:
+    print("⚖️ Aplicando oversampling de episodios con hipoglucemia postprandial...")
+
+    balanced_all_data = []
+    for df in all_data:
+        post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
+        df = df.with_columns(
+            (sum([pl.col(col) for col in post_cols]) / len(post_cols)).alias("avg_mgdl_post")
+        )
+        hypo = df.filter(pl.col("avg_mgdl_post") < 70)
+        reps = max(1, int((df.height - hypo.height) / hypo.height)) if hypo.height > 0 else 1
+        oversampled = pl.concat([df, *[hypo]*reps]) if hypo.height > 0 else df
+        balanced_all_data.append(oversampled)
+
+    all_data = balanced_all_data
+    total_hypo_events = sum(df.filter(pl.col("avg_mgdl_post") < 70).height for df in all_data)
+    print(f"🔍 Total eventos con hipoglucemia detectados: {total_hypo_events}")
+    print("✅ Oversampling completado.")
+
 # %% CELL: Split datasets
 train_ratio = 0.7  # Porcentaje de datos para entrenamiento
 val_ratio = 0.15  # Porcentaje de datos para validación

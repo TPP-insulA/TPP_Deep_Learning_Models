@@ -8,8 +8,8 @@ CONFIG = {
     "params_path": os.path.join(PROJECT_DIR, "data", "params"),
 }
 
-PREPROCESSSING_ID = 0
-MODEL_ID = 11
+PREPROCESSSING_ID = 1
+MODEL_ID = 12
 
 WINDOW_PREV_HOURS = 2  # Ventana previa de 2 horas (parametrizable)
 WINDOW_POST_HOURS = 2  # Ventana posterior de 2 horas (parametrizable)

@@ -1,21 +1,20 @@
 import pandas as pd
 import os
-from config import CONFIG, PREPROCESSSING_ID
+from config import CONFIG, PREPROCESSSING_ID, MODEL_ID
 
-MODEL_IDS = [4, 5, 6, 7, 8, 9, 10, 11, 12]
+pre_ids = list(range(PREPROCESSSING_ID + 1))
+model_ids = list(range(MODEL_ID + 1))
 
 
-def analyze_model(model_id):
+def analyze_model(pre_id, model_id):
     folder = CONFIG["processed_data_path"]
-    path = os.path.join(folder, f"ppo_predictions_val_{PREPROCESSSING_ID}_{model_id}.csv")
-
-    print(f"\n🔍 Analyzing model {model_id}...")
-    print(f"📂 File path: {path}")
+    path = os.path.join(folder, f"ppo_predictions_val_{pre_id}_{model_id}.csv")
 
     if not os.path.exists(path):
-        print(f"⚠️ File not found for MODEL_ID = {model_id}")
+        print(f"❌ No se encontró: {path}")
         return None
 
+    print(f"\n🔍 Evaluando PRE={pre_id} - MODEL={model_id}")
     df = pd.read_csv(path)
 
     # Errores clásicos
@@ -30,7 +29,7 @@ def analyze_model(model_id):
     pct_overdose = (df["perc_error"] > 0.2).mean() * 100
     pct_underdose = (df["perc_error"] < -0.2).mean() * 100
 
-    # Evaluación clínica (según glucemia post)
+    # Evaluación clínica
     post_col = "mg/dl_post_24" if "mg/dl_post_24" in df.columns else None
     if not post_col:
         post_cols = [col for col in df.columns if col.startswith("mg/dl_post_")]
@@ -46,6 +45,7 @@ def analyze_model(model_id):
     pct_corr_hypo = df["correction_hypo"].sum() / total_hypo * 100 if total_hypo > 0 else None
 
     return {
+        "PRE_ID": pre_id,
         "MODEL_ID": model_id,
         "MAE": mae,
         "RMSE": rmse,
@@ -59,28 +59,23 @@ def analyze_model(model_id):
     }
 
 
-# Run model comparisons
+# Run grid evaluation
 results = []
-for mid in MODEL_IDS:
-    res = analyze_model(mid)
-    if res:
-        results.append(res)
+for pre_id in pre_ids:
+    for model_id in model_ids:
+        res = analyze_model(pre_id, model_id)
+        if res:
+            results.append(res)
 
-# Si no hay datos, salir
-if not results:
-    print("❌ No se encontraron predicciones para ningún modelo.")
-    exit()
-
+# DataFrame con todo
 df = pd.DataFrame(results).round(3)
-
-# 🏥 Evaluación clínica: modelo que mejor corrige hiperglucemia e hipoglucemia
 df["avg_correction_score"] = df[["% corr hyper (>180)", "% corr hypo (<70)"]].mean(axis=1)
 
-best_correction_model = df.loc[df["avg_correction_score"].idxmax(), "MODEL_ID"]
-# Mostrar solo métricas clínicas (criterio Pedro)
-print("\n🩺 Comparación de modelos según corrección clínica:\n")
-print(df[["MODEL_ID", "% corr hyper (>180)", "% corr hypo (<70)", "avg_correction_score"]]
-      .sort_values(by="avg_correction_score", ascending=False)
-      .to_string(index=False))
+# Ranking clínico
+df_sorted = df.sort_values("avg_correction_score", ascending=False)
 
-print(f"\n✅ Según criterios clínicos (corrección en hipo/hiper), el mejor modelo es el {int(best_correction_model)}.")
+print("\n🩺 Comparación de modelos según corrección clínica:\n")
+print(df_sorted[["PRE_ID", "MODEL_ID", "% corr hyper (>180)", "% corr hypo (<70)", "avg_correction_score"]].to_string(index=False))
+
+top = df_sorted.iloc[0]
+print(f"\n✅ Mejor modelo clínico: PRE={int(top.PRE_ID)} - MODEL={int(top.MODEL_ID)} (score={top.avg_correction_score:.2f})")
