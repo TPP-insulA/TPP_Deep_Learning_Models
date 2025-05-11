@@ -108,7 +108,7 @@ class InsulinEnv(gym.Env):
         # 🔴 Seguridad ante hipoglucemia severa
         if final_mgdl < 70:
             if pred_dose > real_dose:
-                reward -= 2.0
+                reward -= 1.0
             elif pred_dose < real_dose:
                 reward += 1.0
             else:
@@ -126,7 +126,7 @@ class InsulinEnv(gym.Env):
         # ⚠️ Nueva lógica para hiperglucemia leve
         if avg_mgdl > 180:
             if pred_dose > real_dose:
-                reward += 1.0  # más bonus que antes
+                reward += 0.7
                 if pred_dose > real_dose * 1.5:
                     reward -= 0.3  # pero evitar sobrecorrección fuerte
             elif final_mgdl > 180:
@@ -175,7 +175,7 @@ def train_ppo():
         device="cpu",
     )
 
-    model.learn(total_timesteps=1000000)
+    model.learn(total_timesteps=1100000)
 
     return model, env
 
