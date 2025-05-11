@@ -203,12 +203,10 @@ if BALANCE_HYPO:
     balanced_all_data = []
     for df in all_data:
         post_cols = [f"mg/dl_post_{i+1}" for i in range(POST_SAMPLES)]
-        df = df.with_columns(
-            (sum([pl.col(col) for col in post_cols]) / len(post_cols)).alias("avg_mgdl_post")
-        )
+        df = df.with_columns((sum([pl.col(col) for col in post_cols]) / len(post_cols)).alias("avg_mgdl_post"))
         hypo = df.filter(pl.col("avg_mgdl_post") < 70)
         reps = max(1, int((df.height - hypo.height) / hypo.height)) if hypo.height > 0 else 1
-        oversampled = pl.concat([df, *[hypo]*reps]) if hypo.height > 0 else df
+        oversampled = pl.concat([df, *[hypo] * reps]) if hypo.height > 0 else df
         balanced_all_data.append(oversampled)
 
     all_data = balanced_all_data
