@@ -103,35 +103,40 @@ class InsulinEnv(gym.Env):
         std_post = np.std(mgdl_post)
         rel_error = abs(pred_dose - real_dose) / (real_dose + 1e-5)
 
-        reward = np.exp(-1.5 * rel_error)
+        reward = np.exp(-1.5 * rel_error)  # penaliza error relativo en general
 
-        # 🔴 Hipoglucemia: penalizar sobredosificación, premiar corrección
+        # 🔴 HIPOgulcemia: foco en evitar sobredosis
         if final_mgdl < 70:
             if pred_dose > real_dose:
-                reward -= 2.0  # Penaliza sobredosificación en hipo
+                reward -= 2.0  # penaliza fuertemente sobredosificación
             elif pred_dose < real_dose:
-                reward += 1.0  # Premia corrección adecuada
+                reward += 1.0  # premia corrección adecuada
+            else:
+                reward -= 0.5  # castigo por inacción
 
-        # 🟢 Buen rango: premio + penalización por variabilidad
+        # 🟢 RANGO NORMAL: bonus + penalización de variabilidad
         elif 70 <= final_mgdl <= 180:
             reward += 0.5
-            reward -= std_post / 100
+            reward -= std_post / 100  # penaliza variabilidad solo si está en rango
 
-        # 🔶 Hiperglucemia severa
+        # 🔶 HIPERglucemia severa
         elif final_mgdl > 300:
             reward -= 0.5
 
-        # 🟡 Hiperglucemia leve: evitar sobrecorrección
-        elif 180 < avg_mgdl <= 250 and pred_dose > real_dose:
-            reward += 0.3
-            if pred_dose > real_dose * 1.5:
-                reward -= 0.3  # Penaliza sobredosificación leve
+        # 🟡 HIPER leve: refuerzo explícito
+        if avg_mgdl > 180:
+            if pred_dose > real_dose:
+                reward += 0.5  # incentiva subir dosis ante hiper
+                if pred_dose > real_dose * 1.5:
+                    reward -= 0.3  # penaliza sobrecorrección leve
+            elif final_mgdl > 180:
+                reward -= 0.5  # no hizo nada y sigue alto
 
-        # ✅ Bonus por dirección clínica deseada
+        # ✅ BONUS por corrección efectiva hacia el rango
         if avg_mgdl > 180 and 70 <= final_mgdl <= 180:
-            reward += 0.5  # Corrigió hiper correctamente
+            reward += 0.7  # corregiste hiper
         elif avg_mgdl < 70 and 70 <= final_mgdl <= 180:
-            reward += 0.5  # Corrigió hipo correctamente
+            reward += 0.5  # corregiste hipo
 
         return float(reward)
 
