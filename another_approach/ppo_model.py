@@ -103,9 +103,9 @@ class InsulinEnv(gym.Env):
         std_post = np.std(mgdl_post)
         rel_error = abs(pred_dose - real_dose) / (real_dose + 1e-5)
 
-        reward = np.exp(-1.5 * rel_error)  # base: error relativo
+        reward = np.exp(-1.5 * rel_error)
 
-        # 🔴 HIPOgulcemia (final): foco absoluto en seguridad
+        # 🔴 Seguridad ante hipoglucemia severa
         if final_mgdl < 70:
             if pred_dose > real_dose:
                 reward -= 2.0
@@ -114,36 +114,35 @@ class InsulinEnv(gym.Env):
             else:
                 reward -= 0.5
 
-        # 🟢 RANGO NORMAL: bonus + penalización por variabilidad
+        # 🟢 En rango: bonificación + penalización por variabilidad
         elif 70 <= final_mgdl <= 180:
             reward += 0.5
             reward -= std_post / 100
 
-        # 🔶 HIPER severa
+        # 🔶 Hiper severa
         elif final_mgdl > 300:
             reward -= 0.5
 
-        # 🟡 HIPER leve: penaliza inacción, refuerza corrección leve
+        # ⚠️ Nueva lógica para hiperglucemia leve
         if avg_mgdl > 180:
             if pred_dose > real_dose:
-                reward += 0.5
+                reward += 1.0  # más bonus que antes
                 if pred_dose > real_dose * 1.5:
-                    reward -= 0.3  # sobrecorrección leve
+                    reward -= 0.3  # pero evitar sobrecorrección fuerte
             elif final_mgdl > 180:
-                reward -= 0.5  # inacción ante hiper leve
+                reward -= 1.0  # penalizar más fuerte la inacción
 
-        # ✅ CORRECCIÓN efectiva
+        # ✅ Correcciones efectivas
         if avg_mgdl > 180 and 70 <= final_mgdl <= 180:
-            reward += 0.7  # corregiste hiper
+            reward += 0.7
         elif avg_mgdl < 70 and 70 <= final_mgdl <= 180:
-            reward += 0.5  # corregiste hipo
+            reward += 0.5
 
-        # ❗ Cambio innecesario: penalizar si ya estaba en rango
+        # ❗ Penalización por cambio innecesario
         if 70 <= avg_mgdl <= 180 and abs(pred_dose - real_dose) >= 1.0:
             reward -= 0.3
 
         return float(reward)
-
 
     def render(self):
         pass
