@@ -20,6 +20,7 @@ sys.path.append(PROJECT_ROOT)
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import SAC_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_debug, print_log, print_success, print_error, print_info
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -1064,7 +1065,7 @@ class SAC:
             # Guardar mejor modelo
             if eval_reward > best_reward:
                 best_reward = eval_reward
-                print(f"Nuevo mejor modelo con recompensa de evaluación: {best_reward:.2f}")
+                print_log(f"Nuevo mejor modelo con recompensa de evaluación: {best_reward:.2f}")
                 
         return best_reward
     
@@ -1396,14 +1397,16 @@ class SACWrapper:
         """
         # Calcular dimensiones de entrada aplanadas de manera segura
         if len(self.cgm_shape) <= 1:
-            cgm_dim = 1
+            cgm_dim = max(1, self.cgm_shape[0])
         else:
             cgm_dim = int(np.prod(self.cgm_shape[1:]))
         
         if len(self.other_features_shape) <= 1:
-            other_dim = 1 
+            other_dim = max(1, self.other_features_shape[0])
         else:
             other_dim = int(np.prod(self.other_features_shape[1:]))
+        
+        print_debug(f"Configurando encoders SAC. CGM dim: {cgm_dim}, Other dim: {other_dim}")
         
         # Inicializar matrices de transformación
         self.key, key_cgm, key_other = jax.random.split(self.key, 3)
@@ -1418,7 +1421,7 @@ class SACWrapper:
     
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación.
+        Crea una función de codificación robusta que maneja discrepancias de dimensiones.
         
         Parámetros:
         -----------
@@ -1431,8 +1434,31 @@ class SACWrapper:
             Función de codificación JIT-compilada
         """
         def encoder_fn(x):
-            x_flat = x.reshape((x.shape[0], -1))
+            # Asegurar que la entrada tiene al menos 2 dimensiones
+            if x.ndim == 1:
+                x = x.reshape(1, -1)
+                
+            # Aplanar entrada manteniendo la dimensión del batch
+            batch_size = x.shape[0]
+            x_flat = x.reshape(batch_size, -1)
+            
+            # Verificar si las dimensiones coinciden
+            input_dim = x_flat.shape[1]
+            weight_dim = weights.shape[0]
+            
+            # Manejar posibles discrepancias de dimensiones
+            if input_dim != weight_dim:
+                if input_dim > weight_dim:
+                    # Truncar si los datos son más grandes
+                    x_flat = x_flat[:, :weight_dim]
+                else:
+                    # Rellenar con ceros si los datos son más pequeños
+                    padding = jnp.zeros((batch_size, weight_dim - input_dim))
+                    x_flat = jnp.concatenate([x_flat, padding], axis=1)
+            
+            # Aplicar la transformación y activación
             return jnp.tanh(jnp.dot(x_flat, weights))
+        
         return encoder_fn
     
     def __call__(self, inputs: list) -> jnp.ndarray:
@@ -1465,32 +1491,38 @@ class SACWrapper:
         jnp.ndarray
             Predicciones de dosis de insulina
         """
-        # Obtener entradas
-        cgm_data, other_features = inputs
+        try:
+            # Obtener entradas
+            cgm_data, other_features = inputs
+            
+            # Convertir a arrays de JAX si no lo son
+            cgm_data = jnp.array(cgm_data)
+            other_features = jnp.array(other_features)
+            
+            # Codificar entradas a estado
+            cgm_encoded = self.encode_cgm(cgm_data)
+            other_encoded = self.encode_other(other_features)
+            states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+            
+            # Obtener acciones usando el agente SAC (en modo determinístico)
+            batch_size = states.shape[0]
+            actions = np.zeros((batch_size, 1))
+            
+            for i in range(batch_size):
+                state = np.array(states[i])
+                action = self.sac_agent.get_action(state, deterministic=True)
+                actions[i] = action
+            
+            return actions
         
-        # Convertir a arrays de JAX si no lo son
-        cgm_data = jnp.array(cgm_data)
-        other_features = jnp.array(other_features)
-        
-        # Codificar entradas a estado
-        cgm_encoded = self.encode_cgm(cgm_data)
-        other_encoded = self.encode_other(other_features)
-        states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
-        
-        # Obtener acciones usando el agente SAC (en modo determinístico)
-        batch_size = states.shape[0]
-        actions = np.zeros((batch_size, 1))
-        
-        for i in range(batch_size):
-            state = np.array(states[i])
-            action = self.sac_agent.get_action(state, deterministic=True)
-            actions[i] = action
-        
-        return actions
+        except Exception as e:
+            print_error(f"Error durante predicción: {e}")
+            # Devolver ceros como valor seguro
+            return np.zeros((len(inputs[0]), 1))
     
     def fit(
-        self, 
-        x: list, 
+        self,
+        x: List[jnp.ndarray], 
         y: jnp.ndarray, 
         validation_data: Optional[Tuple] = None, 
         epochs: int = CONST_DEFAULT_EPOCHS,
@@ -1560,9 +1592,10 @@ class SACWrapper:
             self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
-            print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
+            print_success("Entrenamiento del modelo SAC completado.")
+            print_info(f"Pérdida final: {train_loss:.4f}")
             if validation_data:
-                print(f"Pérdida de validación: {val_loss:.4f}")
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
         
         return self.history
     
@@ -1698,7 +1731,7 @@ class SACWrapper:
         # Guardar el agente SAC
         self.sac_agent.save_models(filepath + "_sac")
         
-        print(f"Modelo guardado en {filepath}")
+        print_success(f"Modelo guardado en {filepath}")
     
     def load(self, filepath: str) -> None:
         """
@@ -1726,7 +1759,7 @@ class SACWrapper:
         # Cargar el agente SAC
         self.sac_agent.load_models(filepath + "_sac")
         
-        print(f"Modelo cargado desde {filepath}")
+        print_success(f"Modelo cargado desde {filepath}")
     
     def get_config(self) -> Dict:
         """

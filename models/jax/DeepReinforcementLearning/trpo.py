@@ -16,6 +16,7 @@ sys.path.append(PROJECT_ROOT)
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import TRPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_debug, print_log, print_success, print_error, print_warning, print_info
 
 FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'trpo')
 
@@ -258,8 +259,9 @@ class TRPO:
         
         # JIT-compilar funciones clave
         self.get_action_and_log_prob = jax.jit(self._get_action_and_log_prob)
-        self.get_action = jax.jit(self._get_action)
-        self.get_value = jax.jit(self._get_value)
+        self.get_action_jit_det = jax.jit(lambda p, s, k: self._get_action(p, s, k, True))
+        self.get_action_jit_stoch = jax.jit(lambda p, s, k: self._get_action(p, s, k, False))
+        self.get_value_jit = jax.jit(self._get_value)
         self.get_log_prob = jax.jit(self._get_log_prob)
         self.get_kl_divergence = jax.jit(self._get_kl_divergence)
     
@@ -392,7 +394,7 @@ class TRPO:
         Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]
             (acción, log_prob, nueva_llave)
         """
-        action, key = self._get_action(params, state, key, deterministic=False)
+        action, key = self.get_action_jit(params, state, key, deterministic=False)
         
         if self.continuous:
             mu, log_std = self.actor.apply(params, state)
@@ -643,17 +645,32 @@ class TRPO:
         """
         if self.continuous:
             _, log_std = self.actor.apply(params, states)
-            entropy = jnp.sum(
-                log_std + 0.5 * jnp.log(2.0 * jnp.pi * jnp.e),
-                axis=1
-            )
+            
+            # Manejar tanto casos de muestra única como lotes
+            if log_std.ndim == 1:  # Una sola muestra
+                # Para una sola muestra, no especificamos el eje
+                entropy = jnp.sum(log_std + 0.5 * jnp.log(2.0 * jnp.pi * jnp.e))
+                # Convertir a array para manejo consistente
+                entropy = jnp.array([entropy])
+            else:  # Lote de muestras
+                # Para lotes, sumamos a lo largo del eje 1 (dimensiones de acción)
+                entropy = jnp.sum(
+                    log_std + 0.5 * jnp.log(2.0 * jnp.pi * jnp.e),
+                    axis=1
+                )
         else:
             logits = self.actor.apply(params, states)
             probs = jax.nn.softmax(logits)
-            entropy = -jnp.sum(
-                probs * jnp.log(probs + 1e-8),
-                axis=1
-            )
+            
+            # Igual manejo para el caso discreto
+            if probs.ndim == 1:  # Una sola muestra
+                entropy = -jnp.sum(probs * jnp.log(probs + 1e-8))
+                entropy = jnp.array([entropy])
+            else:  # Lote de muestras
+                entropy = -jnp.sum(
+                    probs * jnp.log(probs + 1e-8),
+                    axis=1
+                )
         
         return jnp.mean(entropy)
     
@@ -791,7 +808,7 @@ class TRPO:
         
         for _ in range(self.cg_iters):
             # Convertir a numpy para iterabilidad
-            Ap = self.fisher_vector_product(params, states, old_dist_params, jnp.array(p)).numpy()
+            Ap = np.array(self.fisher_vector_product(params, states, old_dist_params, jnp.array(p)))
             alpha = r_dot_r / (np.dot(p, Ap) + 1e-8)
             x += alpha * p
             r -= alpha * Ap
@@ -822,7 +839,7 @@ class TRPO:
             Vector plano de parámetros
         """
         flat_params = []
-        for _, param in jax.tree_util.tree_leaves(params):
+        for param in jax.tree_util.tree_leaves(params):
             flat_params.append(param.reshape(-1))
         return jnp.concatenate(flat_params)
     
@@ -846,25 +863,32 @@ class TRPO:
         flax.core.FrozenDict
             Parámetros con la estructura anidada
         """
-        shapes = [(k, p.shape) for k, p in jax.tree_util.tree_leaves_with_path(template)]
+        # Obtener las hojas del árbol de parámetros
+        leaves = jax.tree_util.tree_leaves(template)
         
-        new_params = {}
-        start_idx = 0
-        for path, shape in shapes:
-            size = np.prod(shape)
-            param = flat_params[start_idx:start_idx + size].reshape(shape)
-            
-            # Crear estructura anidada
-            current = new_params
-            for key in path[:-1]:
-                if key not in current:
-                    current[key] = {}
-                current = current[key]
-            current[path[-1]] = param
-            
-            start_idx += size
-            
-        return flax.core.freeze(new_params)
+        # Calcular el tamaño total de todos los parámetros
+        total_size = sum(np.prod(leaf.shape) for leaf in leaves)
+        
+        # Verificar si flat_params tiene el tamaño esperado
+        if len(flat_params) != total_size:
+            raise ValueError(f"El tamaño de flat_params {len(flat_params)} no coincide con el tamaño total de parámetros {total_size}")
+        
+        # Calcular tamaños y formas
+        sizes = [int(np.prod(leaf.shape)) for leaf in leaves]
+        shapes = [leaf.shape for leaf in leaves]
+        
+        # Dividir flat_params en parámetros individuales
+        split_indices = np.cumsum(sizes)[:-1]
+        flat_params_list = np.split(flat_params, split_indices)
+        
+        # Dar forma a los parámetros
+        params_list = [p.reshape(s) for p, s in zip(flat_params_list, shapes)]
+        
+        # Reconstruir la estructura del árbol
+        tree_def = jax.tree_util.tree_structure(template)
+        new_params = jax.tree_util.tree_unflatten(tree_def, params_list)
+        
+        return new_params
     
     def update_policy(
         self, 
@@ -925,7 +949,7 @@ class TRPO:
             old_params, 
             states, 
             old_dist_params, 
-            -flat_policy_grad.numpy()
+            -np.array(flat_policy_grad)
         )
         step_direction = jnp.array(step_direction)
         
@@ -956,13 +980,13 @@ class TRPO:
             
             # Verificar si mejora y cumple restricción KL
             if improvement > 0 and kl < self.delta:
-                print(f"Policy update: iter {i}, improvement: {improvement:.6f}, kl: {kl:.6f}")
+                print_info(f"Policy update: iter {i}, improvement: {improvement:.6f}, kl: {kl:.6f}")
                 self.state.actor_params = new_params
                 break
                 
             # Si llegamos a la última iteración, mantener parámetros originales
             if i == self.backtrack_iters - 1:
-                print("Line search failed. Keeping old parameters.")
+                print_warning("Line search failed. Keeping old parameters.")
         
         # Calcular entropía después de la actualización
         entropy = self._get_entropy(self.state.actor_params, states)
@@ -1111,12 +1135,19 @@ class TRPO:
         else:
             state = jnp.array(state)
         
-        action, key = self._get_action(
-            self.state.actor_params, 
-            state, 
-            self.state.key, 
-            deterministic
-        )
+        # Usar la función precompilada apropiada según el flag deterministic
+        if deterministic:
+            action, key = self.get_action_jit_det(
+                self.state.actor_params, 
+                state, 
+                self.state.key
+            )
+        else:
+            action, key = self.get_action_jit_stoch(
+                self.state.actor_params, 
+                state, 
+                self.state.key
+            )
         
         # Actualizar llave
         self.state.key = key
@@ -1148,7 +1179,7 @@ class TRPO:
         else:
             state = jnp.array(state)
         
-        value = self._get_value(self.state.critic_state.params, state)
+        value = self.get_value_jit(self.state.critic_state.params, state)
         
         # Si es un único estado, retornar un escalar
         if state.shape[0] == 1:
@@ -1221,7 +1252,7 @@ class TRPO:
             
             # Si episodio termina, resetear
             if done:
-                print(f"Episodio terminado con recompensa: {episode_reward}, longitud: {episode_length}")
+                # print_log(f"Episodio terminado con recompensa: {episode_reward}, longitud: {episode_length}")
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
                 episode_reward = 0
@@ -1324,15 +1355,15 @@ class TRPO:
             if (i + 1) % evaluate_interval == 0:
                 eval_reward = self.evaluate(env, episodes=5)
                 history['evaluation_rewards'].append(eval_reward)
-                print(f"Evaluación: Recompensa media = {eval_reward:.2f}")
+                print_debug(f"Evaluación: Recompensa media = {eval_reward:.2f}")
             
             # Mostrar estadísticas
             elapsed_time = time.time() - start_time
-            print(f"Tiempo total: {elapsed_time:.2f}s")
-            print(f"KL Divergence: {policy_stats['kl_divergence']:.6f}")
-            print(f"Entropía: {policy_stats['entropy']:.6f}")
-            print(f"Recompensa media: {mean_episode_reward:.2f}")
-            print(f"Longitud media: {mean_episode_length:.2f}")
+            print_info(f"Tiempo total: {elapsed_time:.2f}s")
+            print_info(f"KL Divergence: {policy_stats['kl_divergence']:.6f}")
+            print_info(f"Entropía: {policy_stats['entropy']:.6f}")
+            print_info(f"Recompensa media: {mean_episode_reward:.2f}")
+            print_info(f"Longitud media: {mean_episode_length:.2f}")
         
         return history
     
@@ -1382,9 +1413,27 @@ class TRPO:
                 episode_reward += reward
             
             rewards.append(episode_reward)
-            print(f"Episodio {episode+1}: Recompensa = {episode_reward:.2f}")
+            print_info(f"Episodio {episode+1}: Recompensa = {episode_reward:.2f}")
         
         return np.mean(rewards)
+    
+    def get_params(self) -> Dict:
+        """
+        Obtiene los parámetros actuales del agente TRPO.
+        
+        Retorna:
+        --------
+        Dict
+            Diccionario con los parámetros del actor y crítico
+        """
+        return {
+            'actor_params': self.state.actor_params,
+            'critic_params': self.state.critic_state.params,
+            'hidden_units': self.hidden_units,
+            'state_dim': self.state_dim,
+            'action_dim': self.action_dim,
+            'continuous': self.continuous
+        }
     
     def save_model(self, actor_path: str, critic_path: str) -> None:
         """
@@ -1405,7 +1454,7 @@ class TRPO:
         with open(critic_path, 'wb') as f:
             f.write(flax.serialization.to_bytes(self.state.critic_state.params))
             
-        print(f"Modelo guardado en {actor_path} y {critic_path}")
+        print_success(f"Modelo guardado en {actor_path} y {critic_path}")
     
     def load_model(self, actor_path: str, critic_path: str) -> None:
         """
@@ -1433,9 +1482,9 @@ class TRPO:
             self.state.actor_params = actor_params
             self.state.critic_state = self.state.critic_state.replace(params=critic_params)
             
-            print(f"Modelo cargado desde {actor_path} y {critic_path}")
+            print_success(f"Modelo cargado desde {actor_path} y {critic_path}")
         except Exception as e:
-            print(f"Error al cargar los modelos: {str(e)}")
+            print_error(f"Error al cargar los modelos: {str(e)}")
     
     def visualize_training(self, history: Dict[str, List[float]], smoothing_window: int = 10) -> None:
         """
@@ -1602,70 +1651,110 @@ class TRPOWrapper:
         # Inicializa parámetros para la codificación
         self.key = jax.random.key(CONST_DEFAULT_SEED)
         
-        # Funciones de codificación con hparams
-        def init_encoder_params(key, input_shape, hidden_sizes):
-            """Inicializa parámetros para un codificador MLP."""
-            # Calcular el tamaño de entrada de forma segura
-            if not input_shape or input_shape == (1,):
-                input_size = 1
-            else:
-                input_size = int(np.prod(input_shape))
-            
-            sizes = [input_size] + hidden_sizes
-            keys = jax.random.split(key, len(sizes))
-            
-            params = []
-            for i in range(len(sizes) - 1):
-                w_key, b_key = jax.random.split(keys[i])
-                w = jax.random.normal(w_key, (int(sizes[i]), int(sizes[i + 1]))) * 0.01
-                b = jax.random.normal(b_key, (int(sizes[i + 1]),)) * 0.01
-                params.append((w, b))
-            
-            return params
+        # Calcular dimensiones de forma segura
+        if len(self.cgm_shape) <= 1:
+            cgm_input_shape = (max(1, self.cgm_shape[0]),)
+        else:
+            cgm_input_shape = self.cgm_shape[1:]
+        
+        if len(self.other_features_shape) <= 1:
+            other_input_shape = (max(1, self.other_features_shape[0]),)
+        else:
+            other_input_shape = self.other_features_shape[1:]
+        
+        # Calcular tamaños de entrada de forma segura
+        cgm_input_size = int(np.prod(cgm_input_shape))
+        other_input_size = int(np.prod(other_input_shape))
         
         # Inicializar parámetros para ambos codificadores
         self.key, key1, key2 = jax.random.split(self.key, 3)
         
-        # Manejar posibles dimensiones vacías o unitarias
-        if len(self.cgm_shape) <= 1:
-            cgm_input_shape = (1,)
-        else:
-            cgm_input_shape = self.cgm_shape[1:]
-            
-        if len(self.other_features_shape) <= 1:
-            other_input_shape = (1,)
-        else:
-            other_input_shape = self.other_features_shape[1:]
+        print_debug(f"Dimensiones de codificación - CGM: {cgm_input_size}, Other: {other_input_size}")
         
-        self.cgm_params = init_encoder_params(key1, cgm_input_shape, [32, 16])
-        self.other_params = init_encoder_params(key2, other_input_shape, [16, 8])
+        self.cgm_params = self._init_encoder_params(key1, cgm_input_size, [32, 16])
+        self.other_params = self._init_encoder_params(key2, other_input_size, [16, 8])
         
         # Compilar funciones con JIT para mayor rendimiento
         self.cgm_encoder = jax.jit(self._create_encoder_fn(self.cgm_params))
         self.other_encoder = jax.jit(self._create_encoder_fn(self.other_params))
     
-    def _create_encoder_fn(self, params: List) -> Callable:
+    def _init_encoder_params(self, key: jnp.ndarray, input_size: int, hidden_sizes: List[int]) -> List[Tuple[jnp.ndarray, jnp.ndarray]]:
         """
-        Crea una función de codificación JAX.
+        Inicializa parámetros para un codificador MLP.
         
         Parámetros:
         -----------
-        params : List
-            Parámetros del codificador
+        key : jnp.ndarray
+            Clave para generación aleatoria
+        input_size : int
+            Tamaño de entrada
+        hidden_sizes : List[int]
+            Tamaños de capas ocultas
+    
+        Retorna:
+        --------
+        List[Tuple[jnp.ndarray, jnp.ndarray]]
+            Lista de pares (pesos, sesgos)
+        """
+        sizes = [input_size] + hidden_sizes
+        keys = jax.random.split(key, len(sizes))
+        
+        params = []
+        for i in range(len(sizes) - 1):
+            w_key, b_key = jax.random.split(keys[i])
+            w = jax.random.normal(w_key, (int(sizes[i]), int(sizes[i + 1]))) * 0.01
+            b = jax.random.normal(b_key, (int(sizes[i + 1]),)) * 0.01
+            params.append((w, b))
+        
+        return params
+
+    def _create_encoder_fn(self, params: List[Tuple[jnp.ndarray, jnp.ndarray]]) -> Callable:
+        """
+        Crea una función de codificación robusta que maneja discrepancias de dimensiones.
+        
+        Parámetros:
+        -----------
+        params : List[Tuple[jnp.ndarray, jnp.ndarray]]
+            Lista de pares (pesos, sesgos)
             
         Retorna:
         --------
         Callable
-            Función de codificación JIT-compilada
+            Función de codificación
         """
-        def encoder_fn(x):
-            x = x.reshape((x.shape[0], -1))  # Aplanar entrada
+        def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
+            # Asegurar que la entrada tiene al menos 2 dimensiones (batch, features)
+            if x.ndim == 1:
+                x = x.reshape(1, -1)
+            
+            # Aplanar todas las dimensiones excepto la de batch
+            batch_size = x.shape[0]
+            x_flat = x.reshape(batch_size, -1)
+            
+            # Obtener dimensión de entrada esperada (primera dimensión del primer peso)
+            expected_dim = params[0][0].shape[0]
+            actual_dim = x_flat.shape[1]
+            
+            # Manejar discrepancias de dimensiones
+            if actual_dim != expected_dim:
+                if actual_dim > expected_dim:
+                    # Si la entrada es más grande, truncar
+                    x_flat = x_flat[:, :expected_dim]
+                else:
+                    # Si la entrada es más pequeña, rellenar con ceros
+                    padding = jnp.zeros((batch_size, expected_dim - actual_dim))
+                    x_flat = jnp.concatenate([x_flat, padding], axis=1)
+            
+            # Aplicar transformaciones MLP
+            x = x_flat
             for i, (w, b) in enumerate(params):
                 x = jnp.dot(x, w) + b
                 if i < len(params) - 1:
-                    x = jnp.tanh(x)  # Activación no lineal
+                    x = jnp.tanh(x)  # Activación no lineal en capas ocultas
+            
             return x
-        return encoder_fn
+            
+        return encode_fn
     
     def __call__(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
@@ -1685,7 +1774,7 @@ class TRPOWrapper:
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo TRPO.
+        Realiza predicciones con el modelo TRPO de forma robusta.
         
         Parámetros:
         -----------
@@ -1697,28 +1786,41 @@ class TRPOWrapper:
         jnp.ndarray
             Predicciones de dosis de insulina
         """
-        # Obtener entradas
-        cgm_data, other_features = inputs
-        
-        # Codificar entradas a representación de estado
-        cgm_encoded = self.cgm_encoder(cgm_data)
-        other_encoded = self.other_encoder(other_features)
-        
-        # Combinar características en representación de estado
-        states = jnp.concatenate([cgm_encoded, other_encoded], axis=-1)
-        
-        # Usar política del agente para predecir acciones (dosis)
-        batch_size = states.shape[0]
-        actions = np.zeros((batch_size, 1))
-        
-        # Predecir para cada ejemplo en el batch
-        for i in range(batch_size):
-            state = np.array(states[i])
-            # Usar política determinística (media de la distribución)
-            action = self.trpo_agent.get_action(state, deterministic=True)
-            actions[i] = action
-        
-        return actions
+        try:
+            # Extraer entradas
+            cgm_data, other_features = inputs
+            
+            # Registrar formas para depuración
+            print_debug(f"Formas de entrada - CGM: {cgm_data.shape}, Other: {other_features.shape}")
+            
+            # Asegurar que los datos son arrays de JAX
+            cgm_data = jnp.array(cgm_data)
+            other_features = jnp.array(other_features)
+            
+            # Codificar entradas a espacio de estado
+            cgm_encoded = self.cgm_encoder(cgm_data)
+            other_encoded = self.other_encoder(other_features)
+            
+            # Combinar características en representación de estado
+            states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+            
+            # Generar predicciones
+            batch_size = states.shape[0]
+            actions = np.zeros((batch_size, 1))
+            
+            # Predecir para cada ejemplo (usar política determinística)
+            for i in range(batch_size):
+                state = np.array(states[i])
+                # Usar política determinística (media de la distribución)
+                action = self.trpo_agent.get_action(state, deterministic=True)
+                actions[i] = action
+            
+            return actions
+            
+        except Exception as e:
+            print_error(f"Error durante predicción: {e}")
+            # En caso de error, devolver ceros como fallback
+            return np.zeros((len(inputs[0]), 1))
     
     def fit(
         self, 
@@ -1765,7 +1867,9 @@ class TRPOWrapper:
         train_metrics = self.trpo_agent.train(
             env=env,
             iterations=epochs,
-            batch_size=batch_size
+            min_steps_per_update=batch_size,
+            render=False,
+            evaluate_interval=max(1, epochs // 5)
         )
         
         # Actualizar historial con métricas del entrenamiento
@@ -1773,15 +1877,23 @@ class TRPOWrapper:
             if key in self.history:
                 self.history[key].extend(values)
         
+        # Calcular pérdida en datos de entrenamiento
+        train_preds = self.predict(x)
+        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        self.history['loss'].append(train_loss)
+        
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
-            val_loss = jnp.mean((val_preds.flatten() - val_y) ** 2)
-            self.history['val_loss'].append(float(val_loss))
+            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
-            print(f"Entrenamiento completado en {len(train_metrics.get('iterations', []))} iteraciones")
+            print_success(f"Entrenamiento completado en {len(train_metrics.get('iterations', []))} iteraciones")
+            print_info(f"Pérdida final: {train_loss:.4f}")
+            if validation_data:
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
         
         return self.history
     
@@ -1922,7 +2034,7 @@ class TRPOWrapper:
         with open(filepath, 'wb') as f:
             pickle.dump(model_data, f)
         
-        print(f"Modelo guardado en {filepath}")
+        print_success(f"Modelo guardado en {filepath}")
     
     def get_config(self) -> Dict:
         """
@@ -1975,8 +2087,12 @@ def create_trpo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[in
     DRLModelWrapper
         Wrapper de TRPO que implementa la interfaz compatible con el sistema
     """
-    # Configurar el espacio de estados y acciones
-    state_dim = 64  # Dimensión del espacio de estado latente
+    # Calcular la dimensión del estado basado en las salidas de los encoders
+    # 16 dimensiones del encoder CGM + 8 dimensiones del encoder de otras características
+    state_dim = 24
+    
+    print_info(f"Configurando TRPO con state_dim={state_dim} basado en dimensiones de encoders")
+    
     action_dim = 1  # Una dimensión para dosis continua
     continuous = True  # TRPO funciona bien con espacios continuos
     

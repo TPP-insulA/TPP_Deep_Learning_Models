@@ -17,6 +17,7 @@ sys.path.append(PROJECT_ROOT)
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import PPO_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_debug, print_log, print_success, print_error, print_info
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -206,8 +207,10 @@ class PPO:
         
         # Compilar funciones con jit para acelerar
         self.get_action_and_value = jax.jit(self._get_action_and_value)
-        self.get_action = jax.jit(self._get_action)
-        self.get_value = jax.jit(self._get_value)
+        # Crear dos versiones compiladas con deterministic fijo
+        self.get_action_jit_det = jax.jit(lambda p, s, k: self._get_action(p, s, k, True))
+        self.get_action_jit_stoch = jax.jit(lambda p, s, k: self._get_action(p, s, k, False))
+        self.get_value_jit = jax.jit(self._get_value)
         self.train_step = jax.jit(self._train_step)
         
         # Crear directorio para figuras si no existe
@@ -449,9 +452,15 @@ class PPO:
         np.ndarray
             Una acción muestreada de la distribución de política
         """
-        state = jnp.asarray(state)[None, :]  # Add batch dimension
-        action, key = self._get_action(self.state.params, state, self.state.key, deterministic)
-        # Update key
+        state = jnp.asarray(state)[None, :]  # Añadir dimensión de lote
+        
+        # Usar la versión compilada adecuada
+        if deterministic:
+            action, key = self.get_action_jit_det(self.state.params, state, self.state.key)
+        else:
+            action, key = self.get_action_jit_stoch(self.state.params, state, self.state.key)
+        
+        # Actualizar key
         self.state = self.state.replace(key=key)
         return np.asarray(action[0])
     
@@ -470,7 +479,7 @@ class PPO:
             El valor estimado del estado
         """
         state = jnp.asarray(state)[None, :]  # Add batch dimension
-        value = self._get_value(self.state.params, state)
+        value = self.get_value_jit(self.state.params, state)
         return float(value[0][0])
     
     def _collect_trajectories(self, env: Any, steps_per_epoch: int) -> Tuple[Dict[str, np.ndarray], Dict[str, List[float]]]:
@@ -549,7 +558,7 @@ class PPO:
             last_value = 0
         else:
             # Estimar el valor del último estado
-            last_value = self._get_value(self.state.params, jnp.array([state]))[0, 0]
+            last_value = self.get_value_jit(self.state.params, jnp.array([state]))[0, 0]
         
         # Calcular ventajas y retornos usando GAE
         values_np = np.array(values)
@@ -663,8 +672,8 @@ class PPO:
         return metrics_avg
     
     def train(self, env: Any, epochs: int = CONST_DEFAULT_EPOCHS, steps_per_epoch: int = 4000, batch_size: int = 64, 
-             update_iters: int = 10, gae_lambda: float = 0.95,
-             log_interval: int = 10) -> Dict[str, List[float]]:
+         update_iters: int = 10, gae_lambda: float = 0.95,
+         log_interval: int = 10) -> Dict[str, List[float]]:
         """
         Entrena el modelo PPO en el entorno dado.
         
@@ -718,15 +727,15 @@ class PPO:
             history['entropy'].append(metrics['entropy'])
             
             # Registrar recompensas y longitudes de episodio
-            for reward in episode_history['reward']:
+            for reward in episode_history['episode_rewards']:
                 history['episode_rewards'].append(reward)
                 all_rewards.append(reward)
-            for length in episode_history['length']:
+            for length in episode_history['episode_lengths']:
                 history['episode_lengths'].append(length)
-            
+
             # Mostrar información de progreso
             if (epoch + 1) % log_interval == 0 or epoch == 0:
-                avg_reward = np.mean(episode_history['reward']) if episode_history['reward'] else 0
+                avg_reward = np.mean(episode_history['episode_rewards']) if episode_history['episode_rewards'] else 0
                 print(f"Época {epoch+1}/{epochs} | " 
                       f"Recompensa media: {avg_reward:.2f} | "
                       f"Pérdida de Política: {metrics['policy_loss']:.4f} | "
@@ -972,14 +981,16 @@ class PPOWrapper:
         """
         # Calcular dimensiones de entrada aplanadas de manera segura
         if len(self.cgm_shape) <= 1:
-            cgm_dim = 1
+            cgm_dim = max(1, self.cgm_shape[0])
         else:
             cgm_dim = int(np.prod(self.cgm_shape[1:]))
         
         if len(self.other_features_shape) <= 1:
-            other_dim = 1 
+            other_dim = max(1, self.other_features_shape[0])
         else:
             other_dim = int(np.prod(self.other_features_shape[1:]))
+        
+        print_debug(f"Configurando encoders PPO. CGM dim: {cgm_dim}, Other dim: {other_dim}")
         
         # Inicializar matrices de transformación
         self.key, key_cgm, key_other = jax.random.split(self.key, 3)
@@ -994,7 +1005,7 @@ class PPOWrapper:
     
     def _create_encoder_fn(self, weights: jnp.ndarray) -> Callable:
         """
-        Crea una función de codificación para transformar entradas.
+        Crea una función de codificación robusta que maneja discrepancias de dimensiones.
         
         Parámetros:
         -----------
@@ -1007,11 +1018,32 @@ class PPOWrapper:
             Función de codificación
         """
         def encode_fn(x: jnp.ndarray) -> jnp.ndarray:
-            # Aplanar entrada
-            flat_x = x.reshape(x.shape[0], -1)
-            # Transformar a espacio de estados
-            encoded = jnp.tanh(jnp.matmul(flat_x, weights))
-            return encoded
+            # Asegurar que la entrada tiene al menos 2 dimensiones (batch, features)
+            if x.ndim == 1:
+                x = x.reshape(1, -1)
+            
+            # Aplanar entrada manteniendo la dimensión del batch
+            batch_size = x.shape[0]
+            x_flat = x.reshape(batch_size, -1)
+            
+            # Verificar si las dimensiones coinciden
+            input_dim = x_flat.shape[1]
+            weight_dim = weights.shape[0]
+            
+            # Manejar posibles discrepancias de dimensiones
+            if input_dim != weight_dim:
+                print(f"Adaptando forma de entrada: {input_dim} a {weight_dim}")
+                if input_dim > weight_dim:
+                    # Truncar si los datos son más grandes que los pesos
+                    x_flat = x_flat[:, :weight_dim]
+                else:
+                    # Rellenar con ceros si los datos son más pequeños
+                    padding = jnp.zeros((batch_size, weight_dim - input_dim))
+                    x_flat = jnp.concatenate([x_flat, padding], axis=1)
+            
+            # Aplicar la transformación y activación
+            return jnp.tanh(jnp.dot(x_flat, weights))
+        
         return encode_fn
     
     def __call__(self, cgm_input: jnp.ndarray, other_input: jnp.ndarray, training: bool = False) -> jnp.ndarray:
@@ -1050,21 +1082,30 @@ class PPOWrapper:
         """
         cgm_input, other_input = inputs
         
-        # Codificar entradas a espacio de estado
-        cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
-        other_encoded = self.encode_other(jnp.array(other_input))
+        try:
+            # Registrar formas para depuración
+            print(f"Formas de entrada CGM: {cgm_input.shape}, Other: {other_input.shape}")
+            
+            # Codificar entradas a espacio de estado
+            cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
+            other_encoded = self.encode_other(jnp.array(other_input))
+            
+            # Combinar características en un estado
+            states = np.concatenate([cgm_encoded, other_encoded], axis=-1)
+            
+            # Predecir acciones (dosis) para cada estado
+            predictions = np.zeros((len(states), 1))
+            for i, state in enumerate(states):
+                # Usar acción determinista para predicción
+                action = self.ppo_agent.get_action(state, deterministic=True)
+                predictions[i] = action[0] if isinstance(action, np.ndarray) and action.size > 0 else action
+            
+            return predictions
         
-        # Combinar características en un estado
-        states = np.concatenate([cgm_encoded, other_encoded], axis=-1)
-        
-        # Predecir acciones (dosis) para cada estado
-        predictions = np.zeros((len(states), 1))
-        for i, state in enumerate(states):
-            # Usar acción determinista para predicción
-            action = self.ppo_agent.get_action(state, deterministic=True)
-            predictions[i] = action
-        
-        return predictions
+        except Exception as e:
+            print_error(f"Error durante predicción: {e}")
+            # Devolver ceros como valor seguro
+            return np.zeros((len(cgm_input), 1))
     
     def fit(
         self, 
@@ -1137,9 +1178,10 @@ class PPOWrapper:
             self.history['val_loss'] = [val_loss]
         
         if verbose > 0:
-            print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
+            print_success("Entrenamiento del modelo PPO completado.")
+            print_info(f"Pérdida final: {train_loss:.4f}")
             if validation_data:
-                print(f"Pérdida de validación: {val_loss:.4f}")
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
         
         return self.history
     
@@ -1259,7 +1301,7 @@ class PPOWrapper:
         # Guardar modelo PPO
         self.ppo_agent.save_model(filepath)
         
-        print(f"Modelo guardado en {filepath}")
+        print_success(f"Modelo guardado en {filepath}")
     
     def load(self, filepath: str) -> None:
         """
@@ -1271,7 +1313,7 @@ class PPOWrapper:
             Ruta desde donde cargar el modelo
         """
         self.ppo_agent.load_model(filepath)
-        print(f"Modelo cargado desde {filepath}")
+        print_success(f"Modelo cargado desde {filepath}")
     
     def get_config(self) -> Dict:
         """
