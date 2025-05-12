@@ -6,6 +6,7 @@ import numpy as np
 import flax
 import flax.linen as nn
 import optax
+import tqdm
 from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 from functools import partial
@@ -972,7 +973,9 @@ class PPOWrapper:
             'val_loss': [],
             'policy_loss': [],
             'value_loss': [],
-            'episode_rewards': []
+            'episode_rewards': [],
+            'predictions': [],
+            'val_predictions': [],
         }
     
     def _setup_encoders(self) -> None:
@@ -1066,46 +1069,55 @@ class PPOWrapper:
         """
         return self.predict([cgm_input, other_input])
     
-    def predict(self, inputs: List[jnp.ndarray]) -> np.ndarray:
+    def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo.
+        Realiza predicciones usando el modelo PPO entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_input, other_input]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
-        np.ndarray
-            Predicciones de dosis
+        jnp.ndarray
+            Predicciones del modelo (dosis de insulina)
         """
-        cgm_input, other_input = inputs
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis PPO", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
         
-        try:
-            # Registrar formas para depuración
-            print(f"Formas de entrada CGM: {cgm_input.shape}, Other: {other_input.shape}")
-            
             # Codificar entradas a espacio de estado
-            cgm_encoded = self.encode_cgm(jnp.array(cgm_input))
-            other_encoded = self.encode_other(jnp.array(other_input))
-            
-            # Combinar características en un estado
-            states = np.concatenate([cgm_encoded, other_encoded], axis=-1)
-            
-            # Predecir acciones (dosis) para cada estado
-            predictions = np.zeros((len(states), 1))
-            for i, state in enumerate(states):
-                # Usar acción determinista para predicción
-                action = self.ppo_agent.get_action(state, deterministic=True)
-                predictions[i] = action[0] if isinstance(action, np.ndarray) and action.size > 0 else action
-            
-            return predictions
+            cgm_encoded = self.encode_cgm(jnp.array(cgm_sample))
+            other_encoded = self.encode_other(jnp.array(other_sample))
         
-        except Exception as e:
-            print_error(f"Error durante predicción: {e}")
-            # Devolver ceros como valor seguro
-            return np.zeros((len(cgm_input), 1))
+            # Combinar características en un estado
+            state = np.concatenate([cgm_encoded.flatten(), other_encoded.flatten()])
+        
+            # Usar acción determinista para predicción
+            action = self.ppo_agent.get_action(state, deterministic=True)
+            predictions[i, 0] = action[0] if isinstance(action, np.ndarray) and action.size > 0 else action
+    
+        return predictions
     
     def fit(
         self, 
@@ -1163,12 +1175,11 @@ class PPOWrapper:
         self.history['value_loss'] = training_history.get('value_loss', [])
         self.history['episode_rewards'] = training_history.get('episode_rewards', [])
         
-        # Para compatibilidad con la interfaz de DL
-        self.history['loss'] = training_history.get('total_loss', [])
-        
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        self.history['loss'].append(train_loss)
+        self.history['predictions'].extend(train_preds.flatten().tolist())
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -1176,6 +1187,7 @@ class PPOWrapper:
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'] = [val_loss]
+            self.history['val_predictions'].extend(val_preds.flatten().tolist())
         
         if verbose > 0:
             print_success("Entrenamiento del modelo PPO completado.")

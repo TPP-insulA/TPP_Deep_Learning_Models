@@ -7,6 +7,7 @@ import flax
 import flax.linen as nn
 import optax
 import pickle
+import tqdm
 from flax.training import train_state
 from typing import Dict, List, Tuple, Any, Optional, Union, Callable, Sequence
 
@@ -1774,53 +1775,52 @@ class TRPOWrapper:
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo TRPO de forma robusta.
+        Realiza predicciones usando el modelo TRPO entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista con [cgm_data, other_features]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones del modelo (dosis de insulina)
         """
-        try:
-            # Extraer entradas
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
             cgm_data, other_features = inputs
-            
-            # Registrar formas para depuración
-            print_debug(f"Formas de entrada - CGM: {cgm_data.shape}, Other: {other_features.shape}")
-            
-            # Asegurar que los datos son arrays de JAX
-            cgm_data = jnp.array(cgm_data)
-            other_features = jnp.array(other_features)
-            
-            # Codificar entradas a espacio de estado
-            cgm_encoded = self.cgm_encoder(cgm_data)
-            other_encoded = self.other_encoder(other_features)
-            
-            # Combinar características en representación de estado
-            states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
-            
-            # Generar predicciones
-            batch_size = states.shape[0]
-            actions = np.zeros((batch_size, 1))
-            
-            # Predecir para cada ejemplo (usar política determinística)
-            for i in range(batch_size):
-                state = np.array(states[i])
-                # Usar política determinística (media de la distribución)
-                action = self.trpo_agent.get_action(state, deterministic=True)
-                actions[i] = action
-            
-            return actions
-            
-        except Exception as e:
-            print_error(f"Error durante predicción: {e}")
-            # En caso de error, devolver ceros como fallback
-            return np.zeros((len(inputs[0]), 1))
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        actions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis TRPO", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
+        
+            cgm_encoded = self.cgm_encoder(cgm_sample)
+            other_encoded = self.other_encoder(other_sample)
+            state = jnp.concatenate([cgm_encoded.flatten(), other_encoded.flatten()])
+        
+            # Obtener acción determinística (para predicción)
+            action = self.trpo_agent.get_action(state, deterministic=True)
+        
+            # Guardar predicción
+            actions[i, 0] = action if isinstance(action, (int, float)) else action[0]
+    
+        return actions
     
     def fit(
         self, 
@@ -1881,6 +1881,7 @@ class TRPOWrapper:
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
         self.history['loss'].append(train_loss)
+        self.history['predictions'] = train_preds
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -1888,6 +1889,7 @@ class TRPOWrapper:
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'].append(val_loss)
+            self.history['val_predictions'] = val_preds
         
         if verbose > 0:
             print_success(f"Entrenamiento completado en {len(train_metrics.get('iterations', []))} iteraciones")

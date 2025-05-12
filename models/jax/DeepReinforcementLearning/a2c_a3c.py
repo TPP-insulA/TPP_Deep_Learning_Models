@@ -1375,7 +1375,9 @@ class A2CWrapper:
             'policy_loss': [],
             'value_loss': [],
             'entropy_loss': [],
-            'episode_rewards': []
+            'episode_rewards': [],
+            'predictions': [],
+            'val_predictions': []
         }
     
     def _setup_encoders(self) -> None:
@@ -1484,8 +1486,9 @@ class A2CWrapper:
         # Inicializar array de acciones
         actions = np.zeros((batch_size, 1), dtype=np.float32)
         
+        batch_size_iterator = tqdm(range(batch_size), desc="Prediciendo dosis", disable=False)
         # Procesar cada muestra del batch
-        for i in range(batch_size):
+        for i in batch_size_iterator:
             # Extraer muestra
             cgm_sample = cgm_data[i:i+1]
             other_sample = other_features[i:i+1]
@@ -1587,6 +1590,7 @@ class A2CWrapper:
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        self.history['predictions'] = train_preds
         self.history['loss'].append(train_loss)
         
         # Evaluar en datos de validación si se proporcionan
@@ -1594,6 +1598,7 @@ class A2CWrapper:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            self.history['predictions'] = val_preds
             self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
@@ -1838,7 +1843,9 @@ class A2CWrapper:
             'episode_rewards': [],
             'policy_loss': [],
             'value_loss': [],
-            'entropy_loss': []
+            'entropy_loss': [],
+            'predictions': [],
+            'val_predictions': []
         }
         
         return self
@@ -1999,6 +2006,7 @@ class A3CWrapper(A2CWrapper):
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
         self.history['loss'].append(train_loss)
+        self.history['predictions'] = train_preds
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -2006,6 +2014,7 @@ class A3CWrapper(A2CWrapper):
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'].append(val_loss)
+            self.history['val_predictions'] = val_preds
         
         if verbose > 0:
             print(f"Entrenamiento asíncrono completado. Pérdida final: {train_loss:.4f}")

@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple, Any, Optional, Callable, Sequence
 from collections import deque
 from types import SimpleNamespace
 import pickle
+import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -1335,38 +1336,58 @@ class DDPGWrapper:
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo.
+        Realiza predicciones usando el modelo DDPG entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista de entradas [cgm_input, other_input]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones del modelo
+            Predicciones del modelo (dosis de insulina)
         """
-        cgm_input, other_input = inputs
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis DDPG", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
         
-        # Codificar entradas
-        cgm_encoder = self._create_encoder_fn(self.cgm_weight)
-        other_encoder = self._create_encoder_fn(self.other_weight)
+            # Codificar entradas
+            cgm_encoder = self._create_encoder_fn(self.cgm_weight)
+            other_encoder = self._create_encoder_fn(self.other_weight)
         
-        encoded_cgm = cgm_encoder(cgm_input)
-        encoded_other = other_encoder(other_input)
+            encoded_cgm = cgm_encoder(cgm_sample)
+            encoded_other = other_encoder(other_sample)
         
-        # Combinar características codificadas
-        encoded_state = jnp.concatenate([encoded_cgm, encoded_other], axis=-1)
+            # Combinar características
+            encoded_state = jnp.concatenate([encoded_cgm.flatten(), encoded_other.flatten()])
         
-        # Obtener acción del agente DDPG (sin exploración en predicción)
-        actions = np.zeros((encoded_state.shape[0], 1), dtype=np.float32)
+            # Obtener acción determinística (sin ruido)
+            action = self.ddpg_agent.get_action(encoded_state, add_noise=False)
         
-        for i in range(encoded_state.shape[0]):
-            action = self.ddpg_agent.get_action(encoded_state[i], add_noise=False)
-            actions[i, 0] = action[0]  # Tomar el primer valor de la acción
-            
-        return actions
+            # Guardar predicción
+            predictions[i, 0] = action[0]  # Tomar el primer valor de la acción
+    
+        return predictions
     
     def fit(
         self, 
@@ -1425,11 +1446,16 @@ class DDPGWrapper:
             history['loss'] = []
         if 'val_loss' not in history:
             history['val_loss'] = []
+        if 'predictions' not in history:
+            history['predictions'] = []
+        if 'val_predictions' not in history:
+            history['val_predictions'] = []
         
         print_info("Calculando métricas...")
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        history['predictions'] = train_preds
         history['loss'].append(train_loss)
         
         # Evaluar en datos de validación si se proporcionan
@@ -1437,6 +1463,7 @@ class DDPGWrapper:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            history['val_predictions'] = val_preds
             history['val_loss'].append(val_loss)
         
         # Para compatibilidad con la API de visualización

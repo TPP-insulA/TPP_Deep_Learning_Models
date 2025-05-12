@@ -13,6 +13,7 @@ from collections import deque
 import matplotlib.pyplot as plt
 from types import SimpleNamespace
 import pickle
+import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -1388,7 +1389,9 @@ class SACWrapper:
             'actor_losses': [],
             'critic_losses': [],
             'alpha_losses': [],
-            'episode_rewards': []
+            'episode_rewards': [],
+            'predictions': [],
+            'val_predictions': [],
         }
     
     def _setup_encoders(self) -> None:
@@ -1477,48 +1480,60 @@ class SACWrapper:
         """
         return self.predict(inputs)
     
-    def predict(self, inputs: list) -> jnp.ndarray:
+    def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo SAC.
+        Realiza predicciones usando el modelo SAC entrenado.
         
         Parámetros:
         -----------
-        inputs : list
-            Lista con [cgm_data, other_features]
+        inputs : List[jnp.ndarray]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones de dosis de insulina
+            Predicciones del modelo (dosis de insulina)
         """
-        try:
-            # Obtener entradas
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
             cgm_data, other_features = inputs
-            
-            # Convertir a arrays de JAX si no lo son
-            cgm_data = jnp.array(cgm_data)
-            other_features = jnp.array(other_features)
-            
-            # Codificar entradas a estado
-            cgm_encoded = self.encode_cgm(cgm_data)
-            other_encoded = self.encode_other(other_features)
-            states = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
-            
-            # Obtener acciones usando el agente SAC (en modo determinístico)
-            batch_size = states.shape[0]
-            actions = np.zeros((batch_size, 1))
-            
-            for i in range(batch_size):
-                state = np.array(states[i])
-                action = self.sac_agent.get_action(state, deterministic=True)
-                actions[i] = action
-            
-            return actions
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis SAC", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
         
-        except Exception as e:
-            print_error(f"Error durante predicción: {e}")
-            # Devolver ceros como valor seguro
-            return np.zeros((len(inputs[0]), 1))
+            # Codificar entradas
+            cgm_encoder = self._create_encoder_fn(self.cgm_weight)
+            other_encoder = self._create_encoder_fn(self.other_weight)
+        
+            encoded_cgm = cgm_encoder(cgm_sample)
+            encoded_other = other_encoder(other_sample)
+        
+            # Combinar características codificadas
+            encoded_state = np.concatenate([encoded_cgm.flatten(), encoded_other.flatten()])
+        
+            # Obtener acción determinística para predicción
+            action = self.sac_agent.get_action(encoded_state, deterministic=True)
+        
+            # Guardar predicción
+            predictions[i, 0] = action[0] if isinstance(action, np.ndarray) and action.size > 0 else action
+    
+        return predictions
     
     def fit(
         self,
@@ -1583,6 +1598,7 @@ class SACWrapper:
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
         self.history['loss'].append(train_loss)
+        self.history['predictions'].extend(train_preds.flatten().tolist())
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -1590,6 +1606,7 @@ class SACWrapper:
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'].append(val_loss)
+            self.history['val_predictions'].extend(val_preds.flatten().tolist())
         
         if verbose > 0:
             print_success("Entrenamiento del modelo SAC completado.")

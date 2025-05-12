@@ -12,6 +12,7 @@ import random
 from functools import partial
 import matplotlib.pyplot as plt
 import gym
+import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
@@ -852,7 +853,10 @@ class DQN:
             'episode_rewards': [],
             'loss': [],
             'epsilons': [],
-            'avg_q_values': []
+            'avg_q_values': [],
+            'val_loss': [],
+            'predictions': [],
+            'val_predictions': []
         }
         
         # Variables para seguimiento de progreso
@@ -1146,61 +1150,68 @@ class DQNWrapper:
 
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo.
+        Realiza predicciones usando el modelo DQN entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista de entradas [cgm_data, other_features]
-            
+            Lista de tensores de entrada [cgm_data, other_features]
+        
         Retorna:
         --------
         jnp.ndarray
-            Predicciones del modelo
+            Predicciones del modelo (dosis de insulina)
         """
-        try:
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
             cgm_data, other_features = inputs
-            
-            # Codificar entradas
-            cgm_encoder = self._create_encoder_fn(self.cgm_encoder_weights)
-            other_encoder = self._create_encoder_fn(self.other_encoder_weights)
-            
-            cgm_encoded = cgm_encoder(cgm_data)
-            other_encoded = other_encoder(other_features)
-            
-            # Combinar características
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis DQN", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
+        
+            # Crear características combinadas
+            cgm_encoded = self._create_encoder_fn(self.cgm_encoder_weights)(cgm_sample)
+            other_encoded = self._create_encoder_fn(self.other_encoder_weights)(other_sample)
+        
             combined_features = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
-            
-            # Asegurar que las dimensiones coincidan con lo que espera el modelo
+        
+            # Adaptar dimensiones si es necesario
             expected_dim = self.dqn_agent.state_dim
             if combined_features.shape[1] != expected_dim:
-                print_warning(f"Ajustando dimensiones de características de {combined_features.shape[1]} a {expected_dim}")
-                
-                # Si es muy grande, truncar
                 if combined_features.shape[1] > expected_dim:
                     combined_features = combined_features[:, :expected_dim]
-                # Si es muy pequeño, rellenar con ceros
                 else:
                     padding = jnp.zeros((combined_features.shape[0], expected_dim - combined_features.shape[1]))
                     combined_features = jnp.concatenate([combined_features, padding], axis=1)
-            
-            # Usar red Q para predecir valores
-            q_values = self.dqn_agent.q_network.apply(
-                self.dqn_agent.state.params, 
-                combined_features
-            )
-            
-            # Tomar acción con mayor valor Q
-            actions = jnp.argmax(q_values, axis=1)
-            
-            # Convertir a predicciones continuas (dosis)
+        
+            # Usar política greedy
+            state = np.array(combined_features[0], dtype=np.float32)
+            action = self.dqn_agent.get_action(state, epsilon=0.0)  # epsilon=0 para política greedy
+        
+            # Escalar acción discreta a dosis continua
             max_dose = 15.0
-            doses = (actions.astype(jnp.float32) / self.dqn_agent.action_dim) * max_dose
-            
-            return doses.reshape(-1, 1)
-        except Exception as e:
-            print_error(f"Error en predicción: {e}")
-            return jnp.zeros((len(inputs[0]), 1))
+            dose = (action / self.dqn_agent.action_dim) * max_dose
+        
+            # Guardar predicción
+            predictions[i, 0] = dose
+    
+        return predictions
     
     def fit(
         self, 
@@ -1270,6 +1281,7 @@ class DQNWrapper:
         train_mae = float(jnp.mean(jnp.abs(train_preds.flatten() - y)))
         history['loss'].append(train_loss)
         history['mae'].append(train_mae)
+        history['predictions'].append(train_preds)
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -1279,6 +1291,7 @@ class DQNWrapper:
             val_mae = float(jnp.mean(jnp.abs(val_preds.flatten() - val_y)))
             history['val_loss'].append(val_loss)
             history['val_mae'].append(val_mae)
+            history['val_predictions'].append(val_preds)
         
         # Almacenar historial para uso futuro
         self.history = history
