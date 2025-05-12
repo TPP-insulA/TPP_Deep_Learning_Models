@@ -5,6 +5,23 @@ from config import CONFIG, PREPROCESSSING_ID, MODEL_ID
 pre_ids = list(range(PREPROCESSSING_ID + 1))
 model_ids = list(range(MODEL_ID + 1))
 
+def bucket_analysis(df, category):
+    """
+    Devuelve proporciones (%) de errores por bucket para una categoría de glucemia.
+    """
+    df_cat = df[df["glucose_category"] == category].copy()
+    df_cat["error_percent"] = 100 * (df_cat["pred_dose"] - df_cat["real_dose"]) / (df_cat["real_dose"] + 1e-5)
+
+    def bucket(e):
+        if e < -20: return "<-20%"
+        elif e < -10: return "-20% a -10%"
+        elif e <= 10: return "-10% a 10%"
+        elif e <= 20: return "10% a 20%"
+        else: return ">20%"
+
+    df_cat["bucket"] = df_cat["error_percent"].apply(bucket)
+    return df_cat["bucket"].value_counts(normalize=True).sort_index() * 100
+
 
 def analyze_model(pre_id, model_id):
     folder = CONFIG["processed_data_path"]
@@ -44,6 +61,18 @@ def analyze_model(pre_id, model_id):
     pct_corr_hyper = df["correction_hyper"].sum() / total_hyper * 100 if total_hyper > 0 else None
     pct_corr_hypo = df["correction_hypo"].sum() / total_hypo * 100 if total_hypo > 0 else None
 
+    # Clasificación de categoría de glucosa
+    df["glucose_category"] = pd.cut(
+        df[post_col],
+        bins=[-float("inf"), 70, 180, float("inf")],
+        labels=["Hypo", "Normal", "Hyper"]
+    )
+
+    # Análisis por buckets
+    buckets_hyper = bucket_analysis(df, "Hyper")
+    buckets_hypo = bucket_analysis(df, "Hypo")
+    buckets_normal = bucket_analysis(df, "Normal")
+
     return {
         "PRE_ID": pre_id,
         "MODEL_ID": model_id,
@@ -56,10 +85,14 @@ def analyze_model(pre_id, model_id):
         "% underdose (<-20%)": pct_underdose,
         "% corr hyper (>180)": pct_corr_hyper,
         "% corr hypo (<70)": pct_corr_hypo,
+        # Buckets por categoría
+        **{f"[Hyper] {k}": round(v, 2) for k, v in buckets_hyper.items()},
+        **{f"[Normal] {k}": round(v, 2) for k, v in buckets_normal.items()},
+        **{f"[Hypo] {k}": round(v, 2) for k, v in buckets_hypo.items()},
     }
 
 
-# Run grid evaluation
+# Evaluación total
 results = []
 for pre_id in pre_ids:
     for model_id in model_ids:
@@ -67,15 +100,21 @@ for pre_id in pre_ids:
         if res:
             results.append(res)
 
-# DataFrame con todo
-df = pd.DataFrame(results).round(3)
+# Tabla final
+df = pd.DataFrame(results)
 df["avg_correction_score"] = df[["% corr hyper (>180)", "% corr hypo (<70)"]].mean(axis=1)
 
-# Ranking clínico
 df_sorted = df.sort_values("avg_correction_score", ascending=False)
 
-print("\n🩺 Comparación de modelos según corrección clínica:\n")
-print(df_sorted[["PRE_ID", "MODEL_ID", "% corr hyper (>180)", "% corr hypo (<70)", "avg_correction_score"]].to_string(index=False))
+# Mostrar resumen
+print("\n🩺 Comparación clínica + buckets de error (%):\n")
+print(df_sorted[[
+    "PRE_ID", "MODEL_ID",
+    "% corr hyper (>180)", "% corr hypo (<70)", "avg_correction_score",
+    "[Hyper] <-20%", "[Hyper] >20%",
+    "[Hypo] >20%",
+    "[Normal] >20%"
+]].to_string(index=False))
 
 top = df_sorted.iloc[0]
 print(f"\n✅ Mejor modelo clínico: PRE={int(top.PRE_ID)} - MODEL={int(top.MODEL_ID)} (score={top.avg_correction_score:.2f})")

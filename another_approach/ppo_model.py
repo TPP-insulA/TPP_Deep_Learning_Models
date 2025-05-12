@@ -105,42 +105,40 @@ class InsulinEnv(gym.Env):
 
         reward = np.exp(-1.5 * rel_error)
 
-        # 🔴 Seguridad ante hipoglucemia severa
+        # 🔴 Seguridad ante hipoglucemia severa (<70)
         if final_mgdl < 70:
             if pred_dose > real_dose:
-                reward -= 1.0
+                reward -= 1.5  # penalización más fuerte
             elif pred_dose < real_dose:
                 reward += 1.0
             else:
                 reward -= 0.5
 
-        # 🟢 En rango: bonificación + penalización por variabilidad
+        # 🟢 En rango: bonificación y penalización por cambio innecesario
         elif 70 <= final_mgdl <= 180:
             reward += 0.5
             reward -= std_post / 100
+            if abs(pred_dose - real_dose) >= 1.0:
+                reward -= 0.5  # más castigo por cambio innecesario
 
         # 🔶 Hiper severa
         elif final_mgdl > 300:
             reward -= 0.5
 
-        # ⚠️ Nueva lógica para hiperglucemia leve
+        # ⚠️ Hiper leve
         if avg_mgdl > 180:
             if pred_dose > real_dose:
-                reward += 0.7
+                reward += 0.6  # ligeramente menos agresivo que modelo 16
                 if pred_dose > real_dose * 1.5:
-                    reward -= 0.3  # pero evitar sobrecorrección fuerte
+                    reward -= 0.5  # castigo por sobredosis muy grande
             elif final_mgdl > 180:
-                reward -= 1.0  # penalizar más fuerte la inacción
+                reward -= 1.0  # inacción
 
         # ✅ Correcciones efectivas
         if avg_mgdl > 180 and 70 <= final_mgdl <= 180:
-            reward += 0.7
+            reward += 0.7  # corregiste hiper
         elif avg_mgdl < 70 and 70 <= final_mgdl <= 180:
-            reward += 0.5
-
-        # ❗ Penalización por cambio innecesario
-        if 70 <= avg_mgdl <= 180 and abs(pred_dose - real_dose) >= 1.0:
-            reward -= 0.3
+            reward += 0.5  # corregiste hipo
 
         return float(reward)
 
