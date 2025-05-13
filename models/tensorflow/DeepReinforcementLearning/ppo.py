@@ -19,7 +19,6 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import PPO_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapper
 
 class ActorCriticModel(Model):
     """
@@ -1238,7 +1237,6 @@ def create_ppo_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         seed=CONST_DEFAULT_SEED
     )
     
-    # Crear el wrapper - usamos directamente PPOModelWrapper en lugar de DRLModelWrapperTF
     ppo_model = PPOModelWrapper(
         ppo_agent=ppo_agent,
         cgm_shape=cgm_shape,
