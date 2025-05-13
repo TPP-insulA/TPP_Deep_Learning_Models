@@ -12,7 +12,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import MONTE_CARLO_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
-from custom.rl_model_wrapper import RLModelWrapperPyTorch
+from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 from custom.printer import print_warning
 
 # Constante para directorio de figuras

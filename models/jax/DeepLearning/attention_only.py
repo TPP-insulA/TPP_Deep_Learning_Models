@@ -10,7 +10,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
-from custom.dl_model_wrapper import DLModelWrapperJAX
+from custom.DeepLearning.dl_jax import DLModelWrapperJAX
 from models.early_stopping import get_early_stopping_config
 
 # Constantes para uso repetido

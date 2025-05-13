@@ -18,7 +18,7 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import DDPG_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
 from custom.printer import print_success, print_error, print_warning, print_info, print_debug
 
 # Constantes para uso repetido

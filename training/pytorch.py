@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from custom.dl_model_wrapper import DLModelWrapperPyTorch
+from custom.DeepLearning.dl_pt import DLModelWrapperPyTorch
 from custom.printer import print_header, print_info, print_debug, print_warning
 import torch
 import torch.nn as nn

@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TABNET_CONFIG
-from custom.dl_model_wrapper import DLModelWrapper
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 from models.early_stopping import get_early_stopping_config # Importar configuración de early stopping
 
 # --- Constantes ---

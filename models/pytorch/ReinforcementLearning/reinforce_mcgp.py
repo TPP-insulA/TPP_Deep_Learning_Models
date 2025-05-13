@@ -15,7 +15,7 @@ sys.path.append(PROJECT_ROOT)
 from config.models_config import REINFORCE_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.printer import print_debug, print_warning
-from custom.rl_model_wrapper import RLModelWrapperPyTorch
+from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 
 # Constantes para rutas y mensajes
 CONST_FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "reinforce_mcpg")

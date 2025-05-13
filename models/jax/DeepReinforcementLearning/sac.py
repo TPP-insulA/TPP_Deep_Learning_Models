@@ -20,7 +20,7 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import SAC_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
 from custom.printer import print_debug, print_log, print_success, print_error, print_info
 
 # Constantes para uso repetido
