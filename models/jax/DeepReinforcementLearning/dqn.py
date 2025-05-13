@@ -20,7 +20,7 @@ sys.path.append(PROJECT_ROOT)
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import DQN_CONFIG
 from custom.drl_model_wrapper import DRLModelWrapper
-from custom.printer import print_log, print_success, print_error, print_warning, print_info
+from custom.printer import print_log, print_success, print_error, print_warning, print_info, print_debug
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -1213,6 +1213,80 @@ class DQNWrapper:
     
         return predictions
     
+    def _calculate_metrics(self, train_preds: jnp.ndarray, y: jnp.ndarray, 
+                      validation_data: Optional[Tuple] = None, verbose: int = 1) -> Dict:
+        """
+        Calcula métricas de rendimiento del modelo.
+        
+        Parámetros:
+        -----------
+        train_preds : jnp.ndarray
+            Predicciones del modelo en datos de entrenamiento
+        y : jnp.ndarray
+            Valores objetivo (dosis de insulina)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como (x_val, y_val) (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 1)
+            
+        Retorna:
+        --------
+        Dict
+            Diccionario con métricas calculadas
+        """
+        # Asegurar que las formas sean compatibles para cálculos
+        y_flat = y.reshape(-1)
+        train_preds_flat = train_preds.reshape(-1)
+        
+        # Calcular métricas de rendimiento
+        mae = float(jnp.mean(jnp.abs(train_preds_flat - y_flat)))
+        mse = float(jnp.mean((train_preds_flat - y_flat) ** 2))
+        rmse = float(jnp.sqrt(mse))
+        
+        # Calcular R²
+        y_mean = jnp.mean(y_flat)
+        ss_total = jnp.sum((y_flat - y_mean) ** 2)
+        ss_residual = jnp.sum((y_flat - train_preds_flat) ** 2)
+        r2 = float(1 - (ss_residual / (ss_total + 1e-10)))
+        
+        # Guardar métricas en el historial
+        self.history['mae'] = [mae]
+        self.history['mse'] = [mse]
+        self.history['rmse'] = [rmse]
+        self.history['r2'] = [r2]
+        
+        # Calcular métricas de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            
+            # Aplanar para cálculos seguros
+            val_y_flat = val_y.reshape(-1)
+            val_preds_flat = val_preds.reshape(-1)
+            
+            val_mae = float(jnp.mean(jnp.abs(val_preds_flat - val_y_flat)))
+            val_mse = float(jnp.mean((val_preds_flat - val_y_flat) ** 2))
+            val_rmse = float(jnp.sqrt(val_mse))
+            
+            val_y_mean = jnp.mean(val_y_flat)
+            val_ss_total = jnp.sum((val_y_flat - val_y_mean) ** 2)
+            val_ss_residual = jnp.sum((val_y_flat - val_preds_flat) ** 2)
+            val_r2 = float(1 - (val_ss_residual / (val_ss_total + 1e-10)))
+            
+            self.history['val_mae'] = [val_mae]
+            self.history['val_mse'] = [val_mse]
+            self.history['val_rmse'] = [val_rmse]
+            self.history['val_r2'] = [val_r2]
+            self.history['val_predictions'] = val_preds
+        
+        if verbose > 0:
+            print(f"Training metrics - MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
+            if validation_data:
+                print(f"Validation metrics - MAE: {val_mae:.4f}, RMSE: {val_rmse:.4f}, R²: {val_r2:.4f}")
+        
+        print_debug(f"self.history: {self.history}")
+        return self.history
+    
     def fit(
         self, 
         x: List[jnp.ndarray], 
@@ -1278,9 +1352,7 @@ class DQNWrapper:
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
-        train_mae = float(jnp.mean(jnp.abs(train_preds.flatten() - y)))
         history['loss'].append(train_loss)
-        history['mae'].append(train_mae)
         history['predictions'].append(train_preds)
         
         # Evaluar en datos de validación si se proporcionan
@@ -1288,13 +1360,13 @@ class DQNWrapper:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
-            val_mae = float(jnp.mean(jnp.abs(val_preds.flatten() - val_y)))
             history['val_loss'].append(val_loss)
-            history['val_mae'].append(val_mae)
             history['val_predictions'].append(val_preds)
         
         # Almacenar historial para uso futuro
         self.history = history
+        
+        self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
         
         if verbose > 0:
             print_success("Entrenamiento del modelo DQN completado.")
@@ -1302,7 +1374,7 @@ class DQNWrapper:
             if validation_data:
                 print_info(f"Pérdida de validación: {val_loss:.4f}")
     
-        return history
+        return self.history
     
     def _create_training_environment(
         self, 

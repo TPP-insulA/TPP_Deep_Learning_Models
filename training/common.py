@@ -6,6 +6,7 @@ from scipy.optimize import minimize
 from joblib import Parallel, delayed
 from config.params import DEBUG
 from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
+from custom.printer import print_debug, print_info, print_warning, print_error
 
 def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
     """
@@ -23,6 +24,7 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
     Dict[str, float]
         Diccionario con métricas MAE, RMSE y R²
     """
+    print_debug(f"results['predictions']: {y_pred}")
     return {
         CONST_METRIC_MAE: float(mean_absolute_error(y_true, y_pred)),
         CONST_METRIC_RMSE: float(np.sqrt(mean_squared_error(y_true, y_pred))),
