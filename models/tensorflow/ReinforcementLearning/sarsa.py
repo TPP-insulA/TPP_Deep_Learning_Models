@@ -565,62 +565,50 @@ class SARSAModel(Model):
     def call(self, inputs: List[tf.Tensor], training: bool = False) -> tf.Tensor:
         """
         Implementa la llamada del modelo para predicciones.
-        
-        Parámetros:
-        -----------
-        inputs : List[tf.Tensor]
-            Lista de tensores [cgm_data, other_features]
-        training : bool, opcional
-            Indica si está en modo de entrenamiento (default: False)
-            
-        Retorna:
-        --------
-        tf.Tensor
-            Predicciones basadas en la política actual
         """
-        # Obtener y procesar entradas
-        cgm_input, other_input = inputs
-        batch_size = tf.shape(cgm_input)[0]
+        # Force CPU execution for this method
+        with tf.device('/CPU:0'):
+            # Obtener y procesar entradas
+            cgm_input, other_input = inputs
+            batch_size = tf.shape(cgm_input)[0]
 
-        # Codificar estados
-        state_encodings = self._encode_states(cgm_input, other_input)
-        
-        # Obtener acciones discretas para cada muestra usando tf.py_function
-        # para encapsular el código Python/NumPy en un op de TensorFlow
-        def get_actions(encodings):
-            # Esta función se ejecutará en modo eager
-            batch_actions = []
-            for i in range(len(encodings)):
-                # Extraer codificación individual
-                encoding = encodings[i]
-                
-                # Discretizar estado
-                discrete_state = self._discretize_state(encoding)
-                
-                # Obtener mejor acción
-                action = np.argmax(self.sarsa_agent.q_table[discrete_state])
-                batch_actions.append(action)
+            # Codificar estados
+            state_encodings = self._encode_states(cgm_input, other_input)
             
-            return np.array(batch_actions, dtype=np.int32)
+            # Usar tf.py_function con forzado a CPU
+            actions = tf.py_function(
+                func=self._get_batch_actions,
+                inp=[state_encodings],
+                Tout=tf.int32
+            )
+            
+            # Asegurar forma correcta después de tf.py_function
+            actions = tf.reshape(actions, [batch_size])
+            
+            # Convert to float
+            actions_float = tf.cast(actions, tf.float32)
+            actions_reshaped = tf.reshape(actions_float, [batch_size, 1])
+            
+            # Map actions to doses
+            dose_predictions = self.action_decoder(actions_reshaped)
+            
+            return dose_predictions
         
-        # Convertir el código Python en una operación de TensorFlow
-        actions = tf.py_function(
-            func=get_actions,
-            inp=[state_encodings],
-            Tout=tf.int32
-        )
+    def _get_batch_actions(self, encodings):
+        # Esta función se ejecutará en modo eager
+        batch_actions = []
+        for i in range(len(encodings)):
+            # Extraer codificación individual
+            encoding = encodings[i]
+            
+            # Discretizar estado
+            discrete_state = self._discretize_state(encoding)
+            
+            # Obtener mejor acción
+            action = np.argmax(self.sarsa_agent.q_table[discrete_state])
+            batch_actions.append(action)
         
-        # Asegurar forma correcta después de tf.py_function
-        actions = tf.reshape(actions, [batch_size])
-        
-        # Decodificar acciones discretas a dosis continuas
-        actions_float = tf.cast(actions, tf.float32)
-        actions_reshaped = tf.reshape(actions_float, [batch_size, 1])
-        
-        # Mapear acciones discretas a valores continuos usando el decodificador
-        dose_predictions = self.action_decoder(actions_reshaped)
-        
-        return dose_predictions
+        return np.array(batch_actions, dtype=np.int32)
     
     def _encode_states(self, cgm_data: tf.Tensor, other_features: tf.Tensor) -> tf.Tensor:
         """

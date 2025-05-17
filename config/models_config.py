@@ -339,13 +339,14 @@ SAC_CONFIG = {
 
 TRPO_CONFIG = {
     # Arquitectura
+    'continuous': True,                  # Si la acción es continua (True) o discreta (False)
     'hidden_units': [64, 64],            # Unidades en cada capa oculta de las redes
     'use_layer_norm': True,              # Si usar normalización de capas
     'epsilon': 1e-6,                     # Epsilon para estabilidad numérica en normalizaciones
     
     # Parámetros específicos de TRPO
     'delta': 0.01,                       # Límite máximo de divergencia KL para actualizaciones de política
-    'gamma': 0.99,                       # Factor de descuento para recompensas futuras
+    'gamma': 0.95,                       # Factor de descuento para recompensas futuras
     'lambda': 0.95,                      # Factor lambda para cálculo de ventaja generalizada (GAE)
     'critic_learning_rate': 3e-4,        # Tasa de aprendizaje para la red de valor
     'backtrack_iters': 10,               # Número máximo de iteraciones para búsqueda de línea

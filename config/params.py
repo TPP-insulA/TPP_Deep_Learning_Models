@@ -89,7 +89,7 @@ from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_tr
 
 # Modo de Ejecución
 DEBUG = True
-FRAMEWORK_OP = 1
+FRAMEWORK_OP = 0
 PROCESSING_OP = 1
 
 # Configuración de procesamiento
@@ -197,31 +197,31 @@ PT_MODELS = {
 # Modelos TensorFlow a utilizar
 USE_TF_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "tf_attention_only": True,
-    "tf_cnn": True,
-    "tf_fnn": True,
-    "tf_gru": True,
-    "tf_lstm": True,
-    "tf_rnn": True,
-    "tf_tabnet": True,
-    "tf_tcn": True,
-    "tf_transformer": True,
-    "tf_wavenet": True,
+    "tf_attention_only": False,
+    "tf_cnn": False,
+    "tf_fnn": False,
+    "tf_gru": False,
+    "tf_lstm": False,
+    "tf_rnn": False,
+    "tf_tabnet": False,
+    "tf_tcn": False,
+    "tf_transformer": False,
+    "tf_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "tf_monte_carlo": True,
-    "tf_policy_iteration": True,
-    "tf_q_learning": True,
-    "tf_reinforce_mcpg": True,
+    "tf_monte_carlo": False,
+    "tf_policy_iteration": False,
+    "tf_q_learning": False,
+    "tf_reinforce_mcpg": False,
     "tf_sarsa": True,
-    "tf_value_iteration": True,
+    "tf_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "tf_a2c": True,
-    "tf_a3c": True,
-    "tf_ddpg": True,
-    "tf_dqn": True,
-    "tf_ppo": True,
-    "tf_sac": True,
-    "tf_trpo": True,
+    "tf_a2c": False,
+    "tf_a3c": False,
+    "tf_ddpg": False,
+    "tf_dqn": False,
+    "tf_ppo": False,
+    "tf_sac": False,
+    "tf_trpo": False,
 }
 
 # Modelos JAX a utilizar
