@@ -1629,8 +1629,8 @@ class A2CWrapper:
             raise ValueError("x debe ser una lista con [cgm_data, other_features]")
         
         # Configurar reportes de progreso
-        # if verbose > 0:
-        #     progress_bar = tqdm(total=epochs, desc="Entrenando A2C")
+        if verbose > 0:
+            progress_bar = tqdm(total=epochs, desc="Entrenando A2C")
         
         # Crear entorno para entrenamiento
         env = self._create_training_environment(x[0], x[1], y)
@@ -1643,7 +1643,7 @@ class A2CWrapper:
             print(f"Iniciando entrenamiento A2C | Épocas: {epochs} | Batch: {batch_size} | Ejemplos: {len(y)}")
         
         # Entrenar al agente A2C
-        self.history = self.a2c_agent.train(
+        history = self.a2c_agent.train(
             env=env,
             n_steps=batch_size,
             epochs=epochs,
@@ -1654,35 +1654,35 @@ class A2CWrapper:
         print_info(f"Calibrando predictor de dosis con {len(y)} ejemplos")
         self._calibrate_dose_predictor(y)
         
-        # print_info("Calculando métricas del modelo")
-        # # Actualizar historial
-        # self.history['episode_rewards'].extend(history.get('episode_rewards', []))
-        # self.history['policy_loss'].extend(history.get('policy_losses', []))
-        # self.history['value_loss'].extend(history.get('value_losses', []))
-        # self.history['entropy_loss'].extend(history.get('entropy_losses', []))
+        print_info("Calculando métricas del modelo")
+        # Actualizar historial
+        self.history['episode_rewards'].extend(history.get('episode_rewards', []))
+        self.history['policy_loss'].extend(history.get('policy_losses', []))
+        self.history['value_loss'].extend(history.get('value_losses', []))
+        self.history['entropy_loss'].extend(history.get('entropy_losses', []))
         
-        # # Calcular pérdida en datos de entrenamiento
-        # train_preds = self.predict(x)
-        # train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
-        # self.history['predictions'] = train_preds
-        # self.history['loss'].append(train_loss)
+        # Calcular pérdida en datos de entrenamiento
+        train_preds = self.predict(x)
+        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        self.history['predictions'] = train_preds
+        self.history['loss'].append(train_loss)
 
-        # # Evaluar en datos de validación si se proporcionan
-        # if validation_data:
-        #     val_x, val_y = validation_data
-        #     val_preds = self.predict(val_x)
-        #     val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
-        #     self.history['predictions'] = val_preds
-        #     self.history['val_loss'].append(val_loss)
+        # Evaluar en datos de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            self.history['predictions'] = val_preds
+            self.history['val_loss'].append(val_loss)
         
-        # if verbose > 0:
-        #     progress_bar.close()
-        #     print_success(f"Entrenamiento del modelo {self.algorithm} completado.")
-        #     print_info(f"Pérdida de entrenamiento: {train_loss:.4f}")
-        #     if validation_data:
-        #         print_info(f"Pérdida de validación: {val_loss:.4f}")
+        if verbose > 0:
+            progress_bar.close()
+            print_success(f"Entrenamiento del modelo {self.algorithm} completado.")
+            print_info(f"Pérdida de entrenamiento: {train_loss:.4f}")
+            if validation_data:
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
         
-        # self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
+        self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
         
         return self.history
     
