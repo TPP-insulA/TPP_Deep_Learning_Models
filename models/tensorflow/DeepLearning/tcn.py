@@ -6,14 +6,14 @@ from keras._tf_keras.keras.layers import (
     BatchNormalization, GlobalAveragePooling1D, Concatenate, SpatialDropout1D,
     Reshape
 )
-from tensorflow.keras.constraints import max_norm
+from keras._tf_keras.keras.constraints import max_norm
 from typing import Callable, Tuple, Dict, List, Any, Optional, Union
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import TCN_CONFIG
-from custom.dl_model_wrapper import DLModelWrapper
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para uso repetido
 CONST_VALID = "valid"

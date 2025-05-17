@@ -1,21 +1,25 @@
 import os, sys
 import jax
 import jax.numpy as jnp
+import flax
 import flax.linen as nn
 from flax.training import train_state
+import flax.serialization as serialization
 import numpy as np
 import optax
 from typing import Dict, List, Tuple, Any, Optional, Callable, Sequence
 from collections import deque
 from types import SimpleNamespace
 import pickle
+import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import DDPG_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_success, print_error, print_warning, print_info, print_debug
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -836,7 +840,6 @@ class DDPG:
             history['actor_losses'].append(avg_actor_loss)
             history['critic_losses'].append(avg_critic_loss)
             
-            # Calcular valor Q medio para este episodio
             q_values = []
             for i in range(len(episode_actor_loss)):
                 # Podemos estimar los valores Q a partir de las pérdidas
@@ -1333,38 +1336,132 @@ class DDPGWrapper:
     
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo.
+        Realiza predicciones usando el modelo DDPG entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista de entradas [cgm_input, other_input]
+            Lista de tensores de entrada [cgm_data, other_features]
             
         Retorna:
         --------
         jnp.ndarray
-            Predicciones del modelo
+            Predicciones del modelo (dosis de insulina)
         """
-        cgm_input, other_input = inputs
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis DDPG", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
         
-        # Codificar entradas
-        cgm_encoder = self._create_encoder_fn(self.cgm_weight)
-        other_encoder = self._create_encoder_fn(self.other_weight)
+            # Codificar entradas
+            cgm_encoder = self._create_encoder_fn(self.cgm_weight)
+            other_encoder = self._create_encoder_fn(self.other_weight)
         
-        encoded_cgm = cgm_encoder(cgm_input)
-        encoded_other = other_encoder(other_input)
+            encoded_cgm = cgm_encoder(cgm_sample)
+            encoded_other = other_encoder(other_sample)
         
-        # Combinar características codificadas
-        encoded_state = jnp.concatenate([encoded_cgm, encoded_other], axis=-1)
+            # Combinar características
+            encoded_state = jnp.concatenate([encoded_cgm.flatten(), encoded_other.flatten()])
         
-        # Obtener acción del agente DDPG (sin exploración en predicción)
-        actions = np.zeros((encoded_state.shape[0], 1), dtype=np.float32)
+            # Obtener acción determinística (sin ruido)
+            action = self.ddpg_agent.get_action(encoded_state, add_noise=False)
         
-        for i in range(encoded_state.shape[0]):
-            action = self.ddpg_agent.get_action(encoded_state[i], add_noise=False)
-            actions[i, 0] = action[0]  # Tomar el primer valor de la acción
+            # Guardar predicción
+            predictions[i, 0] = action[0]  # Tomar el primer valor de la acción
+    
+        return predictions
+    
+    def _calculate_metrics(self, train_preds: jnp.ndarray, y: jnp.ndarray, 
+                      validation_data: Optional[Tuple] = None, verbose: int = 1) -> Dict:
+        """
+        Calcula métricas de rendimiento del modelo.
+        
+        Parámetros:
+        -----------
+        train_preds : jnp.ndarray
+            Predicciones del modelo en datos de entrenamiento
+        y : jnp.ndarray
+            Valores objetivo (dosis de insulina)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como (x_val, y_val) (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 1)
             
-        return actions
+        Retorna:
+        --------
+        Dict
+            Diccionario con métricas calculadas
+        """
+        # Asegurar que las formas sean compatibles para cálculos
+        y_flat = y.reshape(-1)
+        train_preds_flat = train_preds.reshape(-1)
+        
+        # Calcular métricas de rendimiento
+        mae = float(jnp.mean(jnp.abs(train_preds_flat - y_flat)))
+        mse = float(jnp.mean((train_preds_flat - y_flat) ** 2))
+        rmse = float(jnp.sqrt(mse))
+        
+        # Calcular R²
+        y_mean = jnp.mean(y_flat)
+        ss_total = jnp.sum((y_flat - y_mean) ** 2)
+        ss_residual = jnp.sum((y_flat - train_preds_flat) ** 2)
+        r2 = float(1 - (ss_residual / (ss_total + 1e-10)))
+        
+        # Guardar métricas en el historial
+        self.history['mae'] = [mae]
+        self.history['mse'] = [mse]
+        self.history['rmse'] = [rmse]
+        self.history['r2'] = [r2]
+        
+        # Calcular métricas de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            
+            # Aplanar para cálculos seguros
+            val_y_flat = val_y.reshape(-1)
+            val_preds_flat = val_preds.reshape(-1)
+            
+            val_mae = float(jnp.mean(jnp.abs(val_preds_flat - val_y_flat)))
+            val_mse = float(jnp.mean((val_preds_flat - val_y_flat) ** 2))
+            val_rmse = float(jnp.sqrt(val_mse))
+            
+            val_y_mean = jnp.mean(val_y_flat)
+            val_ss_total = jnp.sum((val_y_flat - val_y_mean) ** 2)
+            val_ss_residual = jnp.sum((val_y_flat - val_preds_flat) ** 2)
+            val_r2 = float(1 - (val_ss_residual / (val_ss_total + 1e-10)))
+            
+            self.history['val_mae'] = [val_mae]
+            self.history['val_mse'] = [val_mse]
+            self.history['val_rmse'] = [val_rmse]
+            self.history['val_r2'] = [val_r2]
+            self.history['val_predictions'] = val_preds
+        
+        if verbose > 0:
+            print(f"Training metrics - MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
+            if validation_data:
+                print(f"Validation metrics - MAE: {val_mae:.4f}, RMSE: {val_rmse:.4f}, R²: {val_r2:.4f}")
+        
+        print_debug(f"self.history: {self.history}")
+        return self.history
     
     def fit(
         self, 
@@ -1418,7 +1515,43 @@ class DDPGWrapper:
             log_interval=max(1, epochs // 10)
         )
         
-        return history
+        # Inicializar claves estándar en el historial si no existen
+        if 'loss' not in history:
+            history['loss'] = []
+        if 'val_loss' not in history:
+            history['val_loss'] = []
+        if 'predictions' not in history:
+            history['predictions'] = []
+        if 'val_predictions' not in history:
+            history['val_predictions'] = []
+        
+        print_info("Calculando métricas...")
+        # Calcular pérdida en datos de entrenamiento
+        train_preds = self.predict(x)
+        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        history['predictions'] = train_preds
+        history['loss'].append(train_loss)
+        
+        # Evaluar en datos de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            history['val_predictions'] = val_preds
+            history['val_loss'].append(val_loss)
+        
+        # Para compatibilidad con la API de visualización
+        self.history = history
+        
+        self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
+        
+        if verbose > 0:
+            print_success("Entrenamiento del modelo DDPG completado.")
+            print_info(f"Pérdida de entrenamiento: {train_loss:.4f}")
+            if validation_data:
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
+        
+        return self.history
     
     def _create_training_environment(
         self, 
@@ -1443,6 +1576,7 @@ class DDPGWrapper:
         Any
             Entorno de entrenamiento
         """
+        state_dim = self.ddpg_agent.state_dim
         # Crear un entorno personalizado para el entrenamiento DDPG
         class DDPGEnv:
             def __init__(self, cgm_data, other_features, targets, cgm_encoder, other_encoder):
@@ -1460,7 +1594,7 @@ class DDPGWrapper:
                     shape=(1,)
                 )
                 self.observation_space = SimpleNamespace(
-                    shape=(self.ddpg_agent.state_dim,)
+                    shape=(state_dim,)
                 )
                 
             def reset(self):
@@ -1511,26 +1645,52 @@ class DDPGWrapper:
     
     def save(self, filepath: str) -> None:
         """
-        Guarda el modelo en disco.
+        Guarda el modelo en disco usando serialización apropiada para JAX.
         
         Parámetros:
         -----------
         filepath : str
             Ruta donde guardar el modelo
         """
-        # Crear directorio si no existe
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Guardar datos del modelo
-        model_data = {
-            'cgm_weight': np.array(self.cgm_weight),
-            'other_weight': np.array(self.other_weight),
-            'agent_state': self.ddpg_agent.state
-        }
-        
-        with open(filepath, 'wb') as f:
-            pickle.dump(model_data, f)
-    
+        try:
+            # Crear directorio si no existe
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            
+            serialized_data = {
+                'cgm_weight': np.array(self.cgm_weight),
+                'other_weight': np.array(self.other_weight),
+                'actor_params': serialization.to_bytes(self.ddpg_agent.train_state.actor.params),
+                'critic_params': serialization.to_bytes(self.ddpg_agent.train_state.critic.params),
+                'target_actor_params': serialization.to_bytes(self.ddpg_agent.train_state.target_actor_params),
+                'target_critic_params': serialization.to_bytes(self.ddpg_agent.train_state.target_critic_params),
+                'agent_params': {
+                    'state_dim': self.ddpg_agent.state_dim,
+                    'action_dim': self.ddpg_agent.action_dim,
+                    'action_high': np.array(self.ddpg_agent.action_high),
+                    'action_low': np.array(self.ddpg_agent.action_low),
+                    'config': self.ddpg_agent.config,
+                }
+            }
+            
+            with open(filepath, 'wb') as f:
+                pickle.dump(serialized_data, f)
+            
+            print_success(f"Modelo DDPG guardado en: {filepath}")
+        except Exception as e:
+            print_error(f"Error al guardar modelo: {e}")
+            print_warning("Guardando con pickle como alternativa.")
+            
+            # Guardar estado completo como respaldo
+            with open(filepath, 'wb') as f:
+                pickle.dump({
+                    'cgm_weight': np.array(self.cgm_weight),
+                    'other_weight': np.array(self.other_weight),
+                    'actor_params': flax.core.frozen_dict.unfreeze(self.ddpg_agent.train_state.actor.params),
+                    'critic_params': flax.core.frozen_dict.unfreeze(self.ddpg_agent.train_state.critic.params)
+                }, f)
+            
+            print_success(f"Estado del modelo guardado como pickle en: {filepath}")
+
     def load(self, filepath: str) -> None:
         """
         Carga el modelo desde disco.
@@ -1546,7 +1706,10 @@ class DDPGWrapper:
         # Cargar pesos y estado
         self.cgm_weight = model_data['cgm_weight']
         self.other_weight = model_data['other_weight']
-        self.ddpg_agent.state = model_data['agent_state']
+        if 'train_state' in model_data:
+            self.ddpg_agent.train_state = model_data['train_state']
+    
+        print_success(f"Modelo DDPG cargado desde: {filepath}")
     
     def get_config(self) -> Dict:
         """

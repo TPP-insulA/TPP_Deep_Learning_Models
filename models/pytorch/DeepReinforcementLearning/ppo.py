@@ -17,7 +17,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import PPO_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from custom.drl_model_wrapper import DRLModelWrapperPyTorch
+from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

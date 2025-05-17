@@ -10,8 +10,8 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import WAVENET_CONFIG
-from custom.dl_model_wrapper import DLModelWrapper
-from custom.printer import print_warning # Importar si es necesario para advertencias
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
+from custom.printer import print_warning
 
 # --- Constantes ---
 CONST_ELU: str = "elu"

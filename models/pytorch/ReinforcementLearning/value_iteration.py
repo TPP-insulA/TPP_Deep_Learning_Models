@@ -13,7 +13,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from custom.rl_model_wrapper import RLModelWrapperPyTorch
+from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 from custom.printer import print_success, print_warning, print_error, print_info
 
 # Constantes para rutas y mensajes comunes

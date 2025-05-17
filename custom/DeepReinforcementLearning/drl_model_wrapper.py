@@ -26,6 +26,7 @@ CONST_DEVICE = "device"
 CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
 CONST_LOSS = "loss"
 CONST_VAL_LOSS = "val_loss"
+CONST_EPSILON = 1e-10
 
 
 class DRLModelWrapperTF(ModelWrapper):
@@ -248,8 +249,7 @@ class DRLModelWrapperTF(ModelWrapper):
         
         # Pérdida total para seguimiento
         total_loss = epoch_metrics["total_loss"]
-        epsilon = 1e-10  # Pequeño valor para comparación de punto flotante
-        if abs(total_loss) < epsilon:
+        if abs(total_loss) < CONST_EPSILON:
             # Si no hay pérdida total (o es muy cercana a cero), usar la suma de otras pérdidas
             total_loss = sum(epoch_metrics[key] for key in ["actor_loss", "critic_loss", "q_loss"])
         
@@ -1175,9 +1175,8 @@ class DRLModelWrapperJAX(ModelWrapper):
         
         # Pérdida total para seguimiento
         total_loss = epoch_metrics["total_loss"]
-        epsilon = 1e-10  # Pequeño valor para comparación de punto flotante
         
-        if abs(total_loss) < epsilon:
+        if abs(total_loss) < CONST_EPSILON:
             # Si no hay pérdida total (o es muy cercana a cero), usar la suma de otras pérdidas
             total_loss = sum(epoch_metrics[key] for key in ["actor_loss", "critic_loss", "q_loss"])
         
@@ -1239,11 +1238,9 @@ class DRLModelWrapperJAX(ModelWrapper):
                 postfix = {
                     "loss": f"{batch_metrics.get('total_loss', 0.0):.4f}"
                 }
-                # Use an epsilon value for floating point comparisons
-                epsilon = 1e-10
-                if abs(batch_metrics.get('actor_loss', 0.0)) > epsilon:
+                if abs(batch_metrics.get('actor_loss', 0.0)) > CONST_EPSILON:
                     postfix["actor"] = f"{batch_metrics.get('actor_loss', 0.0):.4f}"
-                if abs(batch_metrics.get('critic_loss', 0.0)) > epsilon:
+                if abs(batch_metrics.get('critic_loss', 0.0)) > CONST_EPSILON:
                     postfix["critic"] = f"{batch_metrics.get('critic_loss', 0.0):.4f}"
                 iterator.set_postfix(**postfix)
                 
@@ -1262,10 +1259,71 @@ class DRLModelWrapperJAX(ModelWrapper):
         restore_best_weights : bool, opcional
             Si restaurar los mejores pesos al finalizar (default: True)
         """
-        if hasattr(self.wrapper, 'add_early_stopping'):
-            self.wrapper.add_early_stopping(patience, min_delta, restore_best_weights)
-        else:
-            super().add_early_stopping(patience, min_delta, restore_best_weights)
+        super().add_early_stopping(patience, min_delta, restore_best_weights)
+    
+    def _init_training_buffer(self):
+        """
+        Inicializa el buffer de experiencia si es necesario.
+        
+        Retorna:
+        --------
+        None
+        """
+        if hasattr(self.model, 'init_buffer') and self.buffer is None:
+            self.rng_key, buffer_key = jax.random.split(self.rng_key)
+            self.buffer = self.model.init_buffer(buffer_key)
+            
+    def _handle_validation(self, x_cgm_val, x_other_val, y_val, history):
+        """
+        Realiza validación del modelo y actualiza el historial.
+        
+        Parámetros:
+        -----------
+        x_cgm_val : np.ndarray
+            Datos CGM de validación
+        x_other_val : np.ndarray
+            Otras características de validación
+        y_val : np.ndarray
+            Valores objetivo de validación
+        history : Dict[str, List[float]]
+            Historial donde registrar métricas
+            
+        Retorna:
+        --------
+        float or None
+            Pérdida de validación
+        """
+        val_loss = None
+        if x_cgm_val is not None and y_val is not None:
+            val_preds = self.predict(x_cgm_val, x_other_val)
+            val_loss = float(np.mean((val_preds - y_val) ** 2))
+            history["val_loss"].append(val_loss)
+        return val_loss
+            
+    def _update_progress_bar(self, epoch_iterator, total_loss, val_loss, epoch_metrics):
+        """
+        Actualiza la barra de progreso con las métricas actuales.
+        
+        Parámetros:
+        -----------
+        epoch_iterator : tqdm
+            Iterador de época
+        total_loss : float
+            Pérdida total
+        val_loss : float or None
+            Pérdida de validación
+        epoch_metrics : Dict[str, float]
+            Métricas de la época
+        """
+        postfix = {"loss": f"{total_loss:.4f}"}
+        if val_loss is not None:
+            postfix["val_loss"] = f"{val_loss:.4f}"
+        
+        for metric in ["actor_loss", "critic_loss", "q_loss"]:
+            if epoch_metrics.get(metric, 0.0) > CONST_EPSILON:
+                postfix[metric] = f"{epoch_metrics[metric]:.4f}"
+                
+        epoch_iterator.set_postfix(**postfix)
     
     def train(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray, 
              validation_data: Optional[Tuple[Tuple[np.ndarray, np.ndarray], np.ndarray]] = None,
@@ -1295,6 +1353,9 @@ class DRLModelWrapperJAX(ModelWrapper):
         Dict[str, List[float]]
             Historial de entrenamiento con métricas
         """
+        if self.model is None:
+            self.start(x_cgm, x_other, y)
+        
         # Preparar los datos
         (x_cgm_arr, x_other_arr, y_arr, 
          x_cgm_val, x_other_val, y_val,
@@ -1312,43 +1373,51 @@ class DRLModelWrapperJAX(ModelWrapper):
         }
         
         # Si el modelo tiene un método train directo, úsalo
-        if hasattr(self.model, 'train'):
-            return self.model.train(
-                self.params or self.state or self.states,
-                x_cgm_arr, x_other_arr, y_arr,
-                (x_cgm_val_arr, x_other_val_arr, y_val_arr) if x_cgm_val is not None else None,
-                epochs, batch_size, verbose=verbose
+        if hasattr(self.model, 'fit'):
+            return self.model.fit(
+                [x_cgm_arr, x_other_arr],
+                y_arr,
+                validation_data=([x_cgm_val_arr, x_other_val_arr], y_val_arr) if x_cgm_val is not None else None,
+                epochs=epochs,
+                batch_size=batch_size,
+                verbose=verbose
             )
         
-        # Inicializar buffer si es necesario
-        if hasattr(self.model, 'init_buffer') and self.buffer is None:
-            self.rng_key, buffer_key = jax.random.split(self.rng_key)
-            self.buffer = self.model.init_buffer(buffer_key)
+        # # Inicializar buffer si es necesario
+        # self._init_training_buffer()
         
-        # Entrenamiento por épocas
-        for _ in range(epochs):
-            self.rng_key, _ = jax.random.split(self.rng_key)
-            
-            # Calcular recompensas y llenar buffer
-            rewards = self._compute_rewards(x_cgm, x_other, y)
-            self._fill_buffer(x_cgm_arr, x_other_arr, rewards, y_arr)
-            
-            # Ejecutar actualizaciones durante la época
-            updates_per_epoch = max(1, len(x_cgm) // batch_size)
-            epoch_metrics = self._run_epoch_updates(
-                x_cgm_arr, x_other_arr, y_arr, rewards, batch_size, updates_per_epoch, verbose=verbose
-            )
-            
-            # Procesar métricas y registrarlas en el historial
-            total_loss = self._process_epoch_metrics(epoch_metrics, updates_per_epoch, history)
-            history["loss"].append(total_loss)
-            
-            # Validación si hay datos disponibles
-            if x_cgm_val is not None and y_val is not None:
-                val_preds = self.predict(x_cgm_val, x_other_val)
-                val_loss = float(np.mean((val_preds - y_val) ** 2))
-                history["val_loss"].append(val_loss)
+        # # Crear iterador con barra de progreso para épocas
+        # epoch_iterator = tqdm(
+        #     range(epochs),
+        #     desc=f"Entrenando {self.algorithm} (JAX)",
+        #     disable=verbose == 0,
+        #     unit="época"
+        # )
         
+        # # Entrenamiento por épocas
+        # for _ in epoch_iterator:
+        #     self.rng_key, _ = jax.random.split(self.rng_key)
+            
+        #     # Calcular recompensas y llenar buffer
+        #     rewards = self._compute_rewards(x_cgm, x_other, y)
+        #     self._fill_buffer(x_cgm_arr, x_other_arr, rewards, y_arr)
+            
+        #     # Ejecutar actualizaciones durante la época
+        #     updates_per_epoch = max(1, len(x_cgm) // batch_size)
+        #     epoch_metrics = self._run_epoch_updates(
+        #         x_cgm_arr, x_other_arr, y_arr, rewards, batch_size, updates_per_epoch, verbose=verbose
+        #     )
+            
+        #     # Procesar métricas y registrarlas en el historial
+        #     total_loss = self._process_epoch_metrics(epoch_metrics, updates_per_epoch, history)
+        #     history["loss"].append(total_loss)
+            
+        #     # Validación si hay datos disponibles
+        #     val_loss = self._handle_validation(x_cgm_val, x_other_val, y_val, history)
+
+        #     # Actualizar la barra de progreso con métricas actuales
+        #     self._update_progress_bar(epoch_iterator, total_loss, val_loss, epoch_metrics)
+            
         return history
     
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
@@ -2204,12 +2273,11 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
 
         # Pérdida total para seguimiento y early stopping
         total_loss = epoch_metrics.get("total_loss", 0.0)
-        epsilon = 1e-10  # Pequeño valor para comparación de punto flotante
 
-        if abs(total_loss) < epsilon:
+        if abs(total_loss) < CONST_EPSILON:
             # Si no hay pérdida total (o es muy cercana a cero), usar la suma de otras pérdidas si existen
             other_losses = [epoch_metrics.get(key, 0.0) for key in ["actor_loss", "critic_loss", "q_loss"]]
-            if any(abs(l) > epsilon for l in other_losses):
+            if any(abs(l) > CONST_EPSILON for l in other_losses):
                  total_loss = sum(other_losses)
             # Si todas las pérdidas son cero, total_loss permanece cero
 
@@ -2316,7 +2384,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         
         # Agregar otras métricas si existen
         for metric in ["actor_loss", "critic_loss", "q_loss"]:
-            if history[metric] and abs(history[metric][-1]) > 1e-10:
+            if history[metric] and abs(history[metric][-1]) > CONST_EPSILON:
                 log_msg += f" - {metric}: {history[metric][-1]:.4f}"
         
         print_info(log_msg)
@@ -2507,7 +2575,7 @@ class DRLModelWrapper(ModelWrapper):
         
         # Seleccionar el wrapper adecuado según el framework
         if self.framework == 'jax':
-            self.wrapper = DRLModelWrapperJAX(model_cls, **model_kwargs)
+            self.wrapper = DRLModelWrapperJAX(model_cls, algorithm, **model_kwargs)
         elif self.framework == 'pytorch':
             self.wrapper = DRLModelWrapperPyTorch(model_cls, algorithm, **model_kwargs)
         else:

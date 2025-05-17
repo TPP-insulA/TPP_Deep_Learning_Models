@@ -12,13 +12,15 @@ import random
 from functools import partial
 import matplotlib.pyplot as plt
 import gym
+import tqdm
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import DQN_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_log, print_success, print_error, print_warning, print_info, print_debug
 
 # Constantes para uso repetido
 CONST_RELU = "relu"
@@ -797,7 +799,7 @@ class DQN:
         
         # Añadir pérdida media del episodio al historial
         avg_loss = np.mean(episode_loss) if episode_loss else 0.0
-        history['losses'].append(avg_loss)
+        history['loss'].append(avg_loss)
         
         # Añadir epsilon actual al historial
         history['epsilons'].append(self.epsilon)
@@ -849,9 +851,12 @@ class DQN:
         """
         history = {
             'episode_rewards': [],
-            'losses': [],
+            'loss': [],
             'epsilons': [],
-            'avg_q_values': []
+            'avg_q_values': [],
+            'val_loss': [],
+            'predictions': [],
+            'val_predictions': []
         }
         
         # Variables para seguimiento de progreso
@@ -871,7 +876,7 @@ class DQN:
             if (episode + 1) % log_interval == 0:
                 avg_reward = np.mean(episode_reward_history)
                 print(f"Episodio {episode+1}/{episodes} - Recompensa Promedio: {avg_reward:.2f}, "
-                      f"Epsilon: {self.epsilon:.4f}, Pérdida: {history['losses'][-1]:.4f}")
+                      f"Epsilon: {self.epsilon:.4f}, Pérdida: {history['loss'][-1]:.4f}")
                 
                 # Guardar mejor modelo
                 if avg_reward > best_reward:
@@ -1010,7 +1015,7 @@ class DQN:
         axs[0, 1].grid(alpha=0.3)
         
         # Pérdida
-        losses = history['losses']
+        losses = history['loss']
         axs[1, 0].plot(losses, alpha=0.3, color='red', label='Original')
         if len(losses) > window_size:
             axs[1, 0].plot(range(window_size-1, len(losses)), smooth(losses, window_size), 
@@ -1107,7 +1112,19 @@ class DQNWrapper:
         def encoder_fn(x):
             # Simplemente aplana y normaliza la entrada
             x_flat = x.reshape((x.shape[0], -1))
-            return x_flat / (jnp.linalg.norm(x_flat, axis=1, keepdims=True) + 1e-5)
+            x_norm = x_flat / (jnp.linalg.norm(x_flat, axis=1, keepdims=True) + 1e-5)
+            
+            # Proyectar a dimensión constante usando PCA simple
+            if x_norm.shape[1] > 32:
+                # Proyección simple a 32 dimensiones (simulando PCA)
+                projection_matrix = jax.random.normal(
+                    jax.random.PRNGKey(42), 
+                    (x_norm.shape[1], 32)
+                )
+                # Normalizar matriz de proyección
+                projection_matrix = projection_matrix / jnp.sqrt(jnp.sum(projection_matrix**2, axis=0, keepdims=True))
+                return jnp.dot(x_norm, projection_matrix)
+            return x_norm
         
         return encoder_fn
     
@@ -1133,45 +1150,142 @@ class DQNWrapper:
 
     def predict(self, inputs: List[jnp.ndarray]) -> jnp.ndarray:
         """
-        Realiza predicciones con el modelo.
+        Realiza predicciones usando el modelo DQN entrenado.
         
         Parámetros:
         -----------
         inputs : List[jnp.ndarray]
-            Lista de entradas [cgm_data, other_features]
-            
+            Lista de tensores de entrada [cgm_data, other_features]
+        
         Retorna:
         --------
         jnp.ndarray
-            Predicciones del modelo
+            Predicciones del modelo (dosis de insulina)
         """
-        cgm_data, other_features = inputs
+        # Extraer entradas
+        if isinstance(inputs, list) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        elif isinstance(inputs, tuple) and len(inputs) == 2:
+            cgm_data, other_features = inputs
+        else:
+            raise ValueError("La entrada debe ser una lista o tupla con [cgm_data, other_features]")
+    
+        # Obtener tamaño del batch
+        batch_size = cgm_data.shape[0]
+    
+        # Inicializar array de predicciones
+        predictions = np.zeros((batch_size, 1), dtype=np.float32)
+    
+        # Añadir barra de progreso
+        batch_iterator = tqdm.tqdm(range(batch_size), desc="Prediciendo dosis DQN", disable=False)
+    
+        # Procesar cada muestra del batch con barra de progreso
+        for i in batch_iterator:
+            # Extraer muestra
+            cgm_sample = cgm_data[i:i+1]
+            other_sample = other_features[i:i+1]
         
-        # Codificar entradas
-        cgm_encoder = self._create_encoder_fn(self.cgm_encoder_weights)
-        other_encoder = self._create_encoder_fn(self.other_encoder_weights)
+            # Crear características combinadas
+            cgm_encoded = self._create_encoder_fn(self.cgm_encoder_weights)(cgm_sample)
+            other_encoded = self._create_encoder_fn(self.other_encoder_weights)(other_sample)
         
-        cgm_encoded = cgm_encoder(cgm_data)
-        other_encoded = other_encoder(other_features)
+            combined_features = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
         
-        # Combinar características
-        combined_features = jnp.concatenate([cgm_encoded, other_encoded], axis=1)
+            # Adaptar dimensiones si es necesario
+            expected_dim = self.dqn_agent.state_dim
+            if combined_features.shape[1] != expected_dim:
+                if combined_features.shape[1] > expected_dim:
+                    combined_features = combined_features[:, :expected_dim]
+                else:
+                    padding = jnp.zeros((combined_features.shape[0], expected_dim - combined_features.shape[1]))
+                    combined_features = jnp.concatenate([combined_features, padding], axis=1)
         
-        # Usar red Q para predecir valores
-        q_values = self.dqn_agent.q_network.apply(
-            self.dqn_agent.state.params, 
-            combined_features
-        )
+            # Usar política greedy
+            state = np.array(combined_features[0], dtype=np.float32)
+            action = self.dqn_agent.get_action(state, epsilon=0.0)  # epsilon=0 para política greedy
         
-        # Tomar acción con mayor valor Q
-        actions = jnp.argmax(q_values, axis=1)
+            # Escalar acción discreta a dosis continua
+            max_dose = 15.0
+            dose = (action / self.dqn_agent.action_dim) * max_dose
         
-        # Convertir a predicciones continuas (dosis)
-        # Suponiendo que actions son discretizaciones de 0 a 15 unidades
-        max_dose = 15.0
-        doses = (actions.astype(jnp.float32) / self.dqn_agent.action_dim) * max_dose
+            # Guardar predicción
+            predictions[i, 0] = dose
+    
+        return predictions
+    
+    def _calculate_metrics(self, train_preds: jnp.ndarray, y: jnp.ndarray, 
+                      validation_data: Optional[Tuple] = None, verbose: int = 1) -> Dict:
+        """
+        Calcula métricas de rendimiento del modelo.
         
-        return doses.reshape(-1, 1)
+        Parámetros:
+        -----------
+        train_preds : jnp.ndarray
+            Predicciones del modelo en datos de entrenamiento
+        y : jnp.ndarray
+            Valores objetivo (dosis de insulina)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como (x_val, y_val) (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 1)
+            
+        Retorna:
+        --------
+        Dict
+            Diccionario con métricas calculadas
+        """
+        # Asegurar que las formas sean compatibles para cálculos
+        y_flat = y.reshape(-1)
+        train_preds_flat = train_preds.reshape(-1)
+        
+        # Calcular métricas de rendimiento
+        mae = float(jnp.mean(jnp.abs(train_preds_flat - y_flat)))
+        mse = float(jnp.mean((train_preds_flat - y_flat) ** 2))
+        rmse = float(jnp.sqrt(mse))
+        
+        # Calcular R²
+        y_mean = jnp.mean(y_flat)
+        ss_total = jnp.sum((y_flat - y_mean) ** 2)
+        ss_residual = jnp.sum((y_flat - train_preds_flat) ** 2)
+        r2 = float(1 - (ss_residual / (ss_total + 1e-10)))
+        
+        # Guardar métricas en el historial
+        self.history['mae'] = [mae]
+        self.history['mse'] = [mse]
+        self.history['rmse'] = [rmse]
+        self.history['r2'] = [r2]
+        
+        # Calcular métricas de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            
+            # Aplanar para cálculos seguros
+            val_y_flat = val_y.reshape(-1)
+            val_preds_flat = val_preds.reshape(-1)
+            
+            val_mae = float(jnp.mean(jnp.abs(val_preds_flat - val_y_flat)))
+            val_mse = float(jnp.mean((val_preds_flat - val_y_flat) ** 2))
+            val_rmse = float(jnp.sqrt(val_mse))
+            
+            val_y_mean = jnp.mean(val_y_flat)
+            val_ss_total = jnp.sum((val_y_flat - val_y_mean) ** 2)
+            val_ss_residual = jnp.sum((val_y_flat - val_preds_flat) ** 2)
+            val_r2 = float(1 - (val_ss_residual / (val_ss_total + 1e-10)))
+            
+            self.history['val_mae'] = [val_mae]
+            self.history['val_mse'] = [val_mse]
+            self.history['val_rmse'] = [val_rmse]
+            self.history['val_r2'] = [val_r2]
+            self.history['val_predictions'] = val_preds
+        
+        if verbose > 0:
+            print(f"Training metrics - MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
+            if validation_data:
+                print(f"Validation metrics - MAE: {val_mae:.4f}, RMSE: {val_rmse:.4f}, R²: {val_r2:.4f}")
+        
+        print_debug(f"self.history: {self.history}")
+        return self.history
     
     def fit(
         self, 
@@ -1222,7 +1336,45 @@ class DQNWrapper:
             log_interval=max(1, epochs // 10)
         )
         
-        return history
+        # Asegurarse de que las claves estándar existan en el historial
+        if 'loss' not in history:
+            history['loss'] = []
+    
+        if 'val_loss' not in history:
+            history['val_loss'] = []
+            
+        if 'mae' not in history:
+            history['mae'] = []
+            
+        if 'val_mae' not in history:
+            history['val_mae'] = []
+            
+        # Calcular pérdida en datos de entrenamiento
+        train_preds = self.predict(x)
+        train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        history['loss'].append(train_loss)
+        history['predictions'].append(train_preds)
+        
+        # Evaluar en datos de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            history['val_loss'].append(val_loss)
+            history['val_predictions'].append(val_preds)
+        
+        # Almacenar historial para uso futuro
+        self.history = history
+        
+        self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
+        
+        if verbose > 0:
+            print_success("Entrenamiento del modelo DQN completado.")
+            print_info(f"Pérdida final: {train_loss:.4f}")
+            if validation_data:
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
+    
+        return self.history
     
     def _create_training_environment(
         self, 
@@ -1247,9 +1399,13 @@ class DQNWrapper:
         Any
             Entorno simulado para entrenamiento
         """
+        # Obtener dimensión esperada del estado
+        state_dim = self.dqn_agent.state_dim
+        print_info(f"Creando entorno con dimensión de estado {state_dim}")
+        
         # Definir clase de entorno personalizado
         class InsulinEnv:
-            def __init__(self, cgm, other, targets):
+            def __init__(self, cgm, other, targets, state_dim):
                 self.cgm = cgm
                 self.other = other
                 self.targets = targets
@@ -1257,14 +1413,13 @@ class DQNWrapper:
                 self.data_size = len(targets)
                 self.max_dose = 15.0  # Dosis máxima en unidades
                 self.action_space = gym.spaces.Discrete(20)  # 20 niveles discretos
+                self.state_dim = state_dim
                 
-                # Espacio de estados: combinación de CGM y otras características
-                cgm_flat_dim = np.prod(cgm.shape[1:])
-                other_flat_dim = np.prod(other.shape[1:])
+                # Configurar espacio de observación con la dimensión correcta
                 self.observation_space = gym.spaces.Box(
                     low=-np.inf, 
                     high=np.inf, 
-                    shape=(cgm_flat_dim + other_flat_dim,)
+                    shape=(state_dim,)
                 )
             
             def reset(self, seed=None):
@@ -1273,10 +1428,21 @@ class DQNWrapper:
                 return self._get_state(), {}
             
             def _get_state(self):
-                # Obtener y combinar características
+                # Obtener estado original
                 cgm_state = self.cgm[self.current_idx].flatten()
                 other_state = self.other[self.current_idx].flatten()
-                return np.concatenate([cgm_state, other_state])
+                original_state = np.concatenate([cgm_state, other_state])
+                
+                # Ajustar dimensiones para coincidir con state_dim esperado
+                if len(original_state) != self.state_dim:
+                    if len(original_state) > self.state_dim:
+                        # Truncar si es demasiado grande
+                        return original_state[:self.state_dim]
+                    else:
+                        # Rellenar con ceros si es demasiado pequeño
+                        padding = np.zeros(self.state_dim - len(original_state))
+                        return np.concatenate([original_state, padding])
+                return original_state
             
             def step(self, action):
                 # Convertir acción discreta a dosis
@@ -1300,13 +1466,14 @@ class DQNWrapper:
             
             def render(self):
                 pass
-                
+            
         # Convertir a numpy para usar con el entorno
         cgm_np = np.array(cgm_data)
         other_np = np.array(other_features)
         targets_np = np.array(targets).flatten()
         
-        return InsulinEnv(cgm_np, other_np, targets_np)
+        # Pasar la dimensión esperada al entorno
+        return InsulinEnv(cgm_np, other_np, targets_np, state_dim)
     
     def save(self, filepath: str) -> None:
         """
@@ -1319,7 +1486,7 @@ class DQNWrapper:
         """
         self.dqn_agent.save_model(filepath)
         
-        print(f"Modelo guardado en {filepath}")
+        print_success(f"Modelo guardado en {filepath}")
     
     def load(self, filepath: str) -> None:
         """
@@ -1332,7 +1499,7 @@ class DQNWrapper:
         """
         self.dqn_agent.load_model(filepath)
         
-        print(f"Modelo cargado desde {filepath}")
+        print_success(f"Modelo cargado desde {filepath}")
     
     def get_config(self) -> Dict:
         """
@@ -1368,8 +1535,14 @@ def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
     DRLModelWrapper
         Wrapper del modelo DQN compatible con la interfaz del sistema
     """
-    # Configurar el espacio de estados y acciones
-    state_dim = 64  # Dimensión del espacio de estado latente
+    # Calcular dimensiones reales de entrada
+    cgm_dim = int(np.prod(cgm_shape[1:])) if len(cgm_shape) > 1 else int(cgm_shape[0])
+    other_dim = int(np.prod(other_features_shape[1:])) if len(other_features_shape) > 1 else int(other_features_shape[0])
+    
+    # Usar dimensión real de entrada
+    state_dim = cgm_dim + other_dim
+    print_log(f"Configurando DQN con state_dim={state_dim} basado en cgm_dim={cgm_dim} y other_dim={other_dim}")
+    
     action_dim = 20  # 20 niveles discretos para dosis (0 a 15 unidades)
     
     # Crear configuración para el agente DQN

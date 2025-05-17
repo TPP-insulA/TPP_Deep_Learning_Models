@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import flax.linen as nn
 import optax
+import pickle
 from flax.training import train_state
 from typing import Tuple, Dict, List, Any, Optional, Union, Callable, Sequence
 import threading
@@ -16,7 +17,8 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import A2C_A3C_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
+from custom.printer import print_success, print_info, print_warning, print_error, print_debug, print_log
 
 # Constantes para uso repetido
 CONST_DROPOUT = "dropout"
@@ -439,7 +441,7 @@ class A2C:
         
         # Recortar gradientes para estabilidad
         if self.max_grad_norm > 0:
-            grads = optax.clip_by_global_norm(grads, self.max_grad_norm)
+            grads, _ = optax.clip_by_global_norm(self.max_grad_norm).update(grads, None)
         
         # Actualizar parámetros
         new_state = state.apply_gradients(grads=grads)
@@ -719,7 +721,14 @@ class A2C:
         # Estado inicial
         state, _ = env.reset()
         
-        for epoch in range(epochs):
+        epoch_iterator = tqdm(
+            range(epochs),
+            desc="Entrenando A2C (JAX)",
+            disable=False,
+            unit="época"
+        )
+        
+        for epoch in epoch_iterator:
             # Recolectar experiencia
             states, actions, rewards, dones, values, state, episode_reward = self._collect_experience(
                 env, state, n_steps, render, episode_reward, episode_rewards
@@ -1096,7 +1105,7 @@ class A3CWorker:
         
         # Recortar gradientes si es necesario
         if self.max_grad_norm is not None:
-            grads = optax.clip_by_global_norm(grads, self.max_grad_norm)
+            grads, _ = optax.clip_by_global_norm(self.max_grad_norm).update(grads, None)
             
         # Retornar gradientes y métricas (sin actualizar directamente)
         metrics = {
@@ -1366,7 +1375,9 @@ class A2CWrapper:
             'policy_loss': [],
             'value_loss': [],
             'entropy_loss': [],
-            'episode_rewards': []
+            'episode_rewards': [],
+            'predictions': [],
+            'val_predictions': []
         }
     
     def _setup_encoders(self) -> None:
@@ -1475,8 +1486,9 @@ class A2CWrapper:
         # Inicializar array de acciones
         actions = np.zeros((batch_size, 1), dtype=np.float32)
         
+        batch_size_iterator = tqdm(range(batch_size), desc="Prediciendo dosis", disable=False)
         # Procesar cada muestra del batch
-        for i in range(batch_size):
+        for i in batch_size_iterator:
             # Extraer muestra
             cgm_sample = cgm_data[i:i+1]
             other_sample = other_features[i:i+1]
@@ -1503,6 +1515,80 @@ class A2CWrapper:
         
         return actions
     
+    def _calculate_metrics(self, train_preds: jnp.ndarray, y: jnp.ndarray, 
+                      validation_data: Optional[Tuple] = None, verbose: int = 1) -> Dict:
+        """
+        Calcula métricas de rendimiento del modelo.
+        
+        Parámetros:
+        -----------
+        train_preds : jnp.ndarray
+            Predicciones del modelo en datos de entrenamiento
+        y : jnp.ndarray
+            Valores objetivo (dosis de insulina)
+        validation_data : Optional[Tuple], opcional
+            Datos de validación como (x_val, y_val) (default: None)
+        verbose : int, opcional
+            Nivel de verbosidad (default: 1)
+            
+        Retorna:
+        --------
+        Dict
+            Diccionario con métricas calculadas
+        """
+        # Asegurar que las formas sean compatibles para cálculos
+        y_flat = y.reshape(-1)
+        train_preds_flat = train_preds.reshape(-1)
+        
+        # Calcular métricas de rendimiento
+        mae = float(jnp.mean(jnp.abs(train_preds_flat - y_flat)))
+        mse = float(jnp.mean((train_preds_flat - y_flat) ** 2))
+        rmse = float(jnp.sqrt(mse))
+        
+        # Calcular R²
+        y_mean = jnp.mean(y_flat)
+        ss_total = jnp.sum((y_flat - y_mean) ** 2)
+        ss_residual = jnp.sum((y_flat - train_preds_flat) ** 2)
+        r2 = float(1 - (ss_residual / (ss_total + 1e-10)))
+        
+        # Guardar métricas en el historial
+        self.history['mae'] = [mae]
+        self.history['mse'] = [mse]
+        self.history['rmse'] = [rmse]
+        self.history['r2'] = [r2]
+        
+        # Calcular métricas de validación si se proporcionan
+        if validation_data:
+            val_x, val_y = validation_data
+            val_preds = self.predict(val_x)
+            
+            # Aplanar para cálculos seguros
+            val_y_flat = val_y.reshape(-1)
+            val_preds_flat = val_preds.reshape(-1)
+            
+            val_mae = float(jnp.mean(jnp.abs(val_preds_flat - val_y_flat)))
+            val_mse = float(jnp.mean((val_preds_flat - val_y_flat) ** 2))
+            val_rmse = float(jnp.sqrt(val_mse))
+            
+            val_y_mean = jnp.mean(val_y_flat)
+            val_ss_total = jnp.sum((val_y_flat - val_y_mean) ** 2)
+            val_ss_residual = jnp.sum((val_y_flat - val_preds_flat) ** 2)
+            val_r2 = float(1 - (val_ss_residual / (val_ss_total + 1e-10)))
+            
+            self.history['val_mae'] = [val_mae]
+            self.history['val_mse'] = [val_mse]
+            self.history['val_rmse'] = [val_rmse]
+            self.history['val_r2'] = [val_r2]
+            self.history['val_predictions'] = val_preds
+        
+        if verbose > 0:
+            print(f"Training metrics - MAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}")
+            if validation_data:
+                print(f"Validation metrics - MAE: {val_mae:.4f}, RMSE: {val_rmse:.4f}, R²: {val_r2:.4f}")
+        
+        print_debug(f"self.history: {self.history}")
+        return self.history
+
     def fit(
         self, 
         x: List[jnp.ndarray], 
@@ -1565,8 +1651,10 @@ class A2CWrapper:
         )
         
         # Calibrar predictor de dosis basado en los datos objetivo
+        print_info(f"Calibrando predictor de dosis con {len(y)} ejemplos")
         self._calibrate_dose_predictor(y)
         
+        print_info("Calculando métricas del modelo")
         # Actualizar historial
         self.history['episode_rewards'].extend(history.get('episode_rewards', []))
         self.history['policy_loss'].extend(history.get('policy_losses', []))
@@ -1576,20 +1664,25 @@ class A2CWrapper:
         # Calcular pérdida en datos de entrenamiento
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
+        self.history['predictions'] = train_preds
         self.history['loss'].append(train_loss)
-        
+
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
             val_x, val_y = validation_data
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
+            self.history['predictions'] = val_preds
             self.history['val_loss'].append(val_loss)
         
         if verbose > 0:
             progress_bar.close()
-            print(f"Entrenamiento completado. Pérdida final: {train_loss:.4f}")
+            print_success(f"Entrenamiento del modelo {self.algorithm} completado.")
+            print_info(f"Pérdida de entrenamiento: {train_loss:.4f}")
             if validation_data:
-                print(f"Pérdida de validación: {val_loss:.4f}")
+                print_info(f"Pérdida de validación: {val_loss:.4f}")
+        
+        self._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
         
         return self.history
     
@@ -1717,14 +1810,12 @@ class A2CWrapper:
             Ruta donde guardar el modelo
         """
         # Crear directorio si no existe
-        import os
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
         # Guardar el agente A2C
         self.a2c_agent.save_model(filepath + "_a2c.h5")
         
         # Guardar datos adicionales del wrapper
-        import pickle
         wrapper_data = {
             'cgm_shape': self.cgm_shape,
             'other_features_shape': self.other_features_shape,
@@ -1736,7 +1827,7 @@ class A2CWrapper:
         with open(filepath + "_wrapper.pkl", 'wb') as f:
             pickle.dump(wrapper_data, f)
         
-        print(f"Modelo guardado en {filepath}")
+        print_success(f"Modelo guardado en {filepath}")
     
     def load(self, filepath: str) -> None:
         """
@@ -1828,7 +1919,9 @@ class A2CWrapper:
             'episode_rewards': [],
             'policy_loss': [],
             'value_loss': [],
-            'entropy_loss': []
+            'entropy_loss': [],
+            'predictions': [],
+            'val_predictions': []
         }
         
         return self
@@ -1989,6 +2082,7 @@ class A3CWrapper(A2CWrapper):
         train_preds = self.predict(x)
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
         self.history['loss'].append(train_loss)
+        self.history['predictions'] = train_preds
         
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
@@ -1996,11 +2090,14 @@ class A3CWrapper(A2CWrapper):
             val_preds = self.predict(val_x)
             val_loss = float(jnp.mean((val_preds.flatten() - val_y) ** 2))
             self.history['val_loss'].append(val_loss)
+            self.history['val_predictions'] = val_preds
         
         if verbose > 0:
             print(f"Entrenamiento asíncrono completado. Pérdida final: {train_loss:.4f}")
             if validation_data:
                 print(f"Pérdida de validación: {val_loss:.4f}")
+        
+        super()._calculate_metrics(train_preds, y, validation_data, verbose=verbose)
         
         return self.history
     

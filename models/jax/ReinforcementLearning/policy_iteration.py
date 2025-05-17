@@ -9,7 +9,7 @@ from tqdm import tqdm
 from functools import partial
 import joblib
 
-from custom.rl_model_wrapper import RLModelWrapperJAX
+from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 

@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import FNN_CONFIG
-from custom.dl_model_wrapper import DLModelWrapper, DLModelWrapperTF
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para cadenas repetidas
 CONST_EPSILON = 1e-6
@@ -103,7 +103,7 @@ def get_activation(x: tf.Tensor, activation_name: str) -> tf.Tensor:
         return Activation('relu')(x)  # Valor por defecto
 
 def create_residual_block(x: tf.Tensor, units: int, dropout_rate: float, use_layer_norm: bool = True, 
-                        activation: str = CONST_RELU, training: bool = None) -> tf.Tensor:
+                        activation: str = CONST_RELU, training: Optional[bool] = None) -> tf.Tensor:
     """
     Crea un bloque residual con normalización y conexiones skip.
     
@@ -119,8 +119,8 @@ def create_residual_block(x: tf.Tensor, units: int, dropout_rate: float, use_lay
         Indica si usar normalización de capa en lugar de normalización por lotes
     activation : str
         Función de activación a utilizar
-    training : bool
-        Indica si está en modo entrenamiento
+    training : bool (opcional)
+        Indica si está en modo entrenamiento (default: None)
     
     Retorna:
     --------
@@ -212,7 +212,7 @@ def create_fnn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             dropout_rate=dropout_rate,
             use_layer_norm=FNN_CONFIG['use_layer_norm'],
             activation=FNN_CONFIG['activation'],
-            training=None  # Usar None para que Keras maneje automáticamente el modo de entrenamiento
+            training=None
         )
     
     # Capas finales para regresión

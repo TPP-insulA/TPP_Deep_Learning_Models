@@ -10,7 +10,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import CNN_CONFIG, EARLY_STOPPING_POLICY
-from custom.dl_model_wrapper import DLModelWrapper
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para uso repetido
 CONST_RELU = "relu"

@@ -12,8 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TRANSFORMER_CONFIG
-# DLModelWrapper no se usa directamente aquí para TF, pero se mantiene por consistencia si se necesita en el futuro
-from custom.dl_model_wrapper import DLModelWrapper
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # --- Constantes ---
 CONST_GELU: str = "gelu"

@@ -157,6 +157,15 @@ def print_log(text):
         text (str): Mensaje de log a imprimir.
     """
     print(coloured("LOG", colour='black', background='cyan', style='bold') + " " + coloured(text, colour='cyan', style='bold'))
+
+def print_metrics(text):
+    """
+    Imprime un mensaje de métricas en magenta.
+    
+    Args:
+        text (str): Mensaje de métricas a imprimir.
+    """
+    print(coloured("METRICS", colour='black', background='magenta', style='bold') + " " + coloured(text, colour='magenta', style='bold'))
     
 def print_header(text):
     """

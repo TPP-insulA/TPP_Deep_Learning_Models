@@ -12,7 +12,7 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import VALUE_ITERATION_CONFIG, EARLY_STOPPING_POLICY
-from custom.rl_model_wrapper import RLModelWrapperJAX
+from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 from custom.printer import print_success, print_error
 
 # Constantes para rutas de figuras y etiquetas comunes

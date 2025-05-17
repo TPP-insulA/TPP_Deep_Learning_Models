@@ -13,7 +13,7 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED
 from config.models_config import EARLY_STOPPING_POLICY, MONTE_CARLO_CONFIG
-from custom.rl_model_wrapper import RLModelWrapperJAX
+from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 from custom.printer import print_warning
 
 FIGURES_DIR = os.path.join(PROJECT_ROOT, 'figures', 'jax', 'monte_carlo')
