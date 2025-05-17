@@ -17,8 +17,96 @@ from constants.constants import (
     CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
     CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
 )
+from custom.printer import print_info, print_warning, print_error, print_success
+
+import contextlib
+
+@contextlib.contextmanager
+def model_device_context(model_name) -> Any:
+    """
+    Maneja el contexto del dispositivo para modelos específicos.
+    Si el modelo es incompatible con GPU, fuerza el uso de CPU.
+    
+    Parámetros:
+    -----------
+    model_name : str
+        Nombre del modelo para determinar el dispositivo a usar
+    """
+    # Guardar la configuración original de CUDA
+    original_cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
+    
+    # Modelos problemáticos
+    cpu_only_models = ['tf_tabnet', 'tf_sarsa', 'tf_monte_carlo']
+    
+    try:
+        # Forzar el uso de CPU para modelos específicos
+        if any(model_name.lower() == cpu_model for cpu_model in cpu_only_models):
+            print_info(f"Model {model_name} using CPU only (GPU-incompatible operations)")
+            os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        yield
+    finally:
+        # Restaurar la configuración original de CUDA
+        os.environ['CUDA_VISIBLE_DEVICES'] = original_cuda_visible
 
 CONST_EPOCHS = 2 if DEBUG else CONST_DEFAULT_EPOCHS
+
+def configure_tensorflow_gpu():
+    """
+    Configurar adecuadamente TensorFlow para uso de GPU con fallback a CPU.
+    """
+    
+    # Intentar encontrar CUDA y libdevice
+    cuda_locations = [
+        "/usr/local/cuda-11.8",
+        "/usr/local/cuda",
+        "/usr/lib/cuda",
+        "/opt/cuda",
+    ]
+    
+    cuda_found = False
+    for cuda_path in cuda_locations:
+        libdevice_path = os.path.join(cuda_path, "nvvm", "libdevice")
+        if os.path.exists(os.path.join(libdevice_path, "libdevice.10.bc")):
+            os.environ["XLA_FLAGS"] = f"--xla_gpu_cuda_data_dir={cuda_path}"
+            print_info(f"Librerías CUDA encontradas en:  {cuda_path}")
+            cuda_found = True
+            break
+    
+    if not cuda_found:
+        print_warning("No se encontraron librerías CUDA.")
+    
+    # Configurar la memoria de GPU para crecimiento dinámico
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            print_info(f"GPU detected: {len(gpus)} device(s) with memory growth enabled")
+            
+            # Test GPU 
+            try:
+                with tf.device('/GPU:0'):
+                    a = tf.random.normal([1000, 1000])
+                    b = tf.random.normal([1000, 1000])
+                    c = tf.matmul(a, b)
+                    _ = c.numpy() 
+                print_success("Test de GPU exitoso")
+                return True
+            except Exception as e:
+                print_error(f"Test de GPU fallido: {e}")
+                print_error("Fallback a CPU.")
+                os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+                return False
+        except RuntimeError as e:
+            print_error(f"Error de configuración de GPU: {e}")
+            print_warning("Fallback a CPU.")
+            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+            return False
+    else:
+        print_info("No se detectaron GPU. Usando CPU.")
+        return False
+
+use_gpu = configure_tensorflow_gpu()
 
 def create_dataset(x_cgm: np.ndarray, 
                   x_other: np.ndarray, 
@@ -120,7 +208,10 @@ def train_and_evaluate_model(model: Model,
     os.makedirs(log_dir, exist_ok=True)
     
     # Habilitar compilación XLA
-    tf.config.optimizer.set_jit(True)
+    if model_name in ['tf_tabnet'] and use_gpu:
+        tf.config.optimizer.set_jit(False)
+    else:
+        tf.config.optimizer.set_jit(True)
     
     # Identificar el tipo de modelo (RL o DL)
     is_rl_model = model_name.startswith('tf_policy_iteration') or model_name.startswith('tf_value_iteration') or \
@@ -333,13 +424,14 @@ def train_model_sequential(model_creator: Callable,
     }
     
     # Entrenar y evaluar modelo
-    history, y_pred, _ = train_and_evaluate_model(
-        model=model,
-        model_name=name,
-        data=data,
-        models_dir=models_dir,
-        training_config=training_config
-    )
+    with model_device_context(name):
+        history, y_pred, _metrics = train_and_evaluate_model(
+            model=model,
+            model_name=name,
+            data=data,
+            models_dir=models_dir,
+            training_config=training_config
+        )
     
     # Limpiar memoria
     del model
