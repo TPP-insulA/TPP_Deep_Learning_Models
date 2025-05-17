@@ -17,7 +17,7 @@ sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from config.models_config import A2C_A3C_CONFIG
-from custom.drl_model_wrapper import DRLModelWrapper
+from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
 from custom.printer import print_success, print_info, print_warning, print_error, print_debug, print_log
 
 # Constantes para uso repetido
@@ -1589,7 +1589,6 @@ class A2CWrapper:
         print_debug(f"self.history: {self.history}")
         return self.history
 
-    
     def fit(
         self, 
         x: List[jnp.ndarray], 
@@ -1667,7 +1666,7 @@ class A2CWrapper:
         train_loss = float(jnp.mean((train_preds.flatten() - y) ** 2))
         self.history['predictions'] = train_preds
         self.history['loss'].append(train_loss)
-            
+
         # Evaluar en datos de validación si se proporcionan
         if validation_data:
             val_x, val_y = validation_data

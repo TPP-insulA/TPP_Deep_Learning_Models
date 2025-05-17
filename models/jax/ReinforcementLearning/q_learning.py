@@ -16,7 +16,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import EARLY_STOPPING_POLICY, QLEARNING_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
-from custom.rl_model_wrapper import RLModelWrapperJAX
+from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 
 # Constantes para rutas y mensajes
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "jax", "q_learning")

@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import RNN_CONFIG
-from custom.dl_model_wrapper import DLModelWrapper, DLModelWrapperTF
+from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para cadenas repetidas
 CONST_EPSILON = 1e-6

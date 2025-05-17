@@ -20,7 +20,6 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import DQN_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from custom.drl_model_wrapper import DRLModelWrapper, DRLModelWrapperTF
 
 class ReplayBuffer:
     """

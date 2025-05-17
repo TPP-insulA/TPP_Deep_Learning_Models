@@ -24,7 +24,6 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float
     Dict[str, float]
         Diccionario con métricas MAE, RMSE y R²
     """
-    print_debug(f"results['predictions']: {y_pred}")
     return {
         CONST_METRIC_MAE: float(mean_absolute_error(y_true, y_pred)),
         CONST_METRIC_RMSE: float(np.sqrt(mean_squared_error(y_true, y_pred))),

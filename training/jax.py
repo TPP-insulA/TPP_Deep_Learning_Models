@@ -14,7 +14,7 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 import orbax.checkpoint as orbax_ckpt
-from custom.printer import print_debug, print_success
+from custom.printer import print_debug, print_success, print_metrics
 from training.common import (
     calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
     enhance_features, get_model_type, process_training_results
@@ -410,7 +410,7 @@ def _predict_and_evaluate(best_state, test_data):
     x_cgm_test_array = jnp.array(test_data['x_cgm'])
     x_other_test_array = jnp.array(test_data['x_other'])
     y_test = test_data['y']
-    
+
     y_pred_array = best_state.apply_fn(best_state.params, x_cgm_test_array, x_other_test_array)
     y_pred = np.array(y_pred_array).flatten()
     
@@ -642,6 +642,8 @@ def train_model_sequential(model_creator: Callable,
         # Predecir
         y_pred = model_wrapper.predict(x_cgm_test, x_other_test)
         
+        metrics = calculate_metrics(y_test, y_pred)
+        
     else:
         # Caso nn.Module: usar la lógica existente
         # Organizar datos en estructura esperada
@@ -658,13 +660,16 @@ def train_model_sequential(model_creator: Callable,
         }
         
         # Entrenar y evaluar modelo
-        history, y_pred, _ = train_and_evaluate_model(
+        history, y_pred, metrics = train_and_evaluate_model(
             model=model_wrapper,
             model_name=name,
             data=data,
             models_dir=models_dir,
             training_config=training_config
         )
+        
+    print_debug(f"Metrics: {metrics}")
+    print_metrics(f"MAE: {metrics[CONST_METRIC_MAE]:.4f} - RMSE: {metrics[CONST_METRIC_RMSE]:.4f} - R2: {metrics[CONST_METRIC_R2]:.4f}")
     
     # Limpiar memoria
     jax.clear_caches()
@@ -674,6 +679,7 @@ def train_model_sequential(model_creator: Callable,
         'name': name,
         'history': history,
         'predictions': y_pred.tolist() if hasattr(y_pred, 'tolist') else y_pred,
+        'metrics': metrics
     }
 
 def cross_validate_model(create_model_fn: Callable, 
@@ -880,29 +886,15 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         )
         model_results.append(result)
     
-    # Procesar resultados en paralelo
-    print("\nCalculando métricas en paralelo...")
-    with Parallel(n_jobs=-1, verbose=1) as parallel:
-        metric_results = parallel(
-            delayed(calculate_metrics)(
-                y_test, 
-                np.array(result['predictions'])
-            ) for result in model_results
-        )
-    
-    # metric_results = process_training_results(model_results=model_results, y_test=y_test)
-    print_debug("metric_results:")
-    print_debug(metric_results)
-    
     # Almacenar resultados
     histories = {}
     predictions = {}
     metrics = {}
     
-    for result, metric in zip(model_results, metric_results):
+    for result in model_results:
         name = result['name']
         histories[name] = result['history']
         predictions[name] = np.array(result['predictions'])
-        metrics[name] = metric
+        metrics[name] = result['metrics']
     
     return histories, predictions, metrics

@@ -333,7 +333,7 @@ def train_model_sequential(model_creator: Callable,
     }
     
     # Entrenar y evaluar modelo
-    history, y_pred, _ = train_and_evaluate_model(
+    history, y_pred, metrics = train_and_evaluate_model(
         model=model,
         model_name=name,
         data=data,
@@ -350,6 +350,7 @@ def train_model_sequential(model_creator: Callable,
         'name': name,
         'history': history,
         'predictions': y_pred.tolist(),
+        'metrics': metrics
     }
 
 
@@ -492,26 +493,16 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         )
         model_results.append(result)
     
-    # Procesar resultados en paralelo
-    print("\nCalculando métricas en paralelo...")
-    with Parallel(n_jobs=-1, verbose=1) as parallel:
-        metric_results = parallel(
-            delayed(calculate_metrics)(
-                y_test, 
-                np.array(result['predictions'])
-            ) for result in model_results
-        )
-    
     # Almacenar resultados
     histories = {}
     predictions = {}
     metrics = {}
     
-    for result, metric in zip(model_results, metric_results):
+    for result in model_results:
         name = result['name']
         histories[name] = result['history']
         predictions[name] = np.array(result['predictions'])
-        metrics[name] = metric
+        metrics[name] = result['metrics']
     
     return histories, predictions, metrics
 

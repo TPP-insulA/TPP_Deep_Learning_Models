@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from custom.dl_model_wrapper import DLModelWrapperPyTorch
+from custom.DeepLearning.dl_pt import DLModelWrapperPyTorch
 from custom.printer import print_header, print_info, print_debug, print_warning
 import torch
 import torch.nn as nn
@@ -576,7 +576,7 @@ def train_model_sequential(model_creator: Callable,
     }
     
     # Entrenar y evaluar modelo
-    history, y_pred, _ = train_and_evaluate_model(
+    history, y_pred, metrics = train_and_evaluate_model(
         model=model,
         model_name=name,
         data=data,
@@ -593,6 +593,7 @@ def train_model_sequential(model_creator: Callable,
         'name': name,
         'history': history,
         'predictions': y_pred.tolist(),
+        'metrics': metrics
     }
 
 
@@ -797,26 +798,17 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         )
         model_results.append(result)
     
-    # Procesamiento en paralelo de los resultados
-    print_header("Calculando métricas en paralelo...")
-    with Parallel(n_jobs=-1, verbose=1) as parallel:
-        metric_results = parallel(
-            delayed(calculate_metrics)(
-                y_test, 
-                np.array(result['predictions'])
-            ) for result in model_results
-        )
     
     # Guardar resultados
     histories = {}
     predictions = {}
     metrics = {}
     
-    for result, metric in zip(model_results, metric_results):
+    for result in model_results:
         name = result['name']
         histories[name] = result['history']
         predictions[name] = np.array(result['predictions'])
-        metrics[name] = metric
+        metrics[name] = result['metrics']
     
     return histories, predictions, metrics
 

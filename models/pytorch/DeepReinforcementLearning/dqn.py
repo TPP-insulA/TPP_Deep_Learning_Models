@@ -17,7 +17,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import DQN_CONFIG, EARLY_STOPPING_POLICY
 from constants.constants import CONST_DEFAULT_SEED
-from custom.drl_model_wrapper import DRLModelWrapperPyTorch
+from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
 CONST_RELU = "relu"

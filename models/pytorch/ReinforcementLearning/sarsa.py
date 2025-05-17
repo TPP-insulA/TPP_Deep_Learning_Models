@@ -14,7 +14,7 @@ sys.path.append(PROJECT_ROOT)
 
 from config.models_config import SARSA_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from custom.rl_model_wrapper import RLModelWrapperPyTorch
+from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 
 # Constantes para rutas de figuras y etiquetas comunes
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "sarsa")
