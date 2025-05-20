@@ -20,11 +20,11 @@ figures/various_models/tensorflow
 **/logs/**
 
 # Modelos
-# *.keras
-# *.h5
-# *.pkl
+*.keras
+*.h5
+*.pkl
 *.npy
-# *.pt
+*.pt
 
 # Modelos my grandes para subir
 ## TensorFlow
