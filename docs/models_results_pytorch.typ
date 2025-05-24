@@ -34,30 +34,30 @@
     align: center + horizon,
     [*Modelo*], [*MAE*], [*RMSE*], [*R²*],
 
-    [*Attention Only*], table.cell(fill: rgb(5, 249, 0).lighten(37%), [0.1914]), table.cell(fill: rgb(1, 253, 0).lighten(37%), [0.3092]), table.cell(fill: rgb(0, 254, 0).lighten(37%),  [0.8870]),
-    [*Convolutional Neural Network*], table.cell(fill: rgb(0, 255, 0).lighten(37%), [0.1773]), table.cell(fill: rgb(3, 251, 0).lighten(37%), [0.3143]), table.cell(fill: rgb(1, 253, 0).lighten(37%),  [0.8833]),
-    [*Feed Forward Neural Network*], table.cell(fill: rgb(11, 243, 0).lighten(37%), [0.2076]), table.cell(fill: rgb(11, 243, 0).lighten(37%), [0.3434]), table.cell(fill: rgb(5, 249, 0).lighten(37%),  [0.8606]),
-    [*Gated Recurrent Unit*], table.cell(fill: rgb(14, 240, 0).lighten(37%), [0.2162]), table.cell(fill: rgb(8, 246, 0).lighten(37%), [0.3317]), table.cell(fill: rgb(3, 251, 0).lighten(37%),  [0.8699]),
-    [*Long Short Term Memory*], table.cell(fill: rgb(23, 231, 0).lighten(37%), [0.2400]), table.cell(fill: rgb(12, 242, 0).lighten(37%), [0.3451]), table.cell(fill: rgb(5, 249, 0).lighten(37%),  [0.8593]),
-    [*Recurrent Neural Network*], table.cell(fill: rgb(2, 252, 0).lighten(37%), [0.1846]), table.cell(fill: rgb(0, 255, 0).lighten(37%), [0.3027]), table.cell(fill: rgb(0, 255, 0).lighten(37%),  [0.8917]),
-    [*TabNet*], table.cell(fill: rgb(43, 211, 0).lighten(37%), [0.2948]), table.cell(fill: rgb(30, 224, 0).lighten(37%), [0.4104]), table.cell(fill: rgb(14, 240, 0).lighten(37%),  [0.8009]),
-    [*Temporal Convolutional Network*], table.cell(fill: rgb(9, 245, 0).lighten(37%), [0.2018]), table.cell(fill: rgb(3, 251, 0).lighten(37%), [0.3142]), table.cell(fill: rgb(1, 253, 0).lighten(37%),  [0.8833]),
-    [*Transformer*], table.cell(fill: rgb(223, 31, 0).lighten(37%), [0.7782]), table.cell(fill: rgb(183, 71, 0).lighten(37%), [0.9426]), table.cell(fill: rgb(152, 102, 0).lighten(37%),  [-0.0501]),
-    [*WaveNet*], table.cell(fill: rgb(16, 238, 0).lighten(37%), [0.2218]), table.cell(fill: rgb(9, 245, 0).lighten(37%), [0.3353]), table.cell(fill: rgb(3, 251, 0).lighten(37%),  [0.8671]),
-    [*Monte Carlo Methods*], table.cell(fill: rgb(29, 225, 0).lighten(37%), [0.2570]), table.cell(fill: rgb(13, 241, 0).lighten(37%), [0.3513]), table.cell(fill: rgb(6, 248, 0).lighten(37%),  [0.8542]),
-    [*Policy Iteration*], table.cell(fill: rgb(6, 248, 0).lighten(37%), [0.1948]), table.cell(fill: rgb(2, 252, 0).lighten(37%), [0.3126]), table.cell(fill: rgb(1, 253, 0).lighten(37%),  [0.8845]),
-    [*Q Learning*], table.cell(fill: rgb(12, 242, 0).lighten(37%), [0.2119]), table.cell(fill: rgb(8, 246, 0).lighten(37%), [0.3322]), table.cell(fill: rgb(3, 251, 0).lighten(37%),  [0.8696]),
-    [*Reinforce Monte Carlo Policy Gradient*], table.cell(fill: rgb(154, 100, 0).lighten(37%), [0.5943]), table.cell(fill: rgb(150, 104, 0).lighten(37%), [0.8265]), table.cell(fill: rgb(113, 141, 0).lighten(37%),  [0.1927]),
-    [*State-Action-Reward-State-Action*], table.cell(fill: rgb(232, 22, 0).lighten(37%), [0.8023]), table.cell(fill: rgb(187, 67, 0).lighten(37%), [0.9550]), table.cell(fill: rgb(157, 97, 0).lighten(37%),  [-0.0778]),
-    [*Trust Region Policy Optimization*], table.cell(fill: rgb(233, 21, 0).lighten(37%), [0.8066]), table.cell(fill: rgb(188, 66, 0).lighten(37%), [0.9602]), table.cell(fill: rgb(159, 95, 0).lighten(37%),  [-0.0896]),
-    [*Advantage Actor-Critic*], table.cell(fill: rgb(231, 23, 0).lighten(37%), [0.8016]), table.cell(fill: rgb(186, 68, 0).lighten(37%), [0.9545]), table.cell(fill: rgb(157, 97, 0).lighten(37%),  [-0.0767]),
-    [*Asynchronous Advantage Actor-Critic*], table.cell(fill: rgb(241, 13, 0).lighten(37%), [0.8273]), table.cell(fill: rgb(194, 60, 0).lighten(37%), [0.9823]), table.cell(fill: rgb(167, 87, 0).lighten(37%),  [-0.1404]),
-    [*Deep Deterministic Policy Gradient*], table.cell(fill: rgb(171, 83, 0).lighten(37%), [0.6386]), table.cell(fill: rgb(154, 100, 0).lighten(37%), [0.8430]), table.cell(fill: rgb(118, 136, 0).lighten(37%),  [0.1602]),
-    [*Deep Q-Network*], table.cell(fill: rgb(255, 0, 0).lighten(37%), [0.8640]), table.cell(fill: rgb(255, 0, 0).lighten(37%), [1.1920]), table.cell(fill: rgb(255, 0, 0).lighten(37%),  [-0.6792]),
-    [*Proximal Policy Optimization*], table.cell(fill: rgb(232, 22, 0).lighten(37%), [0.8045]), table.cell(fill: rgb(187, 67, 0).lighten(37%), [0.9577]), table.cell(fill: rgb(158, 96, 0).lighten(37%),  [-0.0840]),
-    [*Soft Actor-Critic*], table.cell(fill: rgb(221, 33, 0).lighten(37%), [0.7725]), table.cell(fill: rgb(178, 76, 0).lighten(37%), [0.9238]), table.cell(fill: rgb(146, 108, 0).lighten(37%),  [-0.0086]),
-    [*Trust Region Policy Optimization*], table.cell(fill: rgb(229, 25, 0).lighten(37%), [0.7941]), table.cell(fill: rgb(184, 70, 0).lighten(37%), [0.9471]), table.cell(fill: rgb(154, 100, 0).lighten(37%),  [-0.0600]),
-    table.cell(fill: rgb("#ffe0b2"), [*Ensemble*]), table.cell(fill: rgb("#ffe0b2"), [0.1738]), table.cell(fill: rgb("#ffe0b2"), [0.2901]), table.cell(fill: rgb("#ffe0b2"), [0.9006]),
+    [*Attention Only*], table.cell(fill: rgb(20, 234, 0).lighten(37%), [0.4894]), table.cell(fill: rgb(14, 240, 0).lighten(37%), [0.6637]), table.cell(fill: rgb(9, 245, 0).lighten(37%),  [0.4851]),
+    [*Convolutional Neural Network*], table.cell(fill: rgb(33, 221, 0).lighten(37%), [0.5241]), table.cell(fill: rgb(29, 225, 0).lighten(37%), [0.7129]), table.cell(fill: rgb(19, 235, 0).lighten(37%),  [0.4060]),
+    [*Feed Forward Neural Network*], table.cell(fill: rgb(7, 247, 0).lighten(37%), [0.4569]), table.cell(fill: rgb(6, 248, 0).lighten(37%), [0.6377]), table.cell(fill: rgb(4, 250, 0).lighten(37%),  [0.5248]),
+    [*Gated Recurrent Unit*], table.cell(fill: rgb(4, 250, 0).lighten(37%), [0.4508]), table.cell(fill: rgb(0, 254, 0).lighten(37%), [0.6169]), table.cell(fill: rgb(0, 254, 0).lighten(37%),  [0.5553]),
+    [*Long Short Term Memory*], table.cell(fill: rgb(20, 234, 0).lighten(37%), [0.4905]), table.cell(fill: rgb(15, 239, 0).lighten(37%), [0.6657]), table.cell(fill: rgb(9, 245, 0).lighten(37%),  [0.4822]),
+    [*Recurrent Neural Network*], table.cell(fill: rgb(0, 255, 0).lighten(37%), [0.4386]), table.cell(fill: rgb(0, 255, 0).lighten(37%), [0.6148]), table.cell(fill: rgb(0, 255, 0).lighten(37%),  [0.5583]),
+    [*TabNet*], table.cell(fill: rgb(25, 229, 0).lighten(37%), [0.5037]), table.cell(fill: rgb(26, 228, 0).lighten(37%), [0.7022]), table.cell(fill: rgb(17, 237, 0).lighten(37%),  [0.4237]),
+    [*Temporal Convolutional Network*], table.cell(fill: rgb(18, 236, 0).lighten(37%), [0.4851]), table.cell(fill: rgb(13, 241, 0).lighten(37%), [0.6578]), table.cell(fill: rgb(8, 246, 0).lighten(37%),  [0.4944]),
+    [*Transformer*], table.cell(fill: rgb(161, 93, 0).lighten(37%), [0.8469]), table.cell(fill: rgb(123, 131, 0).lighten(37%), [1.0200]), table.cell(fill: rgb(98, 156, 0).lighten(37%),  [-0.2160]),
+    [*WaveNet*], table.cell(fill: rgb(15, 239, 0).lighten(37%), [0.4783]), table.cell(fill: rgb(9, 245, 0).lighten(37%), [0.6471]), table.cell(fill: rgb(6, 248, 0).lighten(37%),  [0.5107]),
+    [*Monte Carlo Methods*], table.cell(fill: rgb(20, 234, 0).lighten(37%), [0.4896]), table.cell(fill: rgb(16, 238, 0).lighten(37%), [0.6701]), table.cell(fill: rgb(10, 244, 0).lighten(37%),  [0.4752]),
+    [*Policy Iteration*], table.cell(fill: rgb(2, 252, 0).lighten(37%), [0.4456]), table.cell(fill: rgb(3, 251, 0).lighten(37%), [0.6256]), table.cell(fill: rgb(1, 253, 0).lighten(37%),  [0.5426]),
+    [*Q Learning*], table.cell(fill: rgb(21, 233, 0).lighten(37%), [0.4919]), table.cell(fill: rgb(15, 239, 0).lighten(37%), [0.6662]), table.cell(fill: rgb(9, 245, 0).lighten(37%),  [0.4813]),
+    [*Reinforce Monte Carlo Policy Gradient*], table.cell(fill: rgb(195, 59, 0).lighten(37%), [0.9310]), table.cell(fill: rgb(141, 113, 0).lighten(37%), [1.0780]), table.cell(fill: rgb(116, 138, 0).lighten(37%),  [-0.3580]),
+    [*State-Action-Reward-State-Action*], table.cell(fill: rgb(218, 36, 0).lighten(37%), [0.9894]), table.cell(fill: rgb(159, 95, 0).lighten(37%), [1.1384]), table.cell(fill: rgb(135, 119, 0).lighten(37%),  [-0.5146]),
+    [*Trust Region Policy Optimization*], table.cell(fill: rgb(221, 33, 0).lighten(37%), [0.9986]), table.cell(fill: rgb(162, 92, 0).lighten(37%), [1.1472]), table.cell(fill: rgb(138, 116, 0).lighten(37%),  [-0.5380]),
+    [*Advantage Actor-Critic*], table.cell(fill: rgb(224, 30, 0).lighten(37%), [1.0059]), table.cell(fill: rgb(163, 91, 0).lighten(37%), [1.1507]), table.cell(fill: rgb(140, 114, 0).lighten(37%),  [-0.5475]),
+    [*Asynchronous Advantage Actor-Critic*], table.cell(fill: rgb(214, 40, 0).lighten(37%), [0.9808]), table.cell(fill: rgb(156, 98, 0).lighten(37%), [1.1285]), table.cell(fill: rgb(132, 122, 0).lighten(37%),  [-0.4883]),
+    [*Deep Deterministic Policy Gradient*], table.cell(fill: rgb(204, 50, 0).lighten(37%), [0.9536]), table.cell(fill: rgb(145, 109, 0).lighten(37%), [1.0925]), table.cell(fill: rgb(120, 134, 0).lighten(37%),  [-0.3949]),
+    [*Deep Q-Network*], table.cell(fill: rgb(255, 0, 0).lighten(37%), [1.0821]), table.cell(fill: rgb(255, 0, 0).lighten(37%), [1.4495]), table.cell(fill: rgb(255, 0, 0).lighten(37%),  [-1.4554]),
+    [*Proximal Policy Optimization*], table.cell(fill: rgb(219, 35, 0).lighten(37%), [0.9927]), table.cell(fill: rgb(160, 94, 0).lighten(37%), [1.1415]), table.cell(fill: rgb(136, 118, 0).lighten(37%),  [-0.5229]),
+    [*Soft Actor-Critic*], table.cell(fill: rgb(198, 56, 0).lighten(37%), [0.9389]), table.cell(fill: rgb(142, 112, 0).lighten(37%), [1.0811]), table.cell(fill: rgb(117, 137, 0).lighten(37%),  [-0.3660]),
+    [*Trust Region Policy Optimization*], table.cell(fill: rgb(224, 30, 0).lighten(37%), [1.0055]), table.cell(fill: rgb(164, 90, 0).lighten(37%), [1.1546]), table.cell(fill: rgb(141, 113, 0).lighten(37%),  [-0.5579]),
+    table.cell(fill: rgb("#ffe0b2"), [*Ensemble*]), table.cell(fill: rgb("#ffe0b2"), [0.4254]), table.cell(fill: rgb("#ffe0b2"), [0.5840]), table.cell(fill: rgb("#ffe0b2"), [0.6014]),
   ),
   caption: [Comparación de métricas entre modelos],
 )
@@ -68,9 +68,9 @@
 == Modelo: Attention Only
 
 === Métricas
-- MAE: 0.1914
-- RMSE: 0.3092
-- R²: 0.8870
+- MAE: 0.4894
+- RMSE: 0.6637
+- R²: 0.4851
 
 === Historial de Entrenamiento
 #figure(
@@ -88,9 +88,9 @@
 == Modelo: Convolutional Neural Network
 
 === Métricas
-- MAE: 0.1773
-- RMSE: 0.3143
-- R²: 0.8833
+- MAE: 0.5241
+- RMSE: 0.7129
+- R²: 0.4060
 
 === Historial de Entrenamiento
 #figure(
@@ -108,9 +108,9 @@
 == Modelo: Feed Forward Neural Network
 
 === Métricas
-- MAE: 0.2076
-- RMSE: 0.3434
-- R²: 0.8606
+- MAE: 0.4569
+- RMSE: 0.6377
+- R²: 0.5248
 
 === Historial de Entrenamiento
 #figure(
@@ -128,9 +128,9 @@
 == Modelo: Gated Recurrent Unit
 
 === Métricas
-- MAE: 0.2162
-- RMSE: 0.3317
-- R²: 0.8699
+- MAE: 0.4508
+- RMSE: 0.6169
+- R²: 0.5553
 
 === Historial de Entrenamiento
 #figure(
@@ -148,9 +148,9 @@
 == Modelo: Long Short Term Memory
 
 === Métricas
-- MAE: 0.2400
-- RMSE: 0.3451
-- R²: 0.8593
+- MAE: 0.4905
+- RMSE: 0.6657
+- R²: 0.4822
 
 === Historial de Entrenamiento
 #figure(
@@ -168,9 +168,9 @@
 == Modelo: Recurrent Neural Network
 
 === Métricas
-- MAE: 0.1846
-- RMSE: 0.3027
-- R²: 0.8917
+- MAE: 0.4386
+- RMSE: 0.6148
+- R²: 0.5583
 
 === Historial de Entrenamiento
 #figure(
@@ -188,9 +188,9 @@
 == Modelo: TabNet
 
 === Métricas
-- MAE: 0.2948
-- RMSE: 0.4104
-- R²: 0.8009
+- MAE: 0.5037
+- RMSE: 0.7022
+- R²: 0.4237
 
 === Historial de Entrenamiento
 #figure(
@@ -208,9 +208,9 @@
 == Modelo: Temporal Convolutional Network
 
 === Métricas
-- MAE: 0.2018
-- RMSE: 0.3142
-- R²: 0.8833
+- MAE: 0.4851
+- RMSE: 0.6578
+- R²: 0.4944
 
 === Historial de Entrenamiento
 #figure(
@@ -228,9 +228,9 @@
 == Modelo: Transformer
 
 === Métricas
-- MAE: 0.7782
-- RMSE: 0.9426
-- R²: -0.0501
+- MAE: 0.8469
+- RMSE: 1.0200
+- R²: -0.2160
 
 === Historial de Entrenamiento
 #figure(
@@ -248,9 +248,9 @@
 == Modelo: WaveNet
 
 === Métricas
-- MAE: 0.2218
-- RMSE: 0.3353
-- R²: 0.8671
+- MAE: 0.4783
+- RMSE: 0.6471
+- R²: 0.5107
 
 === Historial de Entrenamiento
 #figure(
@@ -268,9 +268,9 @@
 == Modelo: Monte Carlo Methods
 
 === Métricas
-- MAE: 0.2570
-- RMSE: 0.3513
-- R²: 0.8542
+- MAE: 0.4896
+- RMSE: 0.6701
+- R²: 0.4752
 
 === Historial de Entrenamiento
 #figure(
@@ -288,9 +288,9 @@
 == Modelo: Policy Iteration
 
 === Métricas
-- MAE: 0.1948
-- RMSE: 0.3126
-- R²: 0.8845
+- MAE: 0.4456
+- RMSE: 0.6256
+- R²: 0.5426
 
 === Historial de Entrenamiento
 #figure(
@@ -308,9 +308,9 @@
 == Modelo: Q Learning
 
 === Métricas
-- MAE: 0.2119
-- RMSE: 0.3322
-- R²: 0.8696
+- MAE: 0.4919
+- RMSE: 0.6662
+- R²: 0.4813
 
 === Historial de Entrenamiento
 #figure(
@@ -328,9 +328,9 @@
 == Modelo: Reinforce Monte Carlo Policy Gradient
 
 === Métricas
-- MAE: 0.5943
-- RMSE: 0.8265
-- R²: 0.1927
+- MAE: 0.9310
+- RMSE: 1.0780
+- R²: -0.3580
 
 === Historial de Entrenamiento
 #figure(
@@ -348,9 +348,9 @@
 == Modelo: State-Action-Reward-State-Action
 
 === Métricas
-- MAE: 0.8023
-- RMSE: 0.9550
-- R²: -0.0778
+- MAE: 0.9894
+- RMSE: 1.1384
+- R²: -0.5146
 
 === Historial de Entrenamiento
 #figure(
@@ -368,9 +368,9 @@
 == Modelo: Trust Region Policy Optimization
 
 === Métricas
-- MAE: 0.8066
-- RMSE: 0.9602
-- R²: -0.0896
+- MAE: 0.9986
+- RMSE: 1.1472
+- R²: -0.5380
 
 === Historial de Entrenamiento
 #figure(
@@ -388,9 +388,9 @@
 == Modelo: Advantage Actor-Critic
 
 === Métricas
-- MAE: 0.8016
-- RMSE: 0.9545
-- R²: -0.0767
+- MAE: 1.0059
+- RMSE: 1.1507
+- R²: -0.5475
 
 === Historial de Entrenamiento
 #figure(
@@ -408,9 +408,9 @@
 == Modelo: Asynchronous Advantage Actor-Critic
 
 === Métricas
-- MAE: 0.8273
-- RMSE: 0.9823
-- R²: -0.1404
+- MAE: 0.9808
+- RMSE: 1.1285
+- R²: -0.4883
 
 === Historial de Entrenamiento
 #figure(
@@ -428,9 +428,9 @@
 == Modelo: Deep Deterministic Policy Gradient
 
 === Métricas
-- MAE: 0.6386
-- RMSE: 0.8430
-- R²: 0.1602
+- MAE: 0.9536
+- RMSE: 1.0925
+- R²: -0.3949
 
 === Historial de Entrenamiento
 #figure(
@@ -448,9 +448,9 @@
 == Modelo: Deep Q-Network
 
 === Métricas
-- MAE: 0.8640
-- RMSE: 1.1920
-- R²: -0.6792
+- MAE: 1.0821
+- RMSE: 1.4495
+- R²: -1.4554
 
 === Historial de Entrenamiento
 #figure(
@@ -468,9 +468,9 @@
 == Modelo: Proximal Policy Optimization
 
 === Métricas
-- MAE: 0.8045
-- RMSE: 0.9577
-- R²: -0.0840
+- MAE: 0.9927
+- RMSE: 1.1415
+- R²: -0.5229
 
 === Historial de Entrenamiento
 #figure(
@@ -488,9 +488,9 @@
 == Modelo: Soft Actor-Critic
 
 === Métricas
-- MAE: 0.7725
-- RMSE: 0.9238
-- R²: -0.0086
+- MAE: 0.9389
+- RMSE: 1.0811
+- R²: -0.3660
 
 === Historial de Entrenamiento
 #figure(
@@ -508,9 +508,9 @@
 == Modelo: Trust Region Policy Optimization
 
 === Métricas
-- MAE: 0.7941
-- RMSE: 0.9471
-- R²: -0.0600
+- MAE: 1.0055
+- RMSE: 1.1546
+- R²: -0.5579
 
 === Historial de Entrenamiento
 #figure(
@@ -528,9 +528,9 @@
 == Modelo Ensemble
 
 === Métricas
-- MAE: 0.1738
-- RMSE: 0.2901
-- R²: 0.9006
+- MAE: 0.4254
+- RMSE: 0.5840
+- R²: 0.6014
 
 === Pesos del Ensemble
 #figure(
@@ -541,6 +541,6 @@
 = Conclusiones
 
 El framework PYTORCH fue utilizado para entrenar 23 modelos diferentes. 
-El modelo ensemble logró un MAE de 0.1738, un RMSE de 0.2901 
-y un coeficiente R² de 0.9006.
+El modelo ensemble logró un MAE de 0.4254, un RMSE de 0.5840 
+y un coeficiente R² de 0.6014.
 

@@ -193,9 +193,10 @@ if PROCESSING == "pandas":
 elif PROCESSING == "polars":
     cprint("Procesando datos con polars...", 'blue', 'bold')
     df_pl: pl.DataFrame = pl_preprocess(SUBJECTS_PATH)
-    (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test, 
+    (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test,
      x_subject_train, x_subject_val, x_subject_test, y_train, y_val, y_test, 
-     x_subject_test, scaler_cgm, scaler_other, scaler_y) = pl_split(df_pl)
+     x_class_train, x_class_val, x_class_test, y_class_train, y_class_val, y_class_test,
+     patient_tendencies, test_subjects, scaler_cgm, scaler_other, scaler_y, scaler_class) = pl_split(df_pl)
 
 # Mostrar información sobre los datos
 cprint("\n==== INFORMACIÓN DE DATOS ====", 'cyan', 'bold')
