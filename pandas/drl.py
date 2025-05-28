@@ -730,6 +730,3 @@ else:
 
 plot_evaluation(y_test, y_pred_ppo, y_rule, subject_test, scaler_y)
 
-
-
-# %%
