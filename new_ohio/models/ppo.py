@@ -813,6 +813,17 @@ def plot_test_results(
         logging.error(f"Subjects: {subjects if 'subjects' in locals() else 'Not created'}")
         logging.error(f"MAEs: {maes if 'maes' in locals() else 'Not created'}")
 
+def plot_overall_mae(mae: float, output_dir: str):
+    """Plot a single bar for overall MAE."""
+    plt.figure(figsize=(4, 6))
+    plt.bar(['Overall MAE'], [mae], color='skyblue')
+    plt.ylabel('Mean Absolute Error')
+    plt.title('Overall MAE')
+    plt.ylim(0, max(2, mae * 1.2))
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/overall_mae.png")
+    plt.close()
+
 def main():
     """Main function to train and evaluate PPO agent."""
     # Hardcoded parameters
@@ -820,7 +831,7 @@ def main():
     test_dirs = ['new_ohio/processed_data/test']
     output_dir = 'new_ohio/models/output'
     tensorboard_log = 'new_ohio/models/runs/ppo_ohio'
-    total_timesteps = 500_000  # Increased from 200_000
+    total_timesteps = 300_000
     n_envs = 4
     
     # Create output directories
@@ -835,9 +846,9 @@ def main():
         tensorboard_log=tensorboard_log,
         total_timesteps=total_timesteps,
         n_envs=n_envs,
-        learning_rate=0.0001,  # Optimized learning rate
+        learning_rate=5e-5,  # Lower learning rate
         batch_size=128,  # Increased batch size
-        net_arch=[128, 128],  # Deeper network
+        net_arch=[256, 256, 128],  # Deeper and wider network
         gamma=0.99,
         n_steps=2048,
         n_epochs=10
@@ -858,8 +869,6 @@ def main():
             model_path=f"{output_dir}/ppo_ohio_final",
             preprocessed_data_path=test_file
         )
-        
-        # Calculate comprehensive metrics
         metrics = evaluate_metrics(results['predictions'], results['true_values'])
         
         # Print evaluation results
@@ -989,7 +998,11 @@ def main():
         # Plot results
         logging.info("Generating plots...")
         plot_training(tensorboard_log, output_dir)
-        plot_test_results(results, output_dir)
+        # Only plot per-subject MAE if results is a subject-to-mae dict
+        if isinstance(results, dict) and all(isinstance(v, (float, np.floating)) for v in results.values()):
+            plot_test_results(results, output_dir)
+        elif 'mae' in results:
+            plot_overall_mae(results['mae'], output_dir)
     else:
         logging.warning("No test data found. Skipping evaluation and plotting.")
         logging.info("To evaluate the model, please ensure test data exists at:")

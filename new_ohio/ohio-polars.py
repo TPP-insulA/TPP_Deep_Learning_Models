@@ -17,6 +17,7 @@ import matplotlib.dates as mdates
 from scipy import stats
 from sklearn.linear_model import TheilSenRegressor
 from sklearn.metrics import r2_score
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -140,35 +141,27 @@ def clip_and_normalize_time(dt: datetime) -> float:
 
 def load_data(data_dir: str) -> Dict[str, pl.DataFrame]:
     """
-    Load and parse XML files from OhioT1DM dataset.
+    Load data from XML files in the specified directory.
     
     Args:
-        data_dir: Path to the data directory
+        data_dir: Directory containing XML files
         
     Returns:
-        Dictionary containing DataFrames for each data type
+        Dictionary mapping data types to DataFrames
     """
-    data = {}
-    xml_files = glob.glob(f"{data_dir}/*.xml")
-    logging.info(f"Found {len(xml_files)} XML files in {data_dir}")
+    logging.info(f"Loading data from {data_dir}")
     
-    # Define expected data types
-    expected_types = {
-        'glucose_level', 'bolus', 'meal', 'basal', 'temp_basal', 
-        'exercise', 'sleep', 'basis_heart_rate', 'basis_gsr', 
-        'basis_skin_temperature', 'basis_air_temperature', 
-        'basis_steps', 'acceleration', 'work', 'activity'
-    }
+    # Dictionary to store DataFrames for each data type
+    data_dict = {}
     
-    for xml_file in xml_files:
-        logging.info(f"Processing {xml_file}")
+    # Process each XML file
+    for xml_file in glob.glob(os.path.join(data_dir, "*.xml")):
         try:
             tree = ET.parse(xml_file)
             root = tree.getroot()
             
-            # Get subject ID from <patient> tag
-            patient_elem = root.find('patient')
-            subject_id = patient_elem.attrib['id'] if patient_elem is not None else Path(xml_file).stem.split('-')[0]
+            # Get subject ID from filename
+            subject_id = os.path.basename(xml_file).split('.')[0]
             
             for data_type_elem in root:
                 data_type = data_type_elem.tag
@@ -188,17 +181,19 @@ def load_data(data_dir: str) -> Dict[str, pl.DataFrame]:
                     timestamp_cols = [col for col in df.columns if any(ts in col.lower() for ts in ['ts', 'time', 'date', 'begin', 'end'])]
                     for col in timestamp_cols:
                         try:
-                            # Convert to datetime[ns] for consistency
+                            # First parse to datetime
                             df = df.with_columns(pl.col(col).str.strptime(pl.Datetime('ns')).alias("Timestamp"))
+                            
+                            # Handle timezone if specified
                             if CONFIG["timezone"] != "UTC":
                                 df = df.with_columns(
                                     pl.col("Timestamp")
                                     .dt.replace_time_zone(CONFIG["timezone"])
                                     .dt.cast_time_zone("UTC")
                                 )
-                            # Verify timestamp type
-                            if df['Timestamp'].dtype != pl.Datetime('ns'):
-                                df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
+                            
+                            # Ensure timestamp is in ns units
+                            df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
                             break
                         except Exception as e:
                             logging.warning(f"Failed to parse timestamp column {col}: {e}")
@@ -210,11 +205,13 @@ def load_data(data_dir: str) -> Dict[str, pl.DataFrame]:
                             try:
                                 df = df.with_columns(pl.col(col).cast(pl.Float64))
                             except:
-                                pass
+                                pass  # Keep as string if conversion fails
                     
-                    if data_type not in data:
-                        data[data_type] = []
-                    data[data_type].append(df)
+                    # Add to data dictionary
+                    if data_type not in data_dict:
+                        data_dict[data_type] = df
+                    else:
+                        data_dict[data_type] = pl.concat([data_dict[data_type], df])
                     
                     logging.info(f"Processed {data_type} data: {df.shape} rows")
         
@@ -222,24 +219,11 @@ def load_data(data_dir: str) -> Dict[str, pl.DataFrame]:
             logging.error(f"Error processing {xml_file}: {e}")
             continue
     
-    # Concatenate DataFrames for each data type
-    for data_type in data:
-        if data[data_type]:
-            data[data_type] = pl.concat(data[data_type])
-            # Ensure all timestamps are datetime[ns]
-            if 'Timestamp' in data[data_type].columns:
-                data[data_type] = data[data_type].with_columns(
-                    pl.col('Timestamp').cast(pl.Datetime('ns'))
-                )
-                # Verify timestamp type after concatenation
-                if data[data_type]['Timestamp'].dtype != pl.Datetime('ns'):
-                    logging.warning(f"Timestamp type mismatch after concatenation for {data_type}: {data[data_type]['Timestamp'].dtype}")
-                    data[data_type] = data[data_type].with_columns(
-                        pl.col('Timestamp').cast(pl.Datetime('ns'))
-                    )
-            logging.info(f"Final {data_type} shape: {data[data_type].shape}")
+    # Log final shapes
+    for data_type, df in data_dict.items():
+        logging.info(f"Final {data_type} shape: {df.shape}")
     
-    return data
+    return data_dict
 
 def preprocess_cgm(cgm_df: pl.DataFrame) -> pl.DataFrame:
     """
@@ -426,22 +410,15 @@ def join_signals(data: Dict[str, pl.DataFrame]) -> pl.DataFrame:
             continue
     
     # Fill nulls appropriately
-    numeric_cols = [col for col, dtype in zip(df.columns, df.dtypes) 
-                   if dtype in (pl.Float32, pl.Float64)]
-    
-    # No llenamos los valores nulos de work, sleep y activity
-    optional_cols = {'work_intensity', 'sleep_quality', 'activity_intensity'}
-    numeric_cols = [col for col in numeric_cols if col not in optional_cols]
+    numeric_cols = [col for col in df.columns 
+                   if col not in ['Timestamp', 'SubjectID'] and 
+                   df[col].dtype in (pl.Float32, pl.Float64)]
     
     df = df.with_columns([
-        pl.col(col).fill_null(0) for col in numeric_cols
+        pl.col(col).fill_null(0.0) for col in numeric_cols
     ])
     
-    # Verify timestamp column is valid
-    if not df['Timestamp'].dtype == pl.Datetime('ns'):
-        logging.error(f"Timestamp column is not in the correct format after joining: {df['Timestamp'].dtype}")
-        df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
-    
+    logging.info(f"Completed joining signals. Final shape: {df.shape}")
     return df
 
 def feature_engineering(df: pl.DataFrame) -> pl.DataFrame:
@@ -632,7 +609,7 @@ def plot_glucose_boxplot(cgm_df: pl.DataFrame, df_final: pl.DataFrame, save_path
     before_flat = np.concatenate(before) if before else np.array([])
     after_flat = np.concatenate(after) if after else np.array([])
     plt.figure(figsize=(10, 6))
-    plt.boxplot([before_flat, after_flat], labels=["Before", "After"])
+    plt.boxplot([before_flat, after_flat], tick_labels=["Before", "After"])
     plt.title('Glucose Levels 30 min Before and After Bolus Events')
     plt.xlabel('Event Window')
     plt.ylabel('Glucose (mg/dL)')
@@ -750,10 +727,10 @@ def generate_windows(df: pl.DataFrame, window_size: int = CONFIG["window_steps"]
 
 def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
     """
-    Extract features for each bolus event.
+    Extract features from the joined DataFrame.
     
     Args:
-        df: DataFrame with CGM windows and basic features
+        df: Joined DataFrame
         meal_df: Optional DataFrame with meal data
         
     Returns:
@@ -766,14 +743,18 @@ def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -
         ((pl.col('Timestamp').dt.hour() * 60 + pl.col('Timestamp').dt.minute()) / (24 * 60)).alias('hour_of_day')
     ])
     
-    # Get last CGM value as bg_input
-    df = df.with_columns([
-        pl.col('cgm_window').list.get(-1).alias('bg_input')
-    ])
+    # Get last CGM value as bg_input - handle both list and array types
+    if 'cgm_window' in df.columns:
+        df = df.with_columns([
+            pl.when(pl.col('cgm_window').list.len() > 0)
+            .then(pl.col('cgm_window').list.get(-1))
+            .otherwise(0.0)
+            .alias('bg_input')
+        ])
     
     # Add meal features if available
     if meal_df is not None:
-        # Ensure timestamps are in the same format
+        # Ensure timestamps are in the same format (nanoseconds)
         meal_df = meal_df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
         df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
         
@@ -785,7 +766,6 @@ def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -
             bolus_time = row['Timestamp']
             
             # Look for meals within 1 hour after the bolus
-            # Since boluses are typically administered before meals
             start_time = bolus_time
             end_time = bolus_time + timedelta(hours=1)
             
@@ -801,11 +781,12 @@ def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -
                     (pl.col('Timestamp') - bolus_time).alias('time_diff')
                 ]).sort('time_diff')
                 
-                closest_meal = meals_in_window.row(0)
+                # Use .to_dicts()[0] to get a dict
+                closest_meal = meals_in_window.to_dicts()[0]
                 matched_meals.append({
                     'Timestamp': bolus_time,
-                    'meal_carbs': closest_meal['carbs'],
-                    'meal_time_diff': closest_meal['time_diff'].total_seconds() / 60,  # in minutes
+                    'meal_carbs': closest_meal.get('carbs', 0.0),
+                    'meal_time_diff': closest_meal.get('time_diff', None).total_seconds() / 60 if closest_meal.get('time_diff', None) is not None else None,  # in minutes
                     'meals_in_window': meals_in_window.height  # Number of meals found in window
                 })
             else:
@@ -818,6 +799,10 @@ def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -
         
         # Create DataFrame from matched meals
         meals_df = pl.DataFrame(matched_meals)
+        
+        # Ensure Timestamp is pl.Datetime('ns') in both DataFrames before join
+        meals_df = meals_df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
+        df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime('ns')))
         
         # Join with main DataFrame
         df = df.join(
@@ -847,42 +832,36 @@ def extract_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] = None) -
         
     else:
         df = df.with_columns([
-            pl.lit(0.0).alias('carb_input'),
+            pl.lit(0.0).alias('meal_carbs'),
             pl.lit(0.0).alias('meal_time_diff'),
             pl.lit(0.0).alias('meal_time_diff_hours'),
             pl.lit(0.0).alias('has_meal'),
             pl.lit(0).alias('meals_in_window')
         ])
     
-    # Clip values to clinical ranges
-    df = df.with_columns([
-        pl.col('carb_input').clip(CONFIG['min_carbs'], CONFIG['max_carbs']),
-        pl.col('bg_input').clip(CONFIG['min_bg'], CONFIG['max_bg']),
-        pl.col('bolus').clip(CONFIG['min_insulin'], CONFIG['max_insulin'])
-    ])
-    
-    # Calculate insulin-to-carb ratio and insulin sensitivity factor
-    df = df.with_columns([
-        (pl.when(pl.col('bolus') > 0)
-         .then(pl.col('carb_input') / pl.col('bolus'))
-         .otherwise(0.0)
-         .clip(CONFIG['min_icr'], CONFIG['max_icr'])).alias('insulin_carb_ratio'),
-        (pl.when(pl.col('bolus') > 0)
-         .then((pl.col('bg_input') - 100) / pl.col('bolus'))
-         .otherwise(0.0)
-         .clip(CONFIG['min_isf'], CONFIG['max_isf'])).alias('insulin_sensitivity_factor')
-    ])
-    
-    # Handle optional parameters (work, sleep, activity)
+    # Normalize optional features
     optional_features = ['work_intensity', 'sleep_quality', 'activity_intensity']
     for feature in optional_features:
         if feature in df.columns:
-            # Keep optional values as None instead of 0
+            # Normalize only non-null values
             df = df.with_columns([
-                pl.col(feature).fill_null(None)
+                pl.when(pl.col(feature).is_not_null())
+                .then(pl.col(feature) / CONFIG[f'max_{feature}'])  # Normalize to [0,1]
+                .otherwise(None)
+                .alias(feature)
             ])
     
-    logging.info(f"Extracted features. Shape: {df.shape}")
+    # Fill any remaining NaN or infinite values with 0 (except optional features)
+    numeric_cols = [col for col, dtype in zip(df.columns, df.dtypes) 
+                   if dtype in (pl.Float32, pl.Float64) and col not in optional_features]
+    df = df.with_columns([
+        pl.when(pl.col(col).is_finite())
+        .then(pl.col(col))
+        .otherwise(0.0)
+        for col in numeric_cols
+    ])
+    
+    logging.info(f"Completed feature transformations. Shape: {df.shape}")
     return df
 
 def transform_features(df: pl.DataFrame) -> pl.DataFrame:
