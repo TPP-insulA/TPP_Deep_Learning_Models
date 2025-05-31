@@ -115,14 +115,22 @@ def generate_cgm_window(df: pl.DataFrame, timestamp: datetime,
     
     # Check if we have enough data points
     if window.height < CONFIG["window_steps"]:
+        logging.warning(f"Insufficient data points for window at {timestamp}. Found {window.height}, need {CONFIG['window_steps']}")
         return None
         
-    # Get the last window_steps points
-    values = window.tail(CONFIG["window_steps"]).get_column("value").to_numpy()
+    # Get the last window_steps points and ensure float64 type
+    values = window.tail(CONFIG["window_steps"]).get_column("value").cast(pl.Float64).to_numpy()
     
     # Check for missing values
     if np.any(np.isnan(values)):
+        logging.warning(f"Found NaN values in window at {timestamp}")
         return None
+    
+    # Ensure the array is float64
+    values = values.astype(np.float64)
+    
+    # Log window statistics
+    logging.debug(f"Generated window at {timestamp}: mean={np.mean(values):.2f}, std={np.std(values):.2f}, shape={values.shape}")
         
     return values
 
@@ -876,48 +884,70 @@ def transform_features(df: pl.DataFrame) -> pl.DataFrame:
     """
     logging.info("Applying feature transformations")
     
-    # Log transform skewed variables
-    log_cols = ['carb_input', 'bg_input', 'bolus', 'insulin_carb_ratio', 'insulin_sensitivity_factor']
-    for col in log_cols:
-        if col in df.columns:
+    def log1p_array(x):
+        """Apply log1p transformation to array data."""
+        try:
+            if isinstance(x, (list, np.ndarray)):
+                x = np.array(x, dtype=np.float64)
+                if np.any(np.isnan(x)) or np.any(np.isinf(x)):
+                    logging.warning("Found NaN or inf values in array, replacing with zeros")
+                    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+                return np.log1p(x).tolist()
+            elif isinstance(x, (int, float)):
+                # Handle single float/int values
+                return np.log1p(float(x))
+            else:
+                logging.error(f"Unexpected type in log1p_array: {type(x)}, value: {x}")
+                return 0.0
+        except Exception as e:
+            logging.error(f"Error in log1p_array: {str(e)}, type: {type(x)}, value: {x}")
+            return 0.0
+    
+    # Process CGM windows if present
+    if 'cgm_window' in df.columns:
+        logging.info("Processing CGM windows")
+        try:
+            # Convert CGM windows to individual columns
+            window_size = CONFIG["window_steps"]
+            cgm_cols = [f'cgm_{i}' for i in range(window_size)]
+            
+            # Extract CGM values into separate columns
             df = df.with_columns([
-                pl.when(pl.col(col) <= 0)
-                .then(0.0)
-                .otherwise(pl.col(col))
-                .alias(f'{col}_log')
+                pl.col('cgm_window').list.get(i).alias(f'cgm_{i}')
+                for i in range(window_size)
             ])
-            df = df.with_columns([
-                pl.col(f'{col}_log').log1p().alias(f'{col}_log')
-            ])
+            
+            # Apply log1p transformation to each CGM column with explicit return dtype
+            for col in cgm_cols:
+                df = df.with_columns([
+                    pl.col(col).map_elements(log1p_array, return_dtype=pl.Float64).alias(f'{col}_log')
+                ])
+            
+            # Calculate glucose trend and variability
+            if all(col in df.columns for col in cgm_cols):
+                df = df.with_columns([
+                    # Trend: difference between last and first value
+                    (pl.col('cgm_23') - pl.col('cgm_0')).alias('glucose_trend'),
+                    # Variability: standard deviation
+                    pl.concat_list([pl.col(col) for col in cgm_cols]).list.std().alias('glucose_variability')
+                ])
+            
+            # Drop original CGM window column
+            df = df.drop('cgm_window')
+            logging.info("Successfully processed CGM windows")
+            
+        except Exception as e:
+            logging.error(f"Error processing CGM windows: {str(e)}")
+            # Keep original data if processing fails
+            pass
     
-    # Expand CGM window into separate columns
-    df = df.with_columns([
-        pl.col('cgm_window')
-        .list.eval(
-            pl.when(pl.element().is_finite())
-            .then(pl.element().log1p())
-            .otherwise(0.0)
-        )
-        .alias('cgm_window_log')
-    ])
-    
-    # Create individual CGM columns
-    for i in range(CONFIG['window_steps']):
-        df = df.with_columns([
-            pl.col('cgm_window_log').list.get(i).alias(f'cgm_{i}')
-        ])
-    
-    # Drop original window columns
-    df = df.drop(['cgm_window', 'cgm_window_log'])
-    
-    # Normalizar parámetros opcionales si existen
+    # Normalize optional features if they exist
     optional_features = ['work_intensity', 'sleep_quality', 'activity_intensity']
     for feature in optional_features:
         if feature in df.columns:
-            # Normalizar solo los valores no nulos
             df = df.with_columns([
                 pl.when(pl.col(feature).is_not_null())
-                .then(pl.col(feature) / CONFIG[f'max_{feature}'])  # Normalizar a [0,1]
+                .then(pl.col(feature) / CONFIG[f'max_{feature}'])
                 .otherwise(None)
                 .alias(feature)
             ])

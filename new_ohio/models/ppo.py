@@ -72,7 +72,7 @@ class OhioT1DMEnv(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(32,),  # 24 CGM + 8 features
+            shape=(34,),  # 24 CGM + 8 features + 2 nuevas
             dtype=np.float32
         )
         
@@ -93,45 +93,69 @@ class OhioT1DMEnv(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
         Execute one time step within the environment.
-        
-        Args:
-            action: Predicted bolus dose
-            
-        Returns:
-            observation: Next observation
-            reward: Reward for the current step
-            terminated: Whether episode is done
-            truncated: Whether episode was truncated
-            info: Additional information
+        Enhanced reward function that:
+        1. Heavily penalizes overdosing
+        2. Moderately penalizes underdosing
+        3. Rewards predictions within safe range
+        4. Considers current glucose levels
         """
-        # Get true bolus for current timestep
         true_bolus = self.df_windows['bolus'][self.current_idx]
+        current_cgm = self.df_windows['cgm_0'][self.current_idx]  # Current glucose level
         
-        # Calculate reward (negative absolute error)
-        reward = -abs(action[0] - true_bolus)
+        # Calculate error
+        error = action[0] - true_bolus
+        abs_error = abs(error)
+        
+        # Base reward components
+        if error > 0:  # Overdose
+            # Heavily penalize overdosing, especially at low glucose levels
+            glucose_factor = max(0.5, 1.0 - (current_cgm - 70) / 200)  # More penalty at lower glucose
+            reward = -3 * (error ** 2) * glucose_factor
+        else:  # Underdose
+            # Moderate penalty for underdosing
+            reward = -abs_error
+        
+        # Safety bonus
+        if abs_error <= (0.2 * true_bolus):  # Within ±20% of true dose
+            reward += 2.0  # Significant bonus for safe predictions
+        
+        # Glucose level consideration
+        if current_cgm < 70:  # Low glucose
+            reward -= abs_error * 2  # Extra penalty for errors during hypoglycemia
+        elif current_cgm > 250:  # High glucose
+            reward -= abs_error  # Extra penalty for errors during hyperglycemia
         
         # Move to next timestep
         self.current_idx += 1
         terminated = self.current_idx >= self.episode_length
-        truncated = False  # We don't use truncation in this environment
+        truncated = False
         
         # Get next observation
         obs = self._get_observation() if not terminated else np.zeros_like(self._get_observation())
-        
         info = {
             'true_bolus': true_bolus,
-            'predicted_bolus': action[0]
+            'predicted_bolus': action[0],
+            'current_cgm': current_cgm
         }
-        
         return obs, reward, terminated, truncated, info
     
     def _get_observation(self) -> np.ndarray:
         """Construct observation vector from current timestep."""
         if self.current_idx >= len(self.df_windows):
-            return np.zeros(32, dtype=np.float32)
+            return np.zeros(34, dtype=np.float32)  # Fixed dimension
             
         # Get CGM values for the current timestep
         cgm_values = [self.df_windows[f'cgm_{i}'][self.current_idx] for i in range(24)]
+        # Tendencia de glucosa
+        try:
+            cgm_trend = self.df_windows['cgm_trend'][self.current_idx]
+        except Exception:
+            cgm_trend = 0.0
+        # Variabilidad de glucosa
+        try:
+            cgm_std = self.df_windows['cgm_std'][self.current_idx]
+        except Exception:
+            cgm_std = 0.0
         
         # Get additional features
         hour_of_day = self.df_windows['hour_of_day'][self.current_idx]
@@ -158,9 +182,10 @@ class OhioT1DMEnv(gym.Env):
         
         # Combine into observation vector
         obs = np.concatenate([
-            cgm_values,
-            [hour_of_day, bolus_log, carb_log, iob_log,
-             meal_carbs_log, meal_time_diff, has_meal, meals_in_window]
+            cgm_values,  # 24 values
+            [hour_of_day, bolus_log, carb_log, iob_log,  # 4 values
+             meal_carbs_log, meal_time_diff, has_meal, meals_in_window,  # 4 values
+             cgm_trend, cgm_std]  # 2 values
         ])
         
         return obs.astype(np.float32)
@@ -186,7 +211,7 @@ class OhioT1DMInferenceEnv(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(32,),  # 24 CGM + 8 features
+            shape=(34,),  # 24 CGM + 8 features + 2 nuevas
             dtype=np.float32
         )
         
@@ -197,7 +222,7 @@ class OhioT1DMInferenceEnv(gym.Env):
         """Reset environment with a new observation."""
         super().reset(seed=seed)
         if self.current_observation is None:
-            self.current_observation = np.zeros(32, dtype=np.float32)
+            self.current_observation = np.zeros(34, dtype=np.float32)  # Fixed dimension
         return self.current_observation, {}
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
@@ -235,7 +260,7 @@ def prepare_observation(
         meals_in_window: Number of meals in the window
         
     Returns:
-        Observation vector of 32 elements
+        Observation vector of 34 elements
     """
     # Process CGM values
     cgm_processed = []
@@ -259,11 +284,20 @@ def prepare_observation(
     # Process meal-related features
     meal_carbs_log = np.log1p(meal_carbs)
     
+    # Calculate CGM trend and std if we have enough values
+    if len(cgm_values) >= 2:
+        cgm_trend = np.polyfit(range(len(cgm_values)), cgm_values, 1)[0]
+        cgm_std = np.std(cgm_values)
+    else:
+        cgm_trend = 0.0
+        cgm_std = 0.0
+    
     # Combine into observation vector
     obs = np.concatenate([
-        cgm_processed,
-        [hour_of_day, bolus_log, carb_log, iob_log,
-         meal_carbs_log, meal_time_diff, has_meal, meals_in_window]
+        cgm_processed,  # 24 values
+        [hour_of_day, bolus_log, carb_log, iob_log,  # 4 values
+         meal_carbs_log, meal_time_diff, has_meal, meals_in_window,  # 4 values
+         cgm_trend, cgm_std]  # 2 values
     ])
     
     return obs.astype(np.float32)
@@ -410,23 +444,7 @@ def train_with_hyperparameters(
     n_epochs: int = 10
 ) -> PPO:
     """
-    Train PPO agent with customizable hyperparameters.
-    
-    Args:
-        train_dirs: List of training data directories
-        output_dir: Directory to save model
-        tensorboard_log: Directory for TensorBoard logs
-        total_timesteps: Total training timesteps
-        n_envs: Number of parallel environments
-        learning_rate: Learning rate for optimizer
-        batch_size: Batch size for training
-        net_arch: Network architecture
-        gamma: Discount factor
-        n_steps: Number of steps per update
-        n_epochs: Number of epochs per update
-        
-    Returns:
-        Trained PPO model
+    Train PPO agent with optimized hyperparameters for insulin dosing.
     """
     # Load training data
     envs = []
@@ -457,44 +475,44 @@ def train_with_hyperparameters(
     # Create evaluation environment
     eval_env = DummyVecEnv([make_env(df_windows, df_final, 0)])
     
-    # Create evaluation callback
+    # Create evaluation callback with more frequent evaluation
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=output_dir,
         log_path=output_dir,
-        eval_freq=10000,
+        eval_freq=5000,  # More frequent evaluation
         deterministic=True,
         render=False
     )
     
-    # Create model with custom hyperparameters
+    # Create model with optimized hyperparameters
     model = PPO(
         'MlpPolicy',
         vec_env,
-        learning_rate=learning_rate,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        n_epochs=n_epochs,
-        gamma=gamma,
+        learning_rate=1e-5,  # Lower learning rate for stability
+        n_steps=4096,  # Increased steps for better exploration
+        batch_size=256,  # Larger batch size
+        n_epochs=20,  # More epochs per update
+        gamma=0.99,
         gae_lambda=0.95,
-        clip_range=0.2,
+        clip_range=0.1,  # Tighter clipping for more stable updates
         clip_range_vf=None,
         normalize_advantage=True,
-        ent_coef=0.01,
-        vf_coef=0.5,
-        max_grad_norm=0.5,
+        ent_coef=0.02,  # Increased entropy coefficient for better exploration
+        vf_coef=0.8,  # Increased value function coefficient
+        max_grad_norm=0.3,  # Reduced gradient clipping for stability
         use_sde=False,
         sde_sample_freq=-1,
-        target_kl=None,
+        target_kl=0.015,  # Added KL divergence target
         tensorboard_log=tensorboard_log,
         policy_kwargs=dict(
-            net_arch=[dict(pi=net_arch, vf=net_arch)]
+            net_arch=[dict(pi=[256, 256, 128], vf=[256, 256, 128])]  # Deeper network
         ),
         verbose=1
     )
     
     # Train model
-    logging.info("Starting training with custom hyperparameters...")
+    logging.info("Starting training with optimized hyperparameters...")
     model.learn(
         total_timesteps=total_timesteps,
         callback=eval_callback,
@@ -777,7 +795,7 @@ def plot_test_results(
     try:
         # Convert results to numpy arrays with consistent types
         subjects = np.array(list(results.keys()))
-        maes = np.array(list(results.values()), dtype=np.float64)
+        maes = np.array(list(results.values()), dtype=np.float64);
         
         plt.figure(figsize=(10, 6))
         bars = plt.bar(subjects, maes)
@@ -831,8 +849,8 @@ def main():
     test_dirs = ['new_ohio/processed_data/test']
     output_dir = 'new_ohio/models/output'
     tensorboard_log = 'new_ohio/models/runs/ppo_ohio'
-    total_timesteps = 300_000
-    n_envs = 4
+    total_timesteps = 500_000  # Increased training time
+    n_envs = 8  # Increased number of environments
     
     # Create output directories
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -846,12 +864,12 @@ def main():
         tensorboard_log=tensorboard_log,
         total_timesteps=total_timesteps,
         n_envs=n_envs,
-        learning_rate=5e-5,  # Lower learning rate
-        batch_size=128,  # Increased batch size
-        net_arch=[256, 256, 128],  # Deeper and wider network
+        learning_rate=1e-5,  # Lower learning rate
+        batch_size=256,  # Larger batch size
+        net_arch=[256, 256, 128],  # Deeper network
         gamma=0.99,
-        n_steps=2048,
-        n_epochs=10
+        n_steps=4096,  # More steps per update
+        n_epochs=20  # More epochs per update
     )
     
     # Evaluate model if test data exists
