@@ -97,8 +97,8 @@ def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.
     -----------
     params : Dict
         Parámetros del modelo
-    apply_fn : Callable
-        Función para aplicar el modelo
+    model : nn.Module o callable
+        Modelo a utilizar o función apply del modelo
     x_cgm : jnp.ndarray
         Datos CGM
     x_other : jnp.ndarray
@@ -111,11 +111,21 @@ def mse_loss(params: Dict, apply_fn: Callable, x_cgm: jnp.ndarray, x_other: jnp.
     jnp.ndarray
         Valor de pérdida MSE
     """
-    # Realizar predicción
-    y_pred = apply_fn(params, x_cgm, x_other).flatten()
+    # Crear PRNG para inferencia
+    dropout_rng = jax.random.PRNGKey(0)  # No afecta en modo deterministic/eval
+    
+    # Realizar predicción - comprobar si model es una función o un objeto con método apply
+    if hasattr(model, 'apply'):
+        y_pred = model.apply(params, x_cgm, x_other, rngs={'dropout': dropout_rng}, training=False).flatten()
+    else:
+        # Si es una función (como state.apply_fn), llamarla directamente
+        y_pred = model(params, x_cgm, x_other, rngs={'dropout': dropout_rng}, training=False).flatten()
     
     # Calcular error cuadrático medio
     return jnp.mean(jnp.square(y_pred - y))
+
+# Versión JIT-compilada de mse_loss
+mse_loss_jit = jit(mse_loss, static_argnames=['model'])
 
 
 @jit
@@ -196,11 +206,20 @@ def eval_step(state: train_state.TrainState,
     Dict[str, jnp.ndarray]
         Métricas de evaluación
     """
-    # Calcular pérdida
-    loss = mse_loss(state.params, state.apply_fn, x_cgm, x_other, y)
+    # Usar una función local para calcular la pérdida sin pasar el modelo directamente
+    def loss_fn(params):
+        return mse_loss_jit(params, state.apply_fn, x_cgm, x_other, y)
     
-    # Calcular predicciones
-    y_pred = state.apply_fn(state.params, x_cgm, x_other).flatten()
+    # Calcular pérdida
+    loss = loss_fn(state.params)
+    
+    # Crear un PRNG para la evaluación (modo deterministic)
+    eval_rng = jax.random.PRNGKey(0)
+    
+    # Calcular predicciones con rngs explícito
+    y_pred = state.apply_fn(state.params, x_cgm, x_other, 
+                           rngs={'dropout': eval_rng},
+                           training=False).flatten()
     
     # Calcular error absoluto medio
     mae = jnp.mean(jnp.abs(y_pred - y))
@@ -238,7 +257,13 @@ def _setup_training(model: nn.Module,
     x_cgm_shape = (1,) + x_cgm_train.shape[1:]
     x_other_shape = (1,) + x_other_train.shape[1:]
     
-    params = model.init(init_rng, jnp.ones(x_cgm_shape), jnp.ones(x_other_shape))
+    # Separar un PRNG específico para dropout
+    init_rng, dropout_rng = random.split(init_rng)
+    
+    # Inicializar modelo con PRNG para dropout
+    params = model.init({'params': init_rng, 'dropout': dropout_rng}, 
+                        jnp.ones(x_cgm_shape), jnp.ones(x_other_shape),
+                        training=True)
     
     # Configurar tasa de aprendizaje con decaimiento
     schedule_fn = optax.exponential_decay(
@@ -757,6 +782,110 @@ def cross_validate_model(create_model_fn: Callable,
     
     return mean_scores, std_scores
 
+
+def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray], 
+                             weights: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Combina predicciones de múltiples modelos usando promedio ponderado.
+    
+    Parámetros:
+    -----------
+    predictions_dict : Dict[str, np.ndarray]
+        Diccionario con predicciones de cada modelo
+    weights : Optional[np.ndarray], opcional
+        Pesos para cada modelo. Si es None, usa promedio simple (default: None)
+        
+    Retorna:
+    --------
+    np.ndarray
+        Predicciones combinadas del ensemble
+    """
+    all_preds = np.stack(list(predictions_dict.values()))
+    if weights is None:
+        weights = np.ones(len(predictions_dict)) / len(predictions_dict)
+    return np.average(all_preds, axis=0, weights=weights)
+
+
+def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray], 
+                            y_true: np.ndarray) -> np.ndarray:
+    """
+    Optimiza pesos del ensemble usando optimización.
+    
+    Parámetros:
+    -----------
+    predictions_dict : Dict[str, np.ndarray]
+        Diccionario con predicciones de cada modelo
+    y_true : np.ndarray
+        Valores objetivo verdaderos
+        
+    Retorna:
+    --------
+    np.ndarray
+        Pesos optimizados para cada modelo
+    """
+    def objective(weights):
+        # Normalizar pesos
+        weights = weights / np.sum(weights)
+        # Obtener predicción del ensemble
+        ensemble_pred = create_ensemble_prediction(predictions_dict, weights)
+        # Calcular error
+        return mean_squared_error(y_true, ensemble_pred)
+    
+    n_models = len(predictions_dict)
+    initial_weights = np.ones(n_models) / n_models
+    bounds = [(0, 1) for _ in range(n_models)]
+    
+    result = minimize(
+        objective,
+        initial_weights,
+        bounds=bounds,
+        constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+    )
+    
+    return result.x / np.sum(result.x)
+
+
+def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Mejora las características de entrada con características derivadas.
+    
+    Parámetros:
+    -----------
+    x_cgm : np.ndarray
+        Datos CGM
+    x_other : np.ndarray
+        Otras características
+        
+    Retorna:
+    --------
+    Tuple[np.ndarray, np.ndarray]
+        (x_cgm_mejorado, x_other)
+    """
+    # Añadir características derivadas para CGM
+    cgm_diff = np.diff(x_cgm.squeeze(), axis=1)
+    
+    # Ajustar padding según la forma real del array
+    padding = [(0,0) for _ in range(cgm_diff.ndim)]
+    padding[1] = (1,0)  # Añadir padding solo en la segunda dimensión
+    cgm_diff = np.pad(cgm_diff, padding, mode='edge')
+    
+    # Añadir estadísticas móviles
+    window = 5
+    rolling_mean = np.apply_along_axis(
+        lambda x: np.convolve(x, np.ones(window)/window, mode='same'),
+        1, x_cgm.squeeze()
+    )
+    
+    # Concatenar características mejoradas
+    x_cgm_enhanced = np.concatenate([
+        x_cgm,
+        cgm_diff[..., np.newaxis],
+        rolling_mean[..., np.newaxis]
+    ], axis=-1)
+    
+    return x_cgm_enhanced, x_other
+
+
 def predict_model(model_path: str, 
                  model_creator: Callable, 
                  x_cgm: np.ndarray, 
@@ -828,13 +957,13 @@ def predict_model(model_path: str,
 
 def train_multiple_models(model_creators: Dict[str, Callable], 
                          input_shapes: Tuple[Tuple[int, ...], Tuple[int, ...]],
-                         x_cgm_train: np.ndarray, 
+                         x_cgm_train: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_train: np.ndarray, 
                          y_train: np.ndarray,
-                         x_cgm_val: np.ndarray, 
+                         x_cgm_val: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_val: np.ndarray, 
                          y_val: np.ndarray,
-                         x_cgm_test: np.ndarray, 
+                         x_cgm_test: Union[np.ndarray, Tuple[np.ndarray, np.ndarray]], 
                          x_other_test: np.ndarray, 
                          y_test: np.ndarray,
                          models_dir: str = CONST_MODELS) -> Tuple[Dict[str, Dict], Dict[str, np.ndarray], Dict[str, Dict]]:
@@ -847,20 +976,20 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         Diccionario de funciones creadoras de modelos indexadas por nombre
     input_shapes : Tuple[Tuple[int, ...], Tuple[int, ...]]
         Formas de las entradas (CGM, otras)
-    x_cgm_train : np.ndarray
-        Datos CGM de entrenamiento
+    x_cgm_train : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de entrenamiento (o tupla con CGM y otras características)
     x_other_train : np.ndarray
         Otras características de entrenamiento
     y_train : np.ndarray
         Valores objetivo de entrenamiento
-    x_cgm_val : np.ndarray
-        Datos CGM de validación
+    x_cgm_val : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de validación (o tupla con CGM y otras características)
     x_other_val : np.ndarray
         Otras características de validación
     y_val : np.ndarray
         Valores objetivo de validación
-    x_cgm_test : np.ndarray
-        Datos CGM de prueba
+    x_cgm_test : Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Datos CGM de prueba (o tupla con CGM y otras características)
     x_other_test : np.ndarray
         Otras características de prueba
     y_test : np.ndarray
@@ -875,13 +1004,36 @@ def train_multiple_models(model_creators: Dict[str, Callable],
     """
     models_names = list(model_creators.keys())
     
+    # Detectar si los datos CGM vienen como tupla y extraerlos
+    if isinstance(x_cgm_train, tuple) and len(x_cgm_train) == 2:
+        print("Detectada tupla de datos (CGM, otros) - Extrayendo correctamente...")
+        x_cgm_train_actual = x_cgm_train[0]  # Tomar solo el primer elemento
+    else:
+        x_cgm_train_actual = x_cgm_train
+        
+    if isinstance(x_cgm_val, tuple) and len(x_cgm_val) == 2:
+        x_cgm_val_actual = x_cgm_val[0]
+    else:
+        x_cgm_val_actual = x_cgm_val
+        
+    if isinstance(x_cgm_test, tuple) and len(x_cgm_test) == 2:
+        x_cgm_test_actual = x_cgm_test[0]
+    else:
+        x_cgm_test_actual = x_cgm_test
+    
     model_results = []
     for name in models_names:
+        print(f"\nEntrenando modelo {name}...")
+        
+        # Imprimir información de formas
+        print(f"Forma de datos CGM de entrenamiento: {x_cgm_train_actual.shape}")
+        print(f"Forma de otras características de entrenamiento: {x_other_train.shape}")
+        
         result = train_model_sequential(
             model_creators[name], name, input_shapes,
-            x_cgm_train, x_other_train, y_train,
-            x_cgm_val, x_other_val, y_val,
-            x_cgm_test, x_other_test, y_test,
+            x_cgm_train_actual, x_other_train, y_train,
+            x_cgm_val_actual, x_other_val, y_val,
+            x_cgm_test_actual, x_other_test, y_test,
             models_dir
         )
         model_results.append(result)

@@ -34,3 +34,9 @@ tf_transformer.keras
 tf_attention_only.keras
 ## PyTorch
 pt_sarsa.pt
+
+pandas/plots
+**/runs/**
+**/output/**
+!**/output/*.png
+**/results/**

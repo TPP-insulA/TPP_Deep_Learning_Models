@@ -1,0 +1,77 @@
+class CustomCNNLSTMPolicy(BaseFeaturesExtractor):
+    def __init__(self, observation_space, features_dim=128):
+        super(CustomCNNLSTMPolicy, self).__init__(observation_space, features_dim)
+        
+        # Get the dimensions of the observation space
+        self.input_dim = observation_space.shape[0]
+        
+        # Assuming first 24 elements are CGM data
+        self.cgm_length = 24
+        self.other_features_length = self.input_dim - self.cgm_length
+        
+        # CNN for CGM processing
+        self.cnn = nn.Sequential(
+            nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(8)  # Reduce to 8 features
+        )
+        
+        # LSTM for temporal dynamics in CGM
+        self.lstm = nn.LSTM(
+            input_size=32,
+            hidden_size=32,
+            num_layers=1,
+            batch_first=True
+        )
+        
+        # MLP for other features
+        self.other_net = nn.Sequential(
+            nn.Linear(self.other_features_length, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 32),
+            nn.ReLU()
+        )
+        
+        # Combined network
+        self.combined = nn.Sequential(
+            nn.Linear(32*8 + 32, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, features_dim)
+        )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Conv1d)):
+            nn.init.orthogonal_(module.weight.data, gain=np.sqrt(2))
+            if module.bias is not None:
+                module.bias.data.zero_()
+    
+    def forward(self, observations):
+        # Split observations into CGM and other features
+        batch_size = observations.shape[0]
+        cgm_data = observations[:, :self.cgm_length].reshape(batch_size, 1, self.cgm_length)
+        other_data = observations[:, self.cgm_length:]
+        
+        # Process CGM with CNN
+        cgm_features = self.cnn(cgm_data)  # Shape: [batch_size, 32, 8]
+        
+        # Process with LSTM
+        cgm_features = cgm_features.permute(0, 2, 1)  # [batch_size, 8, 32]
+        lstm_out, _ = self.lstm(cgm_features)
+        lstm_features = lstm_out.reshape(batch_size, -1)  # Flatten: [batch_size, 8*32]
+        
+        # Process other features
+        other_features = self.other_net(other_data)
+        
+        # Combine all features
+        combined_features = torch.cat([lstm_features, other_features], dim=1)
+        return self.combined(combined_features)
