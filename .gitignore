@@ -61,3 +61,7 @@ Thumbs.db
 # Local development
 .env
 .env.local
+
+# Ignore all zip files except model files
+*.zip
+!new_ohio/models/output/*.zip
