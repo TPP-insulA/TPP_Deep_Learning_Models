@@ -1,0 +1,1 @@
+web: uvicorn new_ohio.api.predict_insulin:app --host 0.0.0.0 --port $PORT 

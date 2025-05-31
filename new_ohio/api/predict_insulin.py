@@ -1,11 +1,21 @@
 import datetime
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 from stable_baselines3 import PPO
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your mobile app's domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 model = PPO.load("new_ohio/models/output/ppo_ohio.zip")
 
@@ -70,3 +80,8 @@ async def predict_insulin_dose(data: InsulinCalculationRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Add a health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
