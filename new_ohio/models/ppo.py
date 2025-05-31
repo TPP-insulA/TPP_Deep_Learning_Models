@@ -26,168 +26,112 @@ from typing import Any
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class OhioT1DMEnv(gym.Env):
-    """
-    Custom Gym environment for OhioT1DM insulin bolus prediction.
-    
-    Observation:
-        - CGM values (24 timesteps from cgm_0 to cgm_23)
-        - hour_of_day (normalized)
-        - bolus_log1p
-        - carb_input_log1p
-        - insulin_on_board_log1p
-        - meal_carbs_log1p
-        - meal_time_diff_hours
-        - has_meal
-        - meals_in_window
-    
-    Action:
-        - Continuous bolus dose in [0, 30] units
-    
-    Reward:
-        - Negative absolute error between predicted and true bolus
-    """
-    
     def __init__(self, df_windows: pl.DataFrame, df_final: pl.DataFrame):
         super().__init__()
-        
-        # Validate required columns
-        required_cols = ['hour_of_day', 'bolus', 'carb_input'] + [f'cgm_{i}' for i in range(24)]
-        for col in required_cols:
-            if col not in df_windows.columns:
-                raise ValueError(f"Required column '{col}' not found in DataFrame")
-        
         self.df_windows = df_windows
         self.df_final = df_final
         self.current_idx = 0
-        
-        # Define action space (continuous bolus dose)
-        self.action_space = gym.spaces.Box(
-            low=0.0,
-            high=30.0,
-            shape=(1,),
-            dtype=np.float32
-        )
-        
-        # Define observation space
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(34,),  # 24 CGM + 8 features + 2 nuevas
-            dtype=np.float32
-        )
-        
-        # Store current episode data
-        self.current_episode_data = None
-        self.episode_length = 0
-        
-    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None) -> Tuple[np.ndarray, dict]:
-        """Reset environment to start of episode."""
+        self.episode_length = len(df_windows)
+
+        self.action_space = gym.spaces.Box(low=0.0, high=30.0, shape=(1,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(34,), dtype=np.float32)
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
         super().reset(seed=seed)
         self.current_idx = 0
-        self.episode_length = len(self.df_windows)
-        
-        # Get initial observation
         obs = self._get_observation()
-        return obs, {}  # Return empty info dict as required by gymnasium
-    
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """
-        Execute one time step within the environment.
-        Enhanced reward function that:
-        1. Heavily penalizes overdosing
-        2. Moderately penalizes underdosing
-        3. Rewards predictions within safe range
-        4. Considers current glucose levels
-        """
+        return obs, {}
+
+    def step(self, action: np.ndarray):
+        # --- Datos del paso actual ---
         true_bolus = self.df_windows['bolus'][self.current_idx]
-        current_cgm = self.df_windows['cgm_0'][self.current_idx]  # Current glucose level
-        
-        # Calculate error
-        error = action[0] - true_bolus
-        abs_error = abs(error)
-        
-        # Base reward components
-        if error > 0:  # Overdose
-            # Heavily penalize overdosing, especially at low glucose levels
-            glucose_factor = max(0.5, 1.0 - (current_cgm - 70) / 200)  # More penalty at lower glucose
-            reward = -3 * (error ** 2) * glucose_factor
-        else:  # Underdose
-            # Moderate penalty for underdosing
-            reward = -abs_error
-        
-        # Safety bonus
-        if abs_error <= (0.2 * true_bolus):  # Within ±20% of true dose
-            reward += 2.0  # Significant bonus for safe predictions
-        
-        # Glucose level consideration
-        if current_cgm < 70:  # Low glucose
-            reward -= abs_error * 2  # Extra penalty for errors during hypoglycemia
-        elif current_cgm > 250:  # High glucose
-            reward -= abs_error  # Extra penalty for errors during hyperglycemia
-        
-        # Move to next timestep
+        current_cgm = self.df_windows['cgm_0'][self.current_idx]
+        dose = np.round(action[0] * 2) / 2  # Redondear a múltiplos de 0.5
+
+        # --- Componentes del reward ---
+        abs_error = abs(dose - true_bolus)
+        dose_error = dose - true_bolus
+
+        reward = 0.0
+        r_components = {}
+
+        # Penalización base (error absoluto)
+        r_components['abs_error'] = -abs_error
+        reward += r_components['abs_error']
+
+        # Penalización por inacción con CGM muy alta
+        if current_cgm > 250 and dose < 2.0:
+            r_components['inaction_penalty'] = -3.0
+            reward += r_components['inaction_penalty']
+        else:
+            r_components['inaction_penalty'] = 0.0
+
+        # Penalización fuerte por dosis en hipoglucemia
+        if current_cgm < 70 and dose > 0.0:
+            r_components['hypo_penalty'] = -5.0
+            reward += r_components['hypo_penalty']
+        else:
+            r_components['hypo_penalty'] = 0.0
+
+        # Bonus por predicción segura
+        if abs_error <= 0.2 * true_bolus:
+            r_components['safe_bonus'] = 2.0
+            reward += r_components['safe_bonus']
+        else:
+            r_components['safe_bonus'] = 0.0
+
+        # Bonus suave si CGM está en rango y predicción fue razonable
+        if 70 <= current_cgm <= 180 and abs_error < 1.0:
+            r_components['glucose_range_bonus'] = 0.5
+            reward += r_components['glucose_range_bonus']
+        else:
+            r_components['glucose_range_bonus'] = 0.0
+
+        # --- Avanzar en el episodio ---
         self.current_idx += 1
         terminated = self.current_idx >= self.episode_length
         truncated = False
-        
-        # Get next observation
         obs = self._get_observation() if not terminated else np.zeros_like(self._get_observation())
+
         info = {
             'true_bolus': true_bolus,
-            'predicted_bolus': action[0],
-            'current_cgm': current_cgm
+            'predicted_bolus': dose,
+            'current_cgm': current_cgm,
+            'reward_components': r_components
         }
+
         return obs, reward, terminated, truncated, info
-    
+
     def _get_observation(self) -> np.ndarray:
-        """Construct observation vector from current timestep."""
         if self.current_idx >= len(self.df_windows):
-            return np.zeros(34, dtype=np.float32)  # Fixed dimension
-            
-        # Get CGM values for the current timestep
+            return np.zeros(34, dtype=np.float32)
+
         cgm_values = [self.df_windows[f'cgm_{i}'][self.current_idx] for i in range(24)]
-        # Tendencia de glucosa
-        try:
-            cgm_trend = self.df_windows['cgm_trend'][self.current_idx]
-        except Exception:
-            cgm_trend = 0.0
-        # Variabilidad de glucosa
-        try:
-            cgm_std = self.df_windows['cgm_std'][self.current_idx]
-        except Exception:
-            cgm_std = 0.0
-        
-        # Get additional features
         hour_of_day = self.df_windows['hour_of_day'][self.current_idx]
         bolus_log = np.log1p(self.df_windows['bolus'][self.current_idx])
         carb_log = np.log1p(self.df_windows['carb_input'][self.current_idx])
-        
-        # Handle insulin_on_board (use 0.0 if column doesn't exist)
-        try:
-            iob_log = np.log1p(self.df_windows['insulin_on_board'][self.current_idx])
-        except:
-            iob_log = 0.0
+        iob_log = np.log1p(self.df_windows['insulin_on_board'][self.current_idx])
+
+        # Extras con fallback
+        if "meal_carbs" in self.df_windows.columns:
+            meal_carbs = float(self.df_windows["meal_carbs"][self.current_idx])
+        else:
+            meal_carbs = 0.0
             
-        # Handle meal-related features
-        try:
-            meal_carbs_log = np.log1p(self.df_windows['meal_carbs'][self.current_idx])
-            meal_time_diff = self.df_windows['meal_time_diff_hours'][self.current_idx]
-            has_meal = self.df_windows['has_meal'][self.current_idx]
-            meals_in_window = self.df_windows['meals_in_window'][self.current_idx]
-        except:
-            meal_carbs_log = 0.0
-            meal_time_diff = 0.0
-            has_meal = 0.0
-            meals_in_window = 0.0
-        
-        # Combine into observation vector
+        meal_time_diff = self.df_windows.get_column("meal_time_diff_hours").to_numpy()[self.current_idx] if "meal_time_diff_hours" in self.df_windows.columns else 0.0
+        has_meal = self.df_windows.get_column("has_meal").to_numpy()[self.current_idx] if "has_meal" in self.df_windows.columns else 0.0
+        meals_in_window = self.df_windows.get_column("meals_in_window").to_numpy()[self.current_idx] if "meals_in_window" in self.df_windows.columns else 0
+        cgm_trend = self.df_windows.get_column("cgm_trend").to_numpy()[self.current_idx] if "cgm_trend" in self.df_windows.columns else 0.0
+        cgm_std = self.df_windows.get_column("cgm_std").to_numpy()[self.current_idx] if "cgm_std" in self.df_windows.columns else 0.0
+
+        meal_carbs_log = np.log1p(meal_carbs)
+
         obs = np.concatenate([
-            cgm_values,  # 24 values
-            [hour_of_day, bolus_log, carb_log, iob_log,  # 4 values
-             meal_carbs_log, meal_time_diff, has_meal, meals_in_window,  # 4 values
-             cgm_trend, cgm_std]  # 2 values
+            cgm_values,
+            [hour_of_day, bolus_log, carb_log, iob_log,
+            meal_carbs_log, meal_time_diff, has_meal, meals_in_window,
+            cgm_trend, cgm_std]
         ])
-        
         return obs.astype(np.float32)
 
 class OhioT1DMInferenceEnv(gym.Env):
@@ -431,7 +375,7 @@ def make_env(df_windows: pl.DataFrame, df_final: pl.DataFrame, rank: int, seed: 
     return _init
 
 def train_with_hyperparameters(
-    train_dirs: List[str],
+    train_files: List[str],  # <--- CAMBIA AQUÍ
     output_dir: str,
     tensorboard_log: str,
     total_timesteps: int,
@@ -448,19 +392,19 @@ def train_with_hyperparameters(
     """
     # Load training data
     envs = []
-    for data_dir in train_dirs:
+    for file_path in train_files:  # <--- CAMBIA AQUÍ
         try:
-            df_windows = pl.read_parquet(f"{data_dir}/processed_{Path(data_dir).name}.parquet")
-            df_final = pl.read_parquet(f"{data_dir}/processed_{Path(data_dir).name}.parquet")
+            df_windows = pl.read_parquet(file_path)
+            df_final = pl.read_parquet(file_path)
             
-            logging.info(f"Loaded DataFrame from {data_dir}")
+            logging.info(f"Loaded DataFrame from {file_path}")
             logging.info(f"Columns: {df_windows.columns}")
             logging.info(f"Shape: {df_windows.shape}")
             
             env = make_env(df_windows, df_final, len(envs))
             envs.append(env)
         except Exception as e:
-            logging.error(f"Error loading data from {data_dir}: {e}")
+            logging.error(f"Error loading data from {file_path}: {e}")
             continue
     
     if not envs:
@@ -844,189 +788,190 @@ def plot_overall_mae(mae: float, output_dir: str):
 
 def main():
     """Main function to train and evaluate PPO agent."""
-    # Hardcoded parameters
-    train_dirs = ['new_ohio/processed_data/train']
-    test_dirs = ['new_ohio/processed_data/test']
+    # Directorios base
+    train_base_dir = 'new_ohio/processed_data/train'
+    test_base_dir = 'new_ohio/processed_data/test'
     output_dir = 'new_ohio/models/output'
     tensorboard_log = 'new_ohio/models/runs/ppo_ohio'
-    total_timesteps = 500_000  # Increased training time
-    n_envs = 8  # Increased number of environments
-    
-    # Create output directories
+    total_timesteps = 500_000
+    n_envs = 8
+
+    # Buscar todos los archivos parquet en train y test
+    train_files = sorted(glob.glob(f"{train_base_dir}/processed_*.parquet"))
+    test_files = sorted(glob.glob(f"{test_base_dir}/processed_*.parquet"))
+
+    # Pasa la lista de archivos directamente
+    # Crear directorios de salida
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     Path(tensorboard_log).mkdir(parents=True, exist_ok=True)
-    
-    # Train model with optimized hyperparameters
+
+    # Entrenar modelo con los archivos encontrados
     logging.info("Starting training with optimized hyperparameters...")
     model = train_with_hyperparameters(
-        train_dirs=train_dirs,
+        train_files=train_files,  # <--- CAMBIA AQUÍ
         output_dir=output_dir,
         tensorboard_log=tensorboard_log,
         total_timesteps=total_timesteps,
         n_envs=n_envs,
-        learning_rate=1e-5,  # Lower learning rate
-        batch_size=256,  # Larger batch size
-        net_arch=[256, 256, 128],  # Deeper network
+        learning_rate=1e-5,
+        batch_size=256,
+        net_arch=[256, 256, 128],
         gamma=0.99,
-        n_steps=4096,  # More steps per update
-        n_epochs=20  # More epochs per update
+        n_steps=4096,
+        n_epochs=20
     )
-    
-    # Evaluate model if test data exists
+
+    # Evaluar modelo si hay datos de test
     logging.info("Checking test data...")
-    test_data_exists = False
-    for test_dir in test_dirs:
-        test_file = f"{test_dir}/processed_{Path(test_dir).name}.parquet"
-        if Path(test_file).exists():
-            test_data_exists = True
-            break
-    
+    test_data_exists = len(test_files) > 0
+
     if test_data_exists:
         logging.info("Evaluating model...")
-        results = predict_from_preprocessed(
-            model_path=f"{output_dir}/ppo_ohio_final",
-            preprocessed_data_path=test_file
-        )
-        metrics = evaluate_metrics(results['predictions'], results['true_values'])
-        
-        # Print evaluation results
-        logging.info("\nEvaluation Results:")
-        logging.info("=" * 50)
-        logging.info(f"MAE: {metrics['mae']:.4f}")
-        logging.info(f"MSE: {metrics['mse']:.4f}")
-        logging.info(f"RMSE: {metrics['rmse']:.4f}")
-        logging.info(f"Overdose Rate: {metrics['overdose_rate']:.2f}%")
-        logging.info(f"Underdose Rate: {metrics['underdose_rate']:.2f}%")
-        logging.info(f"Safe Rate: {metrics['safe_rate']:.2f}%")
-        logging.info("=" * 50)
-        
-        # Test user input scenarios
-        logging.info("\nTesting user input scenarios...")
-        test_cases = [
-            # Caso 1: Comida normal con glucosa estable
-            {
-                'cgm_values': [120 + i*5 for i in range(24)],  # Glucosa estable con ligera tendencia al alza
-                'carb_input': 50.0,
-                'iob': 2.5,
-                'timestamp': datetime.now(),
-                'meal_carbs': 45.0,
-                'meal_time_diff': 0.5,  # Comida en 30 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 1
-            },
-            # Caso 2: Comida grande con glucosa alta
-            {
-                'cgm_values': [300] * 24,  # Glucosa alta
-                'carb_input': 100.0,
-                'iob': 0.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 95.0,
-                'meal_time_diff': 0.25,  # Comida en 15 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 1
-            },
-            # Caso 3: Glucosa baja sin comida
-            {
-                'cgm_values': [70] * 24,  # Glucosa baja
-                'carb_input': 0.0,
-                'iob': 5.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 0.0,
-                'meal_time_diff': 0.0,
-                'has_meal': 0.0,
-                'meals_in_window': 0
-            },
-            # Caso 4: Comida pequeña con glucosa normal
-            {
-                'cgm_values': [140] * 24,  # Glucosa normal
-                'carb_input': 20.0,
-                'iob': 1.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 15.0,
-                'meal_time_diff': 0.75,  # Comida en 45 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 1
-            },
-            # Caso 5: Múltiples comidas en la ventana
-            {
-                'cgm_values': [160 + i*3 for i in range(24)],  # Glucosa subiendo
-                'carb_input': 80.0,
-                'iob': 3.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 75.0,
-                'meal_time_diff': 0.33,  # Comida en 20 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 2  # Dos comidas en la ventana
-            },
-            # Caso 6: Comida con glucosa descendente
-            {
-                'cgm_values': [200 - i*5 for i in range(24)],  # Glucosa bajando
-                'carb_input': 60.0,
-                'iob': 4.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 55.0,
-                'meal_time_diff': 0.17,  # Comida en 10 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 1
-            },
-            # Caso 7: Comida con glucosa muy alta
-            {
-                'cgm_values': [400] * 24,  # Glucosa muy alta
-                'carb_input': 40.0,
-                'iob': 0.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 35.0,
-                'meal_time_diff': 0.5,  # Comida en 30 minutos
-                'has_meal': 1.0,
-                'meals_in_window': 1
-            },
-            # Caso 8: Sin comida con glucosa normal
-            {
-                'cgm_values': [130] * 24,  # Glucosa normal
-                'carb_input': 0.0,
-                'iob': 2.0,
-                'timestamp': datetime.now(),
-                'meal_carbs': 0.0,
-                'meal_time_diff': 0.0,
-                'has_meal': 0.0,
-                'meals_in_window': 0
-            }
-        ]
-        
-        user_input_results = test_user_inputs(
-            model_path=f"{output_dir}/ppo_ohio_final",
-            test_cases=test_cases
-        )
-        
-        # Print user input test results
-        logging.info("\nUser Input Test Results:")
-        logging.info("=" * 50)
-        for case_name, case_results in user_input_results.items():
-            logging.info(f"\n{case_name}:")
-            logging.info(f"Predicted Dose: {case_results['predicted_dose']:.2f} units")
-            logging.info(f"Mean CGM: {case_results['cgm_mean']:.2f} mg/dL")
-            logging.info(f"Carb Input: {case_results['carb_input']:.2f} g")
-            logging.info(f"IOB: {case_results['iob']:.2f} units")
-            logging.info(f"Meal Carbs: {case_results['meal_carbs']:.2f} g")
-            logging.info(f"Meal Time Diff: {case_results['meal_time_diff']:.2f} hours")
-            logging.info(f"Has Meal: {case_results['has_meal']}")
-            logging.info(f"Meals in Window: {case_results['meals_in_window']}")
-        logging.info("=" * 50)
-        
-        # Plot results
-        logging.info("Generating plots...")
-        plot_training(tensorboard_log, output_dir)
-        # Only plot per-subject MAE if results is a subject-to-mae dict
-        if isinstance(results, dict) and all(isinstance(v, (float, np.floating)) for v in results.values()):
-            plot_test_results(results, output_dir)
-        elif 'mae' in results:
-            plot_overall_mae(results['mae'], output_dir)
+        # Puedes iterar sobre todos los archivos de test
+        for test_file in test_files:
+            results = predict_from_preprocessed(
+                model_path=f"{output_dir}/ppo_ohio_final",
+                preprocessed_data_path=test_file
+            )
+            metrics = evaluate_metrics(results['predictions'], results['true_values'])
+            
+            # Print evaluation results
+            logging.info("\nEvaluation Results:")
+            logging.info("=" * 50)
+            logging.info(f"MAE: {metrics['mae']:.4f}")
+            logging.info(f"MSE: {metrics['mse']:.4f}")
+            logging.info(f"RMSE: {metrics['rmse']:.4f}")
+            logging.info(f"Overdose Rate: {metrics['overdose_rate']:.2f}%")
+            logging.info(f"Underdose Rate: {metrics['underdose_rate']:.2f}%")
+            logging.info(f"Safe Rate: {metrics['safe_rate']:.2f}%")
+            logging.info("=" * 50)
+            
+            # Test user input scenarios
+            logging.info("\nTesting user input scenarios...")
+            test_cases = [
+                # Caso 1: Comida normal con glucosa estable
+                {
+                    'cgm_values': [120 + i*5 for i in range(24)],  # Glucosa estable con ligera tendencia al alza
+                    'carb_input': 50.0,
+                    'iob': 2.5,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 45.0,
+                    'meal_time_diff': 0.5,  # Comida en 30 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 1
+                },
+                # Caso 2: Comida grande con glucosa alta
+                {
+                    'cgm_values': [300] * 24,  # Glucosa alta
+                    'carb_input': 100.0,
+                    'iob': 0.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 95.0,
+                    'meal_time_diff': 0.25,  # Comida en 15 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 1
+                },
+                # Caso 3: Glucosa baja sin comida
+                {
+                    'cgm_values': [70] * 24,  # Glucosa baja
+                    'carb_input': 0.0,
+                    'iob': 5.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 0.0,
+                    'meal_time_diff': 0.0,
+                    'has_meal': 0.0,
+                    'meals_in_window': 0
+                },
+                # Caso 4: Comida pequeña con glucosa normal
+                {
+                    'cgm_values': [140] * 24,  # Glucosa normal
+                    'carb_input': 20.0,
+                    'iob': 1.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 15.0,
+                    'meal_time_diff': 0.75,  # Comida en 45 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 1
+                },
+                # Caso 5: Múltiples comidas en la ventana
+                {
+                    'cgm_values': [160 + i*3 for i in range(24)],  # Glucosa subiendo
+                    'carb_input': 80.0,
+                    'iob': 3.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 75.0,
+                    'meal_time_diff': 0.33,  # Comida en 20 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 2  # Dos comidas en la ventana
+                },
+                # Caso 6: Comida con glucosa descendente
+                {
+                    'cgm_values': [200 - i*5 for i in range(24)],  # Glucosa bajando
+                    'carb_input': 60.0,
+                    'iob': 4.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 55.0,
+                    'meal_time_diff': 0.17,  # Comida en 10 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 1
+                },
+                # Caso 7: Comida con glucosa muy alta
+                {
+                    'cgm_values': [400] * 24,  # Glucosa muy alta
+                    'carb_input': 40.0,
+                    'iob': 0.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 35.0,
+                    'meal_time_diff': 0.5,  # Comida en 30 minutos
+                    'has_meal': 1.0,
+                    'meals_in_window': 1
+                },
+                # Caso 8: Sin comida con glucosa normal
+                {
+                    'cgm_values': [130] * 24,  # Glucosa normal
+                    'carb_input': 0.0,
+                    'iob': 2.0,
+                    'timestamp': datetime.now(),
+                    'meal_carbs': 0.0,
+                    'meal_time_diff': 0.0,
+                    'has_meal': 0.0,
+                    'meals_in_window': 0
+                }
+            ]
+            
+            user_input_results = test_user_inputs(
+                model_path=f"{output_dir}/ppo_ohio_final",
+                test_cases=test_cases
+            )
+            
+            # Print user input test results
+            logging.info("\nUser Input Test Results:")
+            logging.info("=" * 50)
+            for case_name, case_results in user_input_results.items():
+                logging.info(f"\n{case_name}:")
+                logging.info(f"Predicted Dose: {case_results['predicted_dose']:.2f} units")
+                logging.info(f"Mean CGM: {case_results['cgm_mean']:.2f} mg/dL")
+                logging.info(f"Carb Input: {case_results['carb_input']:.2f} g")
+                logging.info(f"IOB: {case_results['iob']:.2f} units")
+                logging.info(f"Meal Carbs: {case_results['meal_carbs']:.2f} g")
+                logging.info(f"Meal Time Diff: {case_results['meal_time_diff']:.2f} hours")
+                logging.info(f"Has Meal: {case_results['has_meal']}")
+                logging.info(f"Meals in Window: {case_results['meals_in_window']}")
+            logging.info("=" * 50)
+            
+            # Plot results
+            logging.info("Generating plots...")
+            plot_training(tensorboard_log, output_dir)
+            # Only plot per-subject MAE if results is a subject-to-mae dict
+            if isinstance(results, dict) and all(isinstance(v, (float, np.floating)) for v in results.values()):
+                plot_test_results(results, output_dir)
+            elif 'mae' in results:
+                plot_overall_mae(results['mae'], output_dir)
     else:
         logging.warning("No test data found. Skipping evaluation and plotting.")
         logging.info("To evaluate the model, please ensure test data exists at:")
-        for test_dir in test_dirs:
-            logging.info(f"  - {test_dir}/processed_{Path(test_dir).name}.parquet")
-    
+        logging.info(f"  - {test_base_dir}/processed_*.parquet")
+
     logging.info("Done!")
 
 if __name__ == "__main__":
