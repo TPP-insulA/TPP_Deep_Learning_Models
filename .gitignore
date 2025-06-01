@@ -34,3 +34,6 @@ tf_transformer.keras
 tf_attention_only.keras
 ## PyTorch
 pt_sarsa.pt
+
+**/new_ohio/models/runs/**
+**/new_ohio/models/output/**

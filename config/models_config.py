@@ -319,20 +319,24 @@ SAC_CONFIG = {
     'critic_activation': 'relu',         # Función de activación para la red del crítico
     'dropout_rate': 0.0,                 # Tasa de dropout para regularización
     'epsilon': 1e-6,                     # Epsilon para estabilidad numérica
+    'hidden_units': [256, 128, 64],      # Unidades en capas ocultas de la red
+    'auto_entropy_tuning': True,         # Si usar ajuste automático de entropía
     
     # Optimización
-    'actor_lr': 3e-4,                    # Tasa de aprendizaje para la red del actor
-    'critic_lr': 3e-4,                   # Tasa de aprendizaje para la red del crítico
-    'alpha_lr': 3e-4,                    # Tasa de aprendizaje para el parámetro de temperatura
-    'gamma': 0.99,                       # Factor de descuento para recompensas futuras
-    'tau': 0.005,                        # Factor de suavizado para actualización de redes objetivo
+    'actor_lr': 5e-5,                    # Tasa de aprendizaje para la red del actor
+    'critic_lr': 1e-4,                   # Tasa de aprendizaje para la red del crítico
+    'alpha_lr': 1e-5,                    # Tasa de aprendizaje para el parámetro de temperatura
+    'gamma': 0.97,                       # Factor de descuento para recompensas futuras
+    'tau': 0.001,                        # Factor de suavizado para actualización de redes objetivo
+    'alpha': 0.05,                       # Valor inicial del parámetro de temperatura (balance exploración-explotación)
+    'weight_decay': 1e-4,              # Decaimiento de peso para regularización L2
     
     # Buffer de experiencia
     'buffer_capacity': 1000000,          # Capacidad máxima del buffer de experiencia
     'batch_size': 256,                   # Tamaño del lote para entrenamiento
     
     # Regularización por entropía
-    'initial_alpha': 0.2,                # Valor inicial del parámetro de temperatura (balance exploración-explotación)
+    'initial_alpha': 0.05,               # Valor inicial del parámetro de temperatura (balance exploración-explotación)
     'log_std_min': -20,                  # Límite inferior para el logaritmo de la desviación estándar de la política
     'log_std_max': 2                     # Límite superior para el logaritmo de la desviación estándar de la política
 }

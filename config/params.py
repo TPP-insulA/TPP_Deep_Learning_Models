@@ -88,8 +88,8 @@ from models.pytorch.DeepReinforcementLearning.sac import model_creator as pt_sac
 from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_trpo_creator
 
 # Modo de Ejecución
-DEBUG = True
-FRAMEWORK_OP = 0
+DEBUG = False
+FRAMEWORK_OP = 2
 PROCESSING_OP = 1
 
 # Configuración de procesamiento
@@ -257,23 +257,23 @@ USE_JAX_MODELS = {
 # Modelos Pytorch a utilizar
 USE_PT_MODELS = {
     ## Modelos de Aprendizaje Profundo
-    "pt_attention_only": True,
-    "pt_cnn": True,
-    "pt_fnn": True,
-    "pt_gru": True,
-    "pt_lstm": True,
-    "pt_rnn": True,
-    "pt_tabnet": True,
-    "pt_tcn": True,
-    "pt_transformer": True,
-    "pt_wavenet": True,
+    "pt_attention_only": False,
+    "pt_cnn": False,
+    "pt_fnn": False,
+    "pt_gru": False,
+    "pt_lstm": False,
+    "pt_rnn": False,
+    "pt_tabnet": False,
+    "pt_tcn": False,
+    "pt_transformer": False,
+    "pt_wavenet": False,
     ## Modelos de Aprendizaje por Refuerzo
-    "pt_monte_carlo": True,
-    "pt_policy_iteration": True,
-    "pt_q_learning": True,
-    "pt_reinforce_mcpg": True,
-    "pt_sarsa": True,
-    "pt_value_iteration": True,
+    "pt_monte_carlo": False,
+    "pt_policy_iteration": False,
+    "pt_q_learning": False,
+    "pt_reinforce_mcpg": False,
+    "pt_sarsa": False,
+    "pt_value_iteration": False,
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_a2c": True,
     "pt_a3c": True,

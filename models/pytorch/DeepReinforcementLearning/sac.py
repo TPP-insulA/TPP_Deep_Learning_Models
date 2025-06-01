@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import numpy as np
@@ -853,25 +854,37 @@ class SACWrapper(nn.Module):
         """
         # Codificador para datos CGM
         cgm_in_channels = self.cgm_shape[1]
-        cnn_out_channels = 32
         
         self.cgm_encoder = nn.Sequential(
-            nn.Conv1d(cgm_in_channels, cnn_out_channels, kernel_size=3, padding=1),
+            nn.Conv1d(cgm_in_channels, 32, kernel_size=3, padding=1),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.Conv1d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.AdaptiveAvgPool1d(1),
-            nn.Flatten()
+            nn.Flatten(),
+            nn.Dropout(0.3)
         )
         
         # Codificador para otras características
         self.other_encoder = nn.Sequential(
-            nn.Linear(self.other_features_shape[0], 32),
+            nn.Linear(self.other_features_shape[0], 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(64, 32),
             nn.ReLU()
         )
         
-        # Capa de combinación
-        combined_size = cnn_out_channels + 32
+        # Capa combinada
+        combined_size = 64 + 32
         self.combined_layer = nn.Sequential(
-            nn.Linear(combined_size, self.sac_agent.state_dim),
+            nn.Linear(combined_size, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, self.sac_agent.state_dim),
             nn.ReLU()
         )
     
@@ -1003,19 +1016,28 @@ class SACWrapper(nn.Module):
             
             def step(self, action):
                 """Ejecuta un paso con la acción dada."""
-                # Convertir acción a dosis (de [-1,1] a [0,15])
+                # Convertir acción a dosis
                 action_tensor = torch.FloatTensor([[action[0]]]).to(CONST_DEVICE)
                 dose = self.wrapper.action_to_dose(action_tensor).item()
                 
-                # Calcular recompensa
+                # Obtener valor objetivo
                 target = self.targets[self.current_idx]
-                error = abs(dose - target)
                 
-                # Penalizar más la sobredosificación
-                if dose > target:
-                    reward = -10.0 * error
-                else:
-                    reward = -5.0 * error
+                # Calcular error base
+                error = dose - target
+                abs_error = abs(error)
+                
+                sigma = 0.5
+                base_reward = math.exp(-(abs_error**2) / (2 * sigma**2))
+                
+                # Penalización por sobredosis o subdosis
+                if error > 0:  # Sobredosis
+                    clinical_penalty = -0.5 * (error**2)
+                else:  # Subdosis
+                    clinical_penalty = -0.25 * (error**2)
+                
+                # Recompensa final combinada
+                reward = 10.0 * base_reward + clinical_penalty
                 
                 # Avanzar al siguiente ejemplo
                 self.current_idx = (self.current_idx + 1) % self.max_idx
@@ -1260,6 +1282,96 @@ class SACWrapper(nn.Module):
         plt.savefig(os.path.join(CONST_FIGURES_DIR, f'sac_rewards_ep{episode}.png'))
         plt.close()
     
+    def _pretrain_supervised(self, cgm_data, other_features, targets, batch_size, epochs=5, verbose=True):
+        """Preentrenamiento supervisado para inicializar el modelo."""
+        if verbose:
+            print("Realizando preentrenamiento supervisado...")
+        
+        # Crear dataset y dataloader
+        dataset = torch.utils.data.TensorDataset(
+            torch.FloatTensor(cgm_data), 
+            torch.FloatTensor(other_features),
+            torch.FloatTensor(targets.reshape(-1, 1))
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=batch_size, shuffle=True
+        )
+        
+        # Optimizador para preentrenamiento
+        pretrain_optimizer = optim.Adam(self.parameters(), lr=1e-4, weight_decay=1e-4)
+        
+        # Entrenamiento supervisado
+        for epoch in range(epochs):
+            total_loss = 0.0
+            
+            for batch_cgm, batch_other, batch_targets in dataloader:
+                batch_cgm = batch_cgm.to(CONST_DEVICE)
+                batch_other = batch_other.to(CONST_DEVICE)
+                batch_targets = batch_targets.to(CONST_DEVICE)
+                
+                # Forward pass
+                states = self._process_state(batch_cgm, batch_other)
+                
+                # Usar el actor para predecir acción directamente
+                mean, _ = self.policy(states)
+                actions = torch.tanh(mean)
+                
+                # Convertir a dosis
+                doses = self.action_to_dose(actions)
+                
+                # Calcular pérdida (Huber para robustez)
+                loss = F.huber_loss(doses, batch_targets)
+                
+                # Backward y optimización
+                pretrain_optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+                pretrain_optimizer.step()
+                
+                total_loss += loss.item()
+            
+            if verbose:
+                print(f"Época {epoch+1}/{epochs}, Pérdida: {total_loss/len(dataloader):.6f}")
+    
+    def train_agent_curriculum(self, env, total_episodes, evaluation_episodes, eval_frequency, verbose=True):
+        """Entrenamiento con curriculum learning para SAC."""
+        # Parámetros iniciales más conservadores
+        self.sac_agent.alpha = torch.tensor(1.0).to(CONST_DEVICE)  # Más exploración inicial
+        
+        # Fases de curriculum (dificultad creciente)
+        curriculum_phases = [
+            {"episodes": int(total_episodes * 0.2), "max_steps": 1, "desc": "Fase 1: Un paso por episodio"},
+            {"episodes": int(total_episodes * 0.3), "max_steps": 2, "desc": "Fase 2: Dos pasos por episodio"},
+            {"episodes": int(total_episodes * 0.5), "max_steps": 3, "desc": "Fase 3: Tres pasos por episodio"}
+        ]
+        
+        episode_count = 0
+        for phase in curriculum_phases:
+            if verbose:
+                print(f"\n{phase['desc']} - {phase['episodes']} episodios")
+            
+            # Reducir alpha gradualmente
+            if episode_count > 0:
+                self.sac_agent.alpha *= 0.5
+            
+            # Entrenar para esta fase
+            phase_episodes = phase["episodes"]
+            max_steps = phase["max_steps"]
+            
+            for i in range(phase_episodes):
+                # Ejecutar episodio
+                episode_reward, _ = self._run_episode(env, max_steps=max_steps)
+                
+                # Registrar y monitorear
+                self.sac_agent.metrics[CONST_EPISODE_REWARDS].append(episode_reward)
+                
+                # Evaluar periódicamente
+                if (episode_count + 1) % eval_frequency == 0 and verbose:
+                    eval_reward = self._evaluate_agent(env, evaluation_episodes)
+                    print(f"Episodio {episode_count+1}/{total_episodes}, Recompensa: {episode_reward:.2f}, Evaluación: {eval_reward:.2f}")
+                
+                episode_count += 1
+
     def fit(
         self, 
         x: List[torch.Tensor], 
@@ -1298,30 +1410,21 @@ class SACWrapper(nn.Module):
         # Extraer datos de entrada
         cgm_data, other_features = x
         
-        # Verificar datos de validación
-        if validation_data is not None:
-            val_x, val_y = validation_data
-            val_cgm_data, val_other_features = val_x
+        # Fase 1: Preentrenamiento supervisado para inicialización
+        self._pretrain_supervised(cgm_data, other_features, y, batch_size, epochs=5, verbose=verbose)
         
-        # Crear entorno de entrenamiento
+        # Fase 2: Entrenamiento RL con curriculum learning
         env = self._create_training_environment(cgm_data, other_features, y)
         
-        # Entrenar agente SAC
-        if verbose:
-            print("Entrenando agente SAC...")
+        # Configurar parámetros adaptativos para curriculum learning
+        total_episodes = min(50000, max(5000, len(cgm_data) * 5))
         
-        # Configurar parámetros para SAC
-        episodes_per_epoch = max(1, min(1000, len(cgm_data) // batch_size))
-        total_episodes = episodes_per_epoch * epochs
-        
-        # Entrenar durante el número especificado de episodios
-        self.train_agent(
-            env=env,
-            episodes=total_episodes,
-            max_steps=1,  # Un paso por episodio
-            evaluation_episodes=min(10, len(cgm_data) // 10),
-            eval_frequency=episodes_per_epoch,
-            render=False
+        # Entrenar con episodios más largos y curriculum learning
+        self.train_agent_curriculum(
+            env=env,total_episodes=total_episodes,
+            evaluation_episodes=min(20, len(cgm_data) // 10),
+            eval_frequency=min(5000, total_episodes // 10),
+            verbose=verbose > 0
         )
         
         # Actualizar historial con métricas
@@ -1340,6 +1443,7 @@ class SACWrapper(nn.Module):
         
         # Calcular error en datos de validación si existen
         if validation_data is not None:
+            [val_cgm_data, val_other_features], val_y = validation_data
             val_preds = self.predict([val_cgm_data, val_other_features])
             val_loss = np.mean((val_preds - val_y.cpu().numpy()) ** 2)
             self.history['val_loss'] = [val_loss]
@@ -1496,7 +1600,7 @@ def create_sac_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
             state_dim=state_dim,
             action_dim=action_dim,
             config=SAC_CONFIG,
-            hidden_units=SAC_CONFIG.get('hidden_units', [256, 256]),
+            hidden_units=SAC_CONFIG.get('hidden_units', [256, 128, 64]),
             seed=CONST_DEFAULT_SEED
         )
         
