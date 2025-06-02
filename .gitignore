@@ -19,6 +19,9 @@ figures/various_models/pytorch
 figures/various_models/tensorflow
 **/logs/**
 
+.vscode/
+.github/
+
 # Modelos
 # *.keras
 # *.h5
