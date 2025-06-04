@@ -1,0 +1,600 @@
+2025-06-04 17:57:09 - INFO - [92m============================================================[0m
+2025-06-04 17:57:09 - INFO - [92mPIPELINE DE PREPROCESAMIENTO MEJORADO OHIO T1DM[0m
+2025-06-04 17:57:09 - INFO - [92m============================================================[0m
+2025-06-04 17:57:09 - INFO - [92mCaracterísticas mejoradas: True[0m
+2025-06-04 17:57:09 - INFO - [92mUmbrales clínicos: Hipoglucemia<70, Hiperglucemia>180[0m
+2025-06-04 17:57:09 - INFO - [92mTiempo en Rango: 70-180 mg/dL[0m
+2025-06-04 17:57:09 - INFO - [92m
+Procesando directorio: data/OhioT1DM/2018/train[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mCargando datos crudos...[0m
+2025-06-04 17:57:09 - INFO - [92mCargando datos desde data/OhioT1DM/2018/train[0m
+2025-06-04 17:57:09 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mProcesando SubjectID: 559-ws-training (Año 2018)[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: glucose_level=10796 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 10796.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1327.81[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3552.49[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: finger_stick=178 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 586.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 181.95[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 169.90[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basal=163 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 163.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 18.75[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 54.09[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: temp_basal=34 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 34.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 3.78[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 11.33[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: bolus=152 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: meal=150 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: sleep=42 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: work=22 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: stressors=1 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: hypo_event=7 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: illness=4 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: exercise=20 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_heart_rate=11979 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11979.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1390.71[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3970.97[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_gsr=11769 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11769.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1310.32[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3922.01[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_skin_temperature=11842 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11842.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1373.82[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3925.74[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_air_temperature=11842 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11842.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1371.55[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3926.58[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_steps=12288 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12288.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1381.30[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4090.22[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 559-ws-training: basis_sleep=1087 registros[0m
+2025-06-04 17:57:09 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mProcesando SubjectID: 563-ws-training (Año 2018)[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: glucose_level=12124 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12124.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1464.97[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3998.81[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: finger_stick=540 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 540.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 193.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 187.34[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basal=87 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 87.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 10.45[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 28.71[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: temp_basal=2 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 2.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 0.22[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 0.67[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: bolus=347 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: meal=129 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: sleep=33 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: work=23 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: hypo_event=9 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: illness=1 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: exercise=17 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_heart_rate=11966 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11966.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1399.47[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3962.76[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_gsr=11820 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11820.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1316.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3939.01[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_skin_temperature=11822 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11822.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1371.20[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3919.23[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_air_temperature=11822 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11822.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1368.64[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3920.18[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_steps=11971 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11971.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1343.42[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3985.48[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 563-ws-training: basis_sleep=876 registros[0m
+2025-06-04 17:57:09 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mProcesando SubjectID: 570-ws-training (Año 2018)[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: glucose_level=10982 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 10982.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1357.54[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3610.94[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: finger_stick=248 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 349.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 164.94[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 114.28[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basal=118 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 118.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 13.86[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 39.05[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: temp_basal=3 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 3.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 0.33[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 1.00[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: bolus=326 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: meal=136 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: sleep=41 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: work=21 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: hypo_event=1 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: exercise=25 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_heart_rate=12328 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12328.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1430.17[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4086.91[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_gsr=12228 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12228.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1362.36[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4074.63[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_skin_temperature=12232 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12232.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1417.35[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4055.67[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_air_temperature=12232 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12232.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1415.36[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4056.40[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_steps=12335 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12335.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1383.98[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4106.79[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 570-ws-training: basis_sleep=1036 registros[0m
+2025-06-04 17:57:09 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mProcesando SubjectID: 575-ws-training (Año 2018)[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: glucose_level=11866 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 11866.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1434.67[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 3913.44[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: finger_stick=268 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 428.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 155.17[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 129.75[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basal=126 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 126.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 14.52[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 41.81[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: temp_basal=12 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1.33[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4.00[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: bolus=187 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: meal=243 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: sleep=46 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: work=22 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: hypo_event=37 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: illness=1 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: exercise=5 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_heart_rate=12446 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12446.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1445.90[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4125.35[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_gsr=12340 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12340.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1373.66[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4112.38[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_skin_temperature=12384 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12384.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1434.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4106.42[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_air_temperature=12384 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12384.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1431.75[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4107.25[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_steps=12194 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12194.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1367.04[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4060.23[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 575-ws-training: basis_sleep=906 registros[0m
+2025-06-04 17:57:09 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mProcesando SubjectID: 588-ws-training (Año 2018)[0m
+2025-06-04 17:57:09 - INFO - [92m==================================================[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: glucose_level=12640 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 12640.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 1531.61[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 4167.30[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: finger_stick=592 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 592.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 190.07[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 191.61[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: basal=74 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 74.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 9.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 24.38[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: temp_basal=34 registros[0m
+2025-06-04 17:57:09 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:09 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Max: 34.00[0m
+2025-06-04 17:57:09 - INFO - [92m  Mean: 3.92[0m
+2025-06-04 17:57:09 - INFO - [92m  Std: 11.29[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: bolus=182 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: meal=221 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: sleep=46 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: work=35 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: stressors=3 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: hypo_event=13 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: illness=1 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: exercise=36 registros[0m
+2025-06-04 17:57:09 - INFO - [92mSubjectID 588-ws-training: basis_heart_rate=12980 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12980.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1499.57[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4305.39[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: basis_gsr=12930 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12930.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1439.38[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4308.99[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: basis_skin_temperature=12948 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12948.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1497.87[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4293.98[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: basis_air_temperature=12948 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12948.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1497.23[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4294.23[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: basis_steps=13297 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 13297.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1496.70[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4425.42[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: basis_sleep=1082 registros[0m
+2025-06-04 17:57:10 - INFO - [92m
+==================================================[0m
+2025-06-04 17:57:10 - INFO - [92mProcesando SubjectID: 591-ws-training (Año 2018)[0m
+2025-06-04 17:57:10 - INFO - [92m==================================================[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: glucose_level=10847 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para glucose_level:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 10847.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1328.12[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 3571.45[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: finger_stick=427 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para finger_stick:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 427.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 178.57[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 154.11[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basal=113 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basal:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 113.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 13.25[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 37.41[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: temp_basal=33 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para temp_basal:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 33.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 3.81[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 10.95[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: bolus=261 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: meal=212 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: sleep=44 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: hypo_event=7 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: illness=1 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: exercise=23 registros[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_heart_rate=12276 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_heart_rate:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12276.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1416.69[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4072.47[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_gsr=12079 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_gsr:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12079.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1346.35[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4024.75[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_skin_temperature=12086 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_skin_temperature:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12086.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1402.12[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4006.64[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_air_temperature=12086 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_air_temperature:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12086.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1400.80[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4007.13[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_steps=12054 registros[0m
+2025-06-04 17:57:10 - INFO - [92mEstadísticas de valores para basis_steps:[0m
+2025-06-04 17:57:10 - INFO - [92m  Min: 0.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Max: 12054.00[0m
+2025-06-04 17:57:10 - INFO - [92m  Mean: 1355.11[0m
+2025-06-04 17:57:10 - INFO - [92m  Std: 4012.30[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: basis_sleep=964 registros[0m
+2025-06-04 17:57:10 - INFO - [92m
+Columnas por tipo de evento y sujeto:[0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 559-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  illness: ['description', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  stressors: ['description', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  work: ['intensity', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 563-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  illness: ['description', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  work: ['intensity', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 570-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  work: ['intensity', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 575-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  illness: ['description', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  work: ['intensity', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 588-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  illness: ['description', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  stressors: ['description', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  work: ['intensity', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m
+--------------------------------------------------[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID: 591-ws-training[0m
+2025-06-04 17:57:10 - INFO - [92m  basal: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_air_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_gsr: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_heart_rate: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_skin_temperature: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_sleep: ['quality', 'tbegin', 'tend', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  basis_steps: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  bolus: ['bwz_carb_input', 'dose', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  exercise: ['competitive', 'duration', 'intensity', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  finger_stick: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  glucose_level: ['ts', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m  hypo_event: ['ts'][0m
+2025-06-04 17:57:10 - INFO - [92m  illness: ['description', 'ts_begin', 'ts_end', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  meal: ['carbs', 'ts', 'type'][0m
+2025-06-04 17:57:10 - INFO - [92m  sleep: ['quality', 'ts_begin', 'ts_end'][0m
+2025-06-04 17:57:10 - INFO - [92m  temp_basal: ['ts_begin', 'ts_end', 'value'][0m
+2025-06-04 17:57:10 - INFO - [92m
+Estadísticas por sujeto (Año 2018):[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 559-ws-training: glucose_level=10796, finger_stick=178, basal=163, temp_basal=34, bolus=152, meal=150, sleep=42, work=22, stressors=1, hypo_event=7, illness=4, exercise=20, basis_heart_rate=11979, basis_gsr=11769, basis_skin_temperature=11842, basis_air_temperature=11842, basis_steps=12288, basis_sleep=1087[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 563-ws-training: glucose_level=12124, finger_stick=540, basal=87, temp_basal=2, bolus=347, meal=129, sleep=33, work=23, hypo_event=9, illness=1, exercise=17, basis_heart_rate=11966, basis_gsr=11820, basis_skin_temperature=11822, basis_air_temperature=11822, basis_steps=11971, basis_sleep=876[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 570-ws-training: glucose_level=10982, finger_stick=248, basal=118, temp_basal=3, bolus=326, meal=136, sleep=41, work=21, hypo_event=1, exercise=25, basis_heart_rate=12328, basis_gsr=12228, basis_skin_temperature=12232, basis_air_temperature=12232, basis_steps=12335, basis_sleep=1036[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 575-ws-training: glucose_level=11866, finger_stick=268, basal=126, temp_basal=12, bolus=187, meal=243, sleep=46, work=22, hypo_event=37, illness=1, exercise=5, basis_heart_rate=12446, basis_gsr=12340, basis_skin_temperature=12384, basis_air_temperature=12384, basis_steps=12194, basis_sleep=906[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 588-ws-training: glucose_level=12640, finger_stick=592, basal=74, temp_basal=34, bolus=182, meal=221, sleep=46, work=35, stressors=3, hypo_event=13, illness=1, exercise=36, basis_heart_rate=12980, basis_gsr=12930, basis_skin_temperature=12948, basis_air_temperature=12948, basis_steps=13297, basis_sleep=1082[0m
+2025-06-04 17:57:10 - INFO - [92mSubjectID 591-ws-training: glucose_level=10847, finger_stick=427, basal=113, temp_basal=33, bolus=261, meal=212, sleep=44, hypo_event=7, illness=1, exercise=23, basis_heart_rate=12276, basis_gsr=12079, basis_skin_temperature=12086, basis_air_temperature=12086, basis_steps=12054, basis_sleep=964[0m
+2025-06-04 17:57:10 - WARNING - [93mFaltan tipos de datos: ['acceleration'][0m
+2025-06-04 17:57:10 - INFO - [92mPreprocesando y alineando eventos...[0m
+2025-06-04 17:57:10 - INFO - [92mEventos bolus válidos: 1453[0m
+2025-06-04 17:57:10 - INFO - [92mEventos meal válidos: 1089[0m
+2025-06-04 17:57:10 - INFO - [92mEventos basal válidos: 681[0m
+2025-06-04 17:57:10 - INFO - [92mEventos temp_basal válidos: 118[0m
+2025-06-04 17:57:10 - INFO - [92mEventos exercise válidos: 126[0m
+2025-06-04 17:57:10 - INFO - [92mEventos steps válidos: 74139[0m
+2025-06-04 17:57:10 - INFO - [92mEventos hypo_event válidos: 74[0m
+2025-06-04 17:57:10 - INFO - [92mEventos finger_stick válidos: 2253[0m
+2025-06-04 17:57:10 - INFO - [92mEventos sleep válidos: 252[0m
+2025-06-04 17:57:10 - INFO - [92mEventos work válidos: 123[0m
+2025-06-04 17:57:10 - INFO - [92mEventos stressors válidos: 4[0m
+2025-06-04 17:57:10 - INFO - [92mEventos illness válidos: 8[0m
+2025-06-04 17:57:10 - INFO - [92mEventos heart_rate válidos: 73975[0m
+2025-06-04 17:57:10 - INFO - [92mEventos gsr válidos: 73166[0m
+2025-06-04 17:57:10 - INFO - [92mEventos skin_temperature válidos: 73314[0m
+2025-06-04 17:57:10 - INFO - [92mEventos air_temperature válidos: 73314[0m
+2025-06-04 17:57:10 - INFO - [92mEventos basis_sleep válidos: 5951[0m
+2025-06-04 17:57:21 - WARNING - [93mEventos descartados por estar fuera de tolerancia: 25[0m
+2025-06-04 17:57:21 - WARNING - [93mEventos sin CGM correspondiente: 25[0m
+2025-06-04 17:57:21 - INFO - [92mEventos alineados: 1428/1453 (98.3%)[0m
+2025-06-04 17:57:29 - WARNING - [93mEventos descartados por estar fuera de tolerancia: 10[0m
+2025-06-04 17:57:29 - WARNING - [93mEventos sin CGM correspondiente: 10[0m
+2025-06-04 17:57:29 - INFO - [92mEventos alineados: 1079/1089 (99.1%)[0m
+2025-06-04 17:57:29 - INFO - [92mAlineando y uniendo señales para data/OhioT1DM/2018/train[0m
+2025-06-04 17:57:29 - INFO - [92mColumnas en DataFrame fisiológico: ['ts', 'value', 'SubjectID', 'Year'][0m
+2025-06-04 17:57:29 - INFO - [92mConvirtiendo columna 'ts' a 'Timestamp' en DataFrame fisiológico[0m
+2025-06-04 17:57:29 - INFO - [92mConvirtiendo columna 'Timestamp' a datetime en DataFrame fisiológico[0m
+2025-06-04 17:57:29 - WARNING - [93mFaltan tipos de datos: ['heart_rate', 'gsr', 'skin_temperature', 'air_temperature', 'acceleration', 'sleep_event', 'work_event', 'stressors_event', 'illness_event', 'basis_sleep_event'][0m
+2025-06-04 17:57:29 - INFO - [92mSeñal physiological_value: 1.0% valores no nulos[0m
+2025-06-04 17:57:29 - INFO - [92mForma de datos unidos: (69255, 16)[0m
+2025-06-04 17:57:29 - INFO - [92mTotal de eventos bolus: 39[0m
+2025-06-04 17:57:29 - INFO - [92mGenerando ventanas mejoradas con patrones a largo plazo...[0m
+2025-06-04 17:57:30 - INFO - [92mVentanas generadas: X=(69232, 5), y=(69232, 12)[0m
+2025-06-04 17:57:30 - INFO - [92mExtrayendo características clínicas mejoradas...[0m
+2025-06-04 17:57:30 - INFO - [92mcgm: 0/7 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mphysiological: 0/5 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mevents: 0/5 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mmeal_context: 0/9 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mcgm generadas: 7/7[0m
+2025-06-04 17:57:30 - INFO - [92mphysiological generadas: 0/5[0m
+2025-06-04 17:57:30 - WARNING - [93mFaltan características de physiological: {'gsr', 'acceleration', 'heart_rate', 'skin_temperature', 'air_temperature'}[0m
+2025-06-04 17:57:30 - INFO - [92mevents generadas: 0/5[0m
+2025-06-04 17:57:30 - WARNING - [93mFaltan características de events: {'stressors_event', 'sleep_event', 'illness_event', 'basis_sleep_event', 'work_event'}[0m
+2025-06-04 17:57:30 - INFO - [92mmeal_context generadas: 9/9[0m
+2025-06-04 17:57:30 - INFO - [92mCaracterísticas extraídas: (69232, 45)[0m
+2025-06-04 17:57:30 - INFO - [92mCaracterísticas mejoradas añadidas: 23 nuevas características clínicas[0m
+2025-06-04 17:57:30 - INFO - [92mMuestra de nuevas características: ['cgm_mean_24h', 'cgm_std_24h', 'cgm_median_24h', 'cgm_range_24h', 'hypo_episodes_24h', 'hypo_percentage_24h', 'hyper_episodes_24h', 'hyper_percentage_24h', 'time_in_range_24h', 'cv_24h'][0m
+2025-06-04 17:57:30 - INFO - [92mAplicando transformaciones mejoradas...[0m
+2025-06-04 17:57:30 - INFO - [92mAplicando transformaciones mejoradas...[0m
+2025-06-04 17:57:30 - INFO - [92mTransformaciones mejoradas completadas. Forma final: (69232, 61)[0m
+2025-06-04 17:57:30 - INFO - [92mDatos procesados finales: (69232, 61)[0m
+2025-06-04 17:57:30 - INFO - [92mColumnas CGM: 0/12[0m
+2025-06-04 17:57:30 - INFO - [92mtiempo_cíclico: 0/4 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mpatrones_glucosa: 3/3 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mcontexto_comida: 3/3 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mindicadores_riesgo: 0/3 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mmétricas_clínicas: 0/3 características presentes[0m
+2025-06-04 17:57:30 - INFO - [92mDatos mejorados exportados a new_ohio/processed_data/train/processed_enhanced_2018_train.parquet[0m
+2025-06-04 17:57:30 - INFO - [92mTiempo en Rango promedio: 62.1%[0m
+2025-06-04 17:57:30 - INFO - [92mGenerando plots en new_ohio/processed_data/plots/2018_train[0m
+2025-06-04 17:57:30 - INFO - [92mPlot generado: glucose_distribution.png[0m

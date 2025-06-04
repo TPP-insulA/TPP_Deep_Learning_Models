@@ -246,20 +246,30 @@ def evaluate_model(model: SAC, env: DummyVecEnv, df_test: pl.DataFrame) -> Dict:
     
     while not done:
         action, _ = model.predict(obs, deterministic=True)
-        predictions.append(action[0])
+        # Convertir action[0] a float de manera segura
+        action_value = action[0].item() if isinstance(action[0], np.ndarray) else float(action[0])
+        predictions.append(action_value)
         
         # Obtener valores reales
         current_state = env.envs[0]._get_state_dict()
-        actuals.append(current_state.get('bolus', 0.0))
-        glucose_values.append(current_state.get('glucose_last', 120.0))
+        actuals.append(float(current_state.get('bolus', 0.0)))
+        glucose_values.append(float(current_state.get('glucose_last', 120.0)))
         
-        obs, _, done, _ = env.step(action)
+        # Manejar el paso del entorno vectorizado
+        step_result = env.step(action)
+        if len(step_result) == 4:  # Versión antigua de Gym
+            obs, reward, done, info = step_result
+            terminated, truncated = done, False
+        else:  # Nueva versión de Gymnasium
+            obs, reward, terminated, truncated, info = step_result
+            done = terminated or truncated
+    
+    # Convertir a arrays numpy y asegurar que tengan la forma correcta
+    predictions = np.array(predictions, dtype=np.float32)
+    actuals = np.array(actuals, dtype=np.float32)
+    glucose_values = np.array(glucose_values, dtype=np.float32)
     
     # Calcular métricas
-    predictions = np.array(predictions)
-    actuals = np.array(actuals)
-    glucose_values = np.array(glucose_values)
-    
     mae = np.mean(np.abs(predictions - actuals))
     corr = np.corrcoef(predictions, actuals)[0, 1]
     
@@ -289,11 +299,50 @@ def evaluate_model(model: SAC, env: DummyVecEnv, df_test: pl.DataFrame) -> Dict:
     logger.info(f"Resultados de evaluación: {results}")
     return results
 
+def evaluate_saved_model(model_path: str, test_files: List[str]):
+    """
+    Evalúa un modelo guardado previamente.
+    
+    Args:
+        model_path: Ruta al modelo guardado
+        test_files: Lista de archivos de prueba
+    """
+    logger.info(f"Cargando modelo desde {model_path}")
+    
+    # Cargar datos de prueba
+    test_df = pl.concat([pl.read_parquet(f) for f in test_files])
+    logger.info(f"Datos de prueba cargados: {test_df.shape}")
+    
+    # Crear entorno de prueba
+    test_env = DummyVecEnv([lambda: OhioT1DMEnv(test_df)])
+    
+    # Cargar modelo
+    model = SAC.load(model_path)
+    logger.info("Modelo cargado exitosamente")
+    
+    # Evaluar modelo
+    results = evaluate_model(model, test_env, test_df)
+    
+    # Guardar resultados
+    results_path = "new_ohio/models/evaluation_results.txt"
+    with open(results_path, "w") as f:
+        f.write(str(results))
+    logger.info(f"Resultados guardados en {results_path}")
+
 def main():
     """Función principal para entrenar y evaluar el modelo SAC."""
-    logger.info("Iniciando entrenamiento SAC para OhioT1DM")
+    import argparse
     
-    # Cargar datos
+    parser = argparse.ArgumentParser(description='Entrenar o evaluar modelo SAC para OhioT1DM')
+    parser.add_argument('--evaluate-only', action='store_true', 
+                      help='Solo evaluar el modelo guardado sin entrenar')
+    parser.add_argument('--model-path', type=str, 
+                      default='new_ohio/models/sac_ohiot1dm',
+                      help='Ruta al modelo guardado (solo para evaluación)')
+    
+    args = parser.parse_args()
+    
+    # Definir rutas de archivos
     train_files = [
         "new_ohio/processed_data/train/processed_enhanced_2018_train.parquet",
         "new_ohio/processed_data/train/processed_enhanced_2020_train.parquet"
@@ -303,6 +352,13 @@ def main():
         "new_ohio/processed_data/test/processed_enhanced_2020_test.parquet"
     ]
     
+    if args.evaluate_only:
+        evaluate_saved_model(args.model_path, test_files)
+        return
+    
+    logger.info("Iniciando entrenamiento SAC para OhioT1DM")
+    
+    # Cargar datos
     train_df = pl.concat([pl.read_parquet(f) for f in train_files])
     test_df = pl.concat([pl.read_parquet(f) for f in test_files])
     
