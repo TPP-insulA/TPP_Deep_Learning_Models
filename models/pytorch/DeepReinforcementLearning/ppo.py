@@ -16,16 +16,11 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import PPO_CONFIG
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_POLICY_LOSS, CONST_VALUE_LOSS, CONST_ENTROPY_LOSS, CONST_TOTAL_LOSS, CONST_EPISODE_REWARDS
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CONST_POLICY_LOSS = "policy_loss"
-CONST_VALUE_LOSS = "value_loss"
-CONST_ENTROPY_LOSS = "entropy_loss"
-CONST_TOTAL_LOSS = "total_loss"
-CONST_EPISODE_REWARDS = "episode_rewards"
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "ppo")
 os.makedirs(FIGURES_DIR, exist_ok=True)
 

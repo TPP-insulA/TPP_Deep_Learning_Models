@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(o
 sys.path.append(PROJECT_ROOT)
 
 from config.models_config import TRPO_CONFIG
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_CGM_ENCODER, CONST_OTHER_ENCODER, CONST_COMBINED_LAYER
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 from custom.printer import print_info, print_warning, print_error
 
@@ -21,12 +21,6 @@ from custom.printer import print_info, print_warning, print_error
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CONST_FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "trpo")
 os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
-
-# Constantes para nombres de capas del encoder
-CONST_CGM_ENCODER = "cgm_encoder"
-CONST_OTHER_ENCODER = "other_encoder"
-CONST_COMBINED_LAYER = "combined_layer"
-
 
 class ActorNetwork(nn.Module):
     """
@@ -99,7 +93,6 @@ class ActorNetwork(nn.Module):
         else:
             logits = self.logits(x)
             return logits
-
 
 class CriticNetwork(nn.Module):
     """

@@ -1,14 +1,13 @@
+# Metricas
 CONST_VAL_LOSS = "val_loss"
 CONST_LOSS = "loss"
 CONST_METRIC_MAE = "mae"
 CONST_METRIC_RMSE = "rmse"
 CONST_METRIC_R2 = "r2"
+# Constantes Generales
 CONST_MODELS = "models"
 CONST_BEST_PREFIX = "best_"
 CONST_LOGS_DIR = "logs"
-CONST_DEFAULT_EPOCHS = 100
-CONST_DEFAULT_BATCH_SIZE = 32
-CONST_DEFAULT_SEED = 7
 CONST_FIGURES_DIR = "figures"
 CONST_MODEL_TYPES = {
     "dl": "deep_learning",
@@ -20,6 +19,10 @@ CONST_FRAMEWORKS = {
     "jax": "JAX",
     "pytorch": "PyTorch"
 }
+# Toggleable
+CONST_DEFAULT_EPOCHS = 100
+CONST_DEFAULT_BATCH_SIZE = 32
+CONST_DEFAULT_SEED = 7
 CONST_EPSILON = 1e-10
 
 # Constantes de Procesamiento
@@ -42,7 +45,9 @@ MILD_PENALTY_REWARD: float = -0.5
 SEVERE_PENALTY_REWARD: float = -1.0
 ## Constantes de texto
 CONST_ACTOR = "actor"
+CONST_ACTOR_LOSS = "actor_loss"
 CONST_CRITIC = "critic"
+CONST_CRITIC_LOSS = "critic_loss"
 CONST_TARGET = "target"
 CONST_PARAMS = "params"
 CONST_DEVICE = "device"
@@ -54,6 +59,20 @@ CONST_VALUE_LOSS = "value_loss"
 CONST_ENTROPY_LOSS = "entropy_loss"
 CONST_TOTAL_LOSS = "total_loss"
 CONST_EPISODE_REWARDS = "episode_rewards"
+CONST_Q_VALUE = "q_value"
+CONST_TRAINING = "training"
+CONST_ALPHA_LOSS = "alpha_loss"
+CONST_TOTAL_LOSS = "total_loss"
+CONST_ENTROPY = "entropy"
+CONST_CGM_ENCODER = "cgm_encoder"
+CONST_OTHER_ENCODER = "other_encoder"
+CONST_COMBINED_LAYER = "combined_layer"
+
+# Funciones de Activación
+CONST_RELU = "relu"
+CONST_TANH = "tanh"
+CONST_LEAKY_RELU = "leaky_relu"
+CONST_GELU = "gelu"
 
 # Modelos de Aprendizaje Profundo
 ATT_ONLY = "Attention Only"

@@ -16,18 +16,11 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DQN_CONFIG, EARLY_STOPPING_POLICY
-from constants.constants import CONST_DEFAULT_SEED
+from constants.constants import CONST_DEFAULT_SEED, CONST_RELU, CONST_TANH, CONST_LEAKY_RELU, CONST_GELU, CONST_LOSS, CONST_Q_VALUE, CONST_TRAINING
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
-CONST_RELU = "relu"
-CONST_TANH = "tanh"
-CONST_LEAKY_RELU = "leaky_relu"
-CONST_GELU = "gelu"
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CONST_LOSS = "loss"
-CONST_Q_VALUE = "q_value"
-CONST_TRAINING = "training"
 CONST_FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "dqn")
 
 # Asegurar que existe el directorio para figuras

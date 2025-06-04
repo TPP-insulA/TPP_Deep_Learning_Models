@@ -16,21 +16,13 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import DDPG_CONFIG, EARLY_STOPPING_POLICY
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_RELU, CONST_TANH, CONST_LEAKY_RELU, CONST_GELU, CONST_ACTOR, CONST_CRITIC
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
-# Constantes para uso repetido
-CONST_RELU = "relu"
-CONST_TANH = "tanh"
-CONST_LEAKY_RELU = "leaky_relu"
-CONST_GELU = "gelu"
-CONST_ACTOR_PREFIX = "actor"
-CONST_CRITIC_PREFIX = "critic"
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "ddpg")
 os.makedirs(FIGURES_DIR, exist_ok=True)
-
 
 class ReplayBuffer:
     """

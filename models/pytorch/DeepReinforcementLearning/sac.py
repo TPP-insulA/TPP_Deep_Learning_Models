@@ -16,18 +16,12 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import SAC_CONFIG
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_ACTOR_LOSS, CONST_CRITIC_LOSS, CONST_ALPHA_LOSS, CONST_TOTAL_LOSS, CONST_ENTROPY, CONST_EPISODE_REWARDS
 from models.early_stopping import get_early_stopping_config
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
 CONST_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CONST_ACTOR_LOSS = "actor_loss"
-CONST_CRITIC_LOSS = "critic_loss"
-CONST_ALPHA_LOSS = "alpha_loss"
-CONST_TOTAL_LOSS = "total_loss"
-CONST_ENTROPY = "entropy"
-CONST_EPISODE_REWARDS = "episode_rewards"
 CONST_FIGURES_DIR = os.path.join(PROJECT_ROOT, "figures", "pytorch", "sac")
 os.makedirs(CONST_FIGURES_DIR, exist_ok=True)
 
