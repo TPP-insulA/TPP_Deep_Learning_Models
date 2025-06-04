@@ -534,183 +534,148 @@ def join_signals(cgm_df: pl.DataFrame,
                 bolus_df: pl.DataFrame, 
                 meal_df: pl.DataFrame,
                 physiological_df: Optional[pl.DataFrame] = None) -> pl.DataFrame:
-    """
-    Une las señales de CGM, bolus, comidas y señales fisiológicas usando join_asof.
-    Maneja duplicados y asegura alineación temporal correcta.
+    """Une las diferentes señales temporales usando join_asof"""
     
-    Args:
-        cgm_df: DataFrame con datos CGM
-        bolus_df: DataFrame con datos de bolus
-        meal_df: DataFrame con datos de comidas
-        physiological_df: DataFrame opcional con señales fisiológicas
+    def standardize_timestamp_column(df: pl.DataFrame) -> pl.DataFrame:
+        """Estandariza el nombre de la columna de timestamp y su tipo de datos"""
+        if 'Timestamp' in df.columns:
+            df = df
+        elif 'ts' in df.columns:
+            df = df.rename({'ts': 'Timestamp'})
+        elif 'Time' in df.columns:
+            df = df.rename({'Time': 'Timestamp'})
+        else:
+            raise ValueError(f"No se encontró columna de timestamp en DataFrame. Columnas disponibles: {df.columns}")
         
-    Returns:
-        DataFrame unido con todas las señales
-    """
-    # Verificar y convertir columnas Timestamp
-    for df, name in [(cgm_df, "CGM"), (bolus_df, "Bolus"), (meal_df, "Meal")]:
-        if 'Timestamp' not in df.columns:
-            logger.warning(f"DataFrame {name} no tiene columna 'Timestamp', intentando convertir 'Time'")
-            if 'Time' in df.columns:
-                df = df.with_columns(pl.col('Time').alias('Timestamp'))
-            else:
-                raise ValueError(f"DataFrame {name} no tiene columna 'Timestamp' ni 'Time'")
-    
-    # Asegurar que Timestamp es datetime
-    for df in [cgm_df, bolus_df, meal_df]:
+        # Asegurar que Timestamp es datetime
         if df['Timestamp'].dtype != pl.Datetime:
-            df = df.with_columns(pl.col('Timestamp').cast(pl.Datetime))
-    
-    # Eliminar duplicados de CGM
-    cgm_df = cgm_df.unique(subset=["Timestamp", "SubjectID"])
-    
-    # Unir CGM con bolus usando join_asof
-    joined_df = cgm_df.join_asof(
-        bolus_df.sort('Timestamp'),
-        on='Timestamp',
-        by='SubjectID',
-        tolerance=timedelta(minutes=5),
-        strategy='nearest',
-        suffix='_bolus'  # Evitar conflictos de nombres
-    )
-    
-    # Unir con comidas usando join_asof
-    joined_df = joined_df.join_asof(
-        meal_df.sort('Timestamp'),
-        on='Timestamp',
-        by='SubjectID',
-        tolerance=timedelta(minutes=5),
-        strategy='nearest',
-        suffix='_meal'  # Evitar conflictos de nombres
-    )
-    
-    # Unir con señales fisiológicas si están disponibles
-    if physiological_df is not None and not physiological_df.is_empty():
-        # Verificar y convertir Timestamp en physiological_df
-        logger.info(f"Columnas en DataFrame fisiológico: {physiological_df.columns}")
-        
-        if 'Timestamp' not in physiological_df.columns:
-            if 'Time' in physiological_df.columns:
-                logger.info("Convirtiendo columna 'Time' a 'Timestamp' en DataFrame fisiológico")
-                physiological_df = physiological_df.with_columns(pl.col('Time').alias('Timestamp'))
-            elif 'ts' in physiological_df.columns:
-                logger.info("Convirtiendo columna 'ts' a 'Timestamp' en DataFrame fisiológico")
-                physiological_df = physiological_df.with_columns(pl.col('ts').alias('Timestamp'))
-            else:
-                logger.warning("DataFrame fisiológico no tiene columna 'Timestamp', 'Time' ni 'ts', saltando join")
-                logger.warning(f"Columnas disponibles: {physiological_df.columns}")
-                physiological_df = None
-        
-        if physiological_df is not None:
-            # Intentar convertir Timestamp a datetime
             try:
-                if physiological_df['Timestamp'].dtype != pl.Datetime:
-                    logger.info("Convirtiendo columna 'Timestamp' a datetime en DataFrame fisiológico")
-                    physiological_df = physiological_df.with_columns(
-                        pl.col('Timestamp').str.strptime(pl.Datetime, "%d-%m-%Y %H:%M:%S")
-                    )
+                # Intentar diferentes formatos de fecha
+                formats = [
+                    "%Y-%m-%d %H:%M:%S",
+                    "%d-%m-%Y %H:%M:%S",
+                    "%m-%d-%Y %H:%M:%S",
+                    "%Y/%m/%d %H:%M:%S",
+                    "%d/%m/%Y %H:%M:%S"
+                ]
+                
+                for fmt in formats:
+                    try:
+                        df = df.with_columns(
+                            pl.col('Timestamp').str.strptime(pl.Datetime, fmt)
+                        )
+                        break
+                    except Exception:
+                        continue
+                else:
+                    raise ValueError("No se pudo convertir Timestamp a datetime con ningún formato conocido")
+                    
             except Exception as e:
-                logger.error(f"Error al convertir Timestamp en datos fisiológicos: {e}")
-                logger.error(f"Tipo de dato actual de Timestamp: {physiological_df['Timestamp'].dtype}")
-                physiological_df = None
+                logger.error(f"No se pudo convertir Timestamp a datetime: {e}")
+                raise
         
+        return df
+    
+    # Estandarizar nombres de columnas de timestamp y tipos de datos
+    cgm_df = standardize_timestamp_column(cgm_df)
+    bolus_df = standardize_timestamp_column(bolus_df)
+    meal_df = standardize_timestamp_column(meal_df)
+    
+    if physiological_df is not None:
+        physiological_df = standardize_timestamp_column(physiological_df)
+    
+    # Asegurar que los DataFrames estén ordenados por timestamp y SubjectID
+    cgm_df = cgm_df.sort(['SubjectID', 'Timestamp'])
+    bolus_df = bolus_df.sort(['SubjectID', 'Timestamp'])
+    meal_df = meal_df.sort(['SubjectID', 'Timestamp'])
+    
+    if physiological_df is not None:
+        physiological_df = physiological_df.sort(['SubjectID', 'Timestamp'])
+    
+    # Unir bolus y meal primero
+    try:
+        # Asegurar que la columna value existe en cgm_df
+        if 'value' not in cgm_df.columns:
+            logger.error("Columna 'value' no encontrada en cgm_df")
+            raise ValueError("Columna 'value' no encontrada en cgm_df")
+            
+        # Asegurar que la columna bolus existe en bolus_df
+        if 'bolus' not in bolus_df.columns:
+            logger.error("Columna 'bolus' no encontrada en bolus_df")
+            raise ValueError("Columna 'bolus' no encontrada en bolus_df")
+        
+        # Unir con bolus sin sufijo para preservar el nombre de la columna
+        joined_df = cgm_df.join_asof(
+            bolus_df,
+            on='Timestamp',
+            by='SubjectID',
+            tolerance='5m'
+        )
+        
+        # Verificar que las columnas críticas están presentes
+        if 'value' not in joined_df.columns:
+            logger.error("Columna 'value' perdida después de join con bolus")
+            raise ValueError("Columna 'value' perdida después de join con bolus")
+        if 'bolus' not in joined_df.columns:
+            logger.error("Columna 'bolus' perdida después de join con bolus")
+            raise ValueError("Columna 'bolus' perdida después de join con bolus")
+        
+        # Unir con meal usando sufijo específico
+        joined_df = joined_df.join_asof(
+            meal_df,
+            on='Timestamp',
+            by='SubjectID',
+            tolerance='5m',
+            suffix='_meal'
+        )
+        
+        # Verificar nuevamente las columnas críticas
+        if 'value' not in joined_df.columns:
+            logger.error("Columna 'value' perdida después de join con meal")
+            raise ValueError("Columna 'value' perdida después de join con meal")
+        if 'bolus' not in joined_df.columns:
+            logger.error("Columna 'bolus' perdida después de join con meal")
+            raise ValueError("Columna 'bolus' perdida después de join con meal")
+        
+        # Unir datos fisiológicos si existen
         if physiological_df is not None:
-            # Eliminar duplicados de señales fisiológicas
-            physiological_df = physiological_df.unique(subset=["Timestamp", "SubjectID"])
+            # Filtrar valores nulos antes de unir
+            physiological_df = physiological_df.filter(pl.col('value').is_not_null())
             
-            # Renombrar columna 'value' a 'physiological_value' para evitar conflictos
-            if 'value' in physiological_df.columns:
-                physiological_df = physiological_df.rename({'value': 'physiological_value'})
+            # Renombrar columna value a physiological_value antes de unir
+            physiological_df = physiological_df.rename({'value': 'physiological_value'})
             
-            # Validar columnas fisiológicas esperadas
-            expected_physio_columns = [
-                'physiological_value', 'heart_rate', 'gsr', 'skin_temperature', 
-                'air_temperature', 'acceleration',
-                'sleep_event', 'work_event', 'stressors_event',
-                'illness_event', 'basis_sleep_event'
-            ]
-            
-            # Verificar columnas existentes
-            existing_columns = [col for col in expected_physio_columns 
-                              if col in physiological_df.columns]
-            
-            if not existing_columns:
-                logger.warning("No se encontraron columnas fisiológicas esperadas")
-                physiological_df = None
-            else:
-                missing_columns = [col for col in expected_physio_columns 
-                                 if col not in physiological_df.columns]
-                if missing_columns:
-                    logger.warning(f"Faltan tipos de datos: {missing_columns}")
-                
-                # Unir solo con las columnas existentes
-                joined_df = joined_df.join_asof(
-                    physiological_df.select(['Timestamp', 'SubjectID'] + existing_columns).sort('Timestamp'),
-                    on='Timestamp',
-                    by='SubjectID',
-                    tolerance=timedelta(minutes=5),
-                    strategy='nearest'
-                )
-                
-                # Calcular porcentaje de valores no nulos para cada señal
-                for signal in existing_columns:
-                    non_null_count = joined_df.filter(pl.col(signal).is_not_null()).height
-                    total_count = joined_df.height
-                    percentage = (non_null_count / total_count) * 100
-                    logger.info(f"Señal {signal}: {percentage:.1f}% valores no nulos")
-                
-                # Rellenar valores faltantes para señales continuas
-                continuous_signals = [
-                    'physiological_value', 'heart_rate', 'gsr', 'skin_temperature', 
-                    'air_temperature', 'acceleration'
-                ]
-                for signal in continuous_signals:
-                    if signal in joined_df.columns:
-                        # Usar interpolación para señales continuas
-                        joined_df = joined_df.with_columns(
-                            pl.col(signal).interpolate().fill_null(strategy='forward')
-                        )
-                
-                # Rellenar valores faltantes para eventos binarios
-                binary_events = [
-                    'sleep_event', 'work_event', 'stressors_event',
-                    'illness_event', 'basis_sleep_event'
-                ]
-                for event in binary_events:
-                    if event in joined_df.columns:
-                        # Rellenar con 0 para eventos binarios
-                        joined_df = joined_df.with_columns(
-                            pl.col(event).fill_null(0)
-                        )
-    
-    # Rellenar valores faltantes para columnas numéricas
-    numeric_columns = ['bolus', 'meal_carbs']
-    for col in numeric_columns:
-        if col in joined_df.columns:
-            joined_df = joined_df.with_columns(
-                pl.col(col).fill_null(0)
+            # Unir datos fisiológicos usando sufijo específico
+            joined_df = joined_df.join_asof(
+                physiological_df,
+                on='Timestamp',
+                by='SubjectID',
+                tolerance='5m',
+                suffix='_physio'
             )
-    
-    # Ordenar por timestamp y subject
-    joined_df = joined_df.sort(['SubjectID', 'Timestamp'])
-    
-    # Validar la integridad de los datos
-    if joined_df.is_empty():
-        raise ValueError("El DataFrame unido está vacío")
-    
-    # Verificar duplicados en Timestamp por SubjectID
-    duplicate_timestamps = joined_df.group_by(['SubjectID', 'Timestamp']).agg(
-        pl.len().alias('count')
-    ).filter(pl.col('count') > 1)
-    
-    if not duplicate_timestamps.is_empty():
-        logger.warning(f"Se encontraron {duplicate_timestamps.height} timestamps duplicados")
-        # Mostrar algunos ejemplos de duplicados
-        logger.warning("Ejemplos de timestamps duplicados:")
-        for row in duplicate_timestamps.head(5).iter_rows(named=True):
-            logger.warning(f"SubjectID: {row['SubjectID']}, Timestamp: {row['Timestamp']}, Count: {row['count']}")
-    
-    return joined_df
+            
+            # Calcular porcentaje de valores no nulos
+            if 'physiological_value' in joined_df.columns:
+                non_null_percentage = (joined_df['physiological_value'].is_not_null().sum() / len(joined_df)) * 100
+                logger.info(f"Señal physiological_value: {non_null_percentage:.1f}% valores no nulos")
+        
+        # Verificar columnas críticas una última vez
+        if 'value' not in joined_df.columns:
+            logger.error("Columna 'value' perdida después de join con physiological")
+            raise ValueError("Columna 'value' perdida después de join con physiological")
+        if 'bolus' not in joined_df.columns:
+            logger.error("Columna 'bolus' perdida después de join con physiological")
+            raise ValueError("Columna 'bolus' perdida después de join con physiological")
+        
+        # Registrar forma final y columnas presentes
+        logger.info(f"Forma de datos unidos: {joined_df.shape}")
+        logger.info(f"Columnas presentes: {joined_df.columns}")
+        
+        return joined_df
+        
+    except Exception as e:
+        logger.error(f"Error en join_signals: {e}")
+        raise
 
 def ensure_timestamp_datetime(df: pl.DataFrame, col: str = "Timestamp") -> pl.DataFrame:
     """
@@ -835,98 +800,123 @@ def transform_features(df: pl.DataFrame) -> pl.DataFrame:
 def generate_extended_windows(df: pl.DataFrame, 
                             window_size: int = 12,
                             prediction_horizon: int = 12) -> Tuple[pl.DataFrame, pl.DataFrame]:
-    """
-    Genera ventanas de datos para entrenamiento, incluyendo señales fisiológicas.
+    """Genera ventanas extendidas con características adicionales"""
     
-    Args:
-        df: DataFrame con todos los datos
-        window_size: Tamaño de la ventana de entrada en muestras
-        prediction_horizon: Horizonte de predicción en muestras
-        
-    Returns:
-        Tuple con (X, y) DataFrames para entrenamiento
-    """
-    if df.is_empty():
-        raise ValueError("El DataFrame de entrada está vacío")
+    def safe_mean(series):
+        """Calcula la media de forma segura, manejando valores nulos"""
+        if series.is_null().all():
+            return 0.0
+        non_null = series.drop_nulls()
+        if len(non_null) == 0:
+            return 0.0
+        return float(non_null.mean())
     
-    # Validar columnas requeridas
-    required_columns = ['Timestamp', 'value']  # Cambiado de 'glucose' a 'value'
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        raise ValueError(f"Faltan columnas requeridas: {missing_columns}")
+    def safe_std(series):
+        """Calcula la desviación estándar de forma segura, manejando valores nulos"""
+        if series.is_null().all():
+            return 0.0
+        non_null = series.drop_nulls()
+        if len(non_null) <= 1:
+            return 0.0
+        return float(non_null.std())
     
-    # Ordenar por timestamp
-    df = df.sort('Timestamp')
+    def safe_min(series):
+        """Calcula el mínimo de forma segura, manejando valores nulos"""
+        if series.is_null().all():
+            return 0.0
+        non_null = series.drop_nulls()
+        if len(non_null) == 0:
+            return 0.0
+        return float(non_null.min())
     
-    # Definir columnas para características
-    feature_columns = [
-        'value', 'bolus', 'meal_carbs',  # Cambiado de 'glucose' a 'value'
-        'heart_rate', 'gsr', 'skin_temperature',
-        'air_temperature', 'acceleration',
-        'sleep_event', 'work_event', 'stressors_event',
-        'illness_event', 'basis_sleep_event'
-    ]
+    def safe_max(series):
+        """Calcula el máximo de forma segura, manejando valores nulos"""
+        if series.is_null().all():
+            return 0.0
+        non_null = series.drop_nulls()
+        if len(non_null) == 0:
+            return 0.0
+        return float(non_null.max())
     
-    # Filtrar columnas existentes
-    available_features = [col for col in feature_columns if col in df.columns]
+    def safe_float(value):
+        """Convierte un valor a float de forma segura, manejando None"""
+        if value is None or pd.isna(value):
+            return 0.0
+        return float(value)
     
-    # Generar ventanas
-    X_windows = []
-    y_windows = []
+    # Lista para almacenar las características
+    X_features = []
+    y_values = []
     
+    # Obtener columnas numéricas (excluyendo Timestamp y SubjectID)
+    numeric_cols = [col for col in df.columns 
+                   if col not in ['Timestamp', 'SubjectID'] 
+                   and df[col].dtype in [pl.Float64, pl.Int64]]
+    
+    # Iterar sobre cada ventana
     for i in range(len(df) - window_size - prediction_horizon + 1):
-        # Ventana de entrada
         window = df.slice(i, window_size)
+        future_window = df.slice(i + window_size, prediction_horizon)
         
-        # Ventana de predicción
-        pred_window = df.slice(i + window_size, prediction_horizon)
+        # Características básicas
+        features = {
+            'Timestamp': window['Timestamp'].last(),
+            'SubjectID': window['SubjectID'].last()
+        }
         
-        # Extraer características
-        X_features = {}
-        for col in available_features:
-            if col == 'value':  # Cambiado de 'glucose' a 'value'
-                # Para glucosa, usar valores completos
-                X_features[col] = window[col].to_list()
-            else:
-                # Para otras señales, calcular estadísticas
-                if col in ['sleep_event', 'work_event', 'stressors_event', 
-                          'illness_event', 'basis_sleep_event']:
-                    # Para eventos binarios, usar la proporción de eventos
-                    X_features[f'{col}_ratio'] = float(window[col].mean())
-                else:
-                    # Para señales continuas, usar media y desviación estándar
-                    X_features[f'{col}_mean'] = float(window[col].mean())
-                    X_features[f'{col}_std'] = float(window[col].std())
+        # Preservar el valor actual de glucosa y bolus de forma segura
+        if 'value' in window.columns:
+            features['value'] = safe_float(window['value'].last())
+        if 'bolus' in window.columns:
+            features['bolus'] = safe_float(window['bolus'].last())
         
-        # Extraer valores objetivo (glucosa futura)
-        y_values = pred_window['value'].to_list()  # Cambiado de 'glucose' a 'value'
+        # Calcular características para cada columna numérica
+        for col in numeric_cols:
+            try:
+                features[f'{col}_mean'] = safe_mean(window[col])
+                features[f'{col}_std'] = safe_std(window[col])
+                features[f'{col}_min'] = safe_min(window[col])
+                features[f'{col}_max'] = safe_max(window[col])
+            except Exception as e:
+                logger.warning(f"Error calculando estadísticas para columna {col}: {e}")
+                features[f'{col}_mean'] = 0.0
+                features[f'{col}_std'] = 0.0
+                features[f'{col}_min'] = 0.0
+                features[f'{col}_max'] = 0.0
         
-        X_windows.append(X_features)
-        y_windows.append(y_values)
+        X_features.append(features)
+        y_values.append(future_window['value'].to_list())
     
-    # Convertir a DataFrames
-    X_df = pl.DataFrame(X_windows)
-    y_df = pl.DataFrame({
-        f'glucose_t{i}': [y[i] for y in y_windows]
-        for i in range(prediction_horizon)
-    })
+    # Convertir a DataFrames con tipos de datos explícitos
+    schema = {
+        'Timestamp': pl.Datetime,
+        'SubjectID': pl.Utf8,
+        'value': pl.Float64,
+        'bolus': pl.Float64
+    }
     
-    # Validar resultados
-    if X_df.is_empty() or y_df.is_empty():
-        raise ValueError("No se pudieron generar ventanas válidas")
+    # Añadir esquema para columnas derivadas
+    for col in numeric_cols:
+        schema.update({
+            f'{col}_mean': pl.Float64,
+            f'{col}_std': pl.Float64,
+            f'{col}_min': pl.Float64,
+            f'{col}_max': pl.Float64
+        })
     
-    # Verificar dimensiones
-    if len(X_df) != len(y_df):
-        raise ValueError("Dimensiones inconsistentes entre X e y")
+    # Crear DataFrame con esquema explícito
+    X_df = pl.DataFrame(X_features, schema=schema)
+    y_df = pl.DataFrame({'future_values': y_values})
     
-    # Verificar valores faltantes usando sintaxis de polars
-    missing_X = X_df.null_count().sum().sum().item(0,0)  # Obtener el valor de la primera celda
-    missing_y = y_df.null_count().sum().sum().item(0,0)  # Obtener el valor de la primera celda
+    # Verificar que las columnas críticas están presentes
+    critical_columns = ['value', 'bolus']
+    missing_critical = [col for col in critical_columns if col not in X_df.columns]
+    if missing_critical:
+        logger.error(f"Faltan columnas críticas después de generar ventanas: {missing_critical}")
+        raise ValueError(f"Faltan columnas críticas después de generar ventanas: {missing_critical}")
     
-    if missing_X > 0 or missing_y > 0:
-        logger.warning(
-            f"Se encontraron valores faltantes: X={missing_X}, y={missing_y}"
-        )
+    logger.info(f"Ventanas generadas: X={X_df.shape}, y={y_df.shape}")
+    logger.info(f"Columnas en X_df: {X_df.columns}")
     
     return X_df, y_df
 
@@ -1368,6 +1358,15 @@ def extract_enhanced_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] 
     Returns:
         DataFrame con características extraídas
     """
+    # Verificar columnas críticas
+    if 'value' not in df.columns:
+        logger.error("Columna 'value' no encontrada en el DataFrame de entrada")
+        raise ValueError("Columna 'value' no encontrada en el DataFrame de entrada")
+    
+    # Preservar columnas críticas
+    critical_columns = ['value', 'bolus', 'SubjectID', 'Timestamp']
+    preserved_columns = {col: df[col] for col in critical_columns if col in df.columns}
+    
     # Definir grupos de características
     feature_groups = {
         'cgm': [
@@ -1420,6 +1419,15 @@ def extract_enhanced_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] 
             )
             for key, value in patterns_24h.items():
                 df = df.with_columns(pl.lit(value).alias(key))
+        else:
+            # Si no hay datos extendidos, calcular usando los datos actuales
+            patterns_24h = compute_glucose_patterns_24h(
+                df.get_column('value').to_list()
+            )
+            for key, value in patterns_24h.items():
+                df = df.with_columns(pl.lit(value).alias(key))
+            
+            logger.info("Usando datos actuales para calcular patrones de 24h")
     
     # Extraer características fisiológicas
     for signal in available_features.get('physiological', []):
@@ -1517,6 +1525,11 @@ def extract_enhanced_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] 
     # Rellenar valores nulos
     df = df.fill_null(0)
     
+    # Restaurar columnas críticas preservadas
+    for col, values in preserved_columns.items():
+        if col not in df.columns:
+            df = df.with_columns(values.alias(col))
+    
     # Verificar características generadas
     for group, features in feature_groups.items():
         present = [f for f in features if f in df.columns]
@@ -1524,6 +1537,13 @@ def extract_enhanced_features(df: pl.DataFrame, meal_df: Optional[pl.DataFrame] 
         if len(present) < len(features):
             missing = set(features) - set(present)
             logger.warning(f"Faltan características de {group}: {missing}")
+    
+    # Verificar columnas críticas al final
+    critical_columns = ['value', 'time_in_range_24h', 'bolus']
+    missing_critical = [col for col in critical_columns if col not in df.columns]
+    if missing_critical:
+        logger.error(f"Faltan columnas críticas al final: {missing_critical}")
+        raise ValueError(f"Faltan columnas críticas al final: {missing_critical}")
     
     return df
 
@@ -1682,50 +1702,95 @@ def estimate_basal_rate(df: pl.DataFrame, subject_id: str) -> float:
     return float(basal_estimate)
 
 def plot_clinical_metrics(df: pl.DataFrame, output_dir: str):
-    """
-    Genera y guarda gráficos de métricas clínicas.
-    
-    Args:
-        df: DataFrame con datos procesados
-        output_dir: Directorio para guardar los gráficos
-    """
-    if not CONFIG['log_clinical_metrics']:
-        return
+    """Genera visualizaciones de métricas clínicas y las guarda en el directorio especificado"""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from pathlib import Path
+    import pandas as pd
+    import numpy as np
     
     # Crear directorio si no existe
-    Path(output_dir).mkdir(exist_ok=True, parents=True)
+    plot_dir = Path(output_dir)
+    plot_dir.mkdir(parents=True, exist_ok=True)
     
-    # Distribución de TIR
-    plt.figure(figsize=(10, 6))
-    plt.hist(df['time_in_range_24h'], bins=20)
-    plt.xlabel('Tiempo en Rango (24h)')
-    plt.ylabel('Frecuencia')
-    plt.title('Distribución de TIR')
-    plt.savefig(f"{output_dir}/tir_distribution.png")
-    plt.close()
+    # Convertir a pandas para visualización
+    df_pd = df.to_pandas()
     
-    # TIR por sujeto
-    plt.figure(figsize=(12, 6))
-    tir_by_subject = df.groupby('SubjectID').agg(pl.col('time_in_range_24h').mean())
-    plt.bar(tir_by_subject['SubjectID'], tir_by_subject['time_in_range_24h'])
-    plt.xlabel('SubjectID')
-    plt.ylabel('TIR Promedio')
-    plt.title('TIR por Sujeto')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/tir_by_subject.png")
-    plt.close()
+    # Configurar estilo
+    plt.style.use('seaborn')
     
-    # Distribución de bolus
-    plt.figure(figsize=(10, 6))
-    plt.hist(df.filter(pl.col('bolus').is_not_null())['bolus'], bins=30)
-    plt.xlabel('Dosis de Bolus (U)')
-    plt.ylabel('Frecuencia')
-    plt.title('Distribución de Dosis de Bolus')
-    plt.savefig(f"{output_dir}/bolus_distribution.png")
-    plt.close()
+    # Función auxiliar para guardar plots de forma segura
+    def safe_save_plot(fig, filename):
+        try:
+            plt.savefig(str(plot_dir / filename), dpi=100, bbox_inches='tight')
+            logger.info(f"Plot generado: {filename}")
+        except Exception as e:
+            logger.error(f"Error guardando plot {filename}: {e}")
+        finally:
+            plt.close(fig)
     
-    logger.info(f"Gráficos de métricas clínicas guardados en {output_dir}")
+    # Función para filtrar valores extremos
+    def filter_extremes(data, column, lower_percentile=1, upper_percentile=99):
+        lower = np.percentile(data[column].dropna(), lower_percentile)
+        upper = np.percentile(data[column].dropna(), upper_percentile)
+        return data[(data[column] >= lower) & (data[column] <= upper)]
+    
+    try:
+        # 1. Distribución de glucosa
+        fig, ax = plt.subplots(figsize=(10, 6))
+        filtered_data = filter_extremes(df_pd, 'value')
+        sns.histplot(data=filtered_data, x='value', bins=50)
+        plt.title('Distribución de Valores de Glucosa')
+        plt.xlabel('Glucosa (mg/dL)')
+        plt.ylabel('Frecuencia')
+        safe_save_plot(fig, 'glucose_distribution.png')
+        
+        # 2. Tiempo en rango por sujeto
+        if 'time_in_range_24h' in df_pd.columns:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            x_col = 'SubjectID' if 'SubjectID' in df_pd.columns else df_pd.index
+            sns.boxplot(data=df_pd, x=x_col, y='time_in_range_24h')
+            plt.title('Tiempo en Rango por Sujeto')
+            plt.xlabel('SubjectID' if 'SubjectID' in df_pd.columns else 'Índice')
+            plt.ylabel('TIR (%)')
+            plt.xticks(rotation=45)
+            safe_save_plot(fig, 'time_in_range.png')
+        
+        # 3. Distribución de bolus
+        if 'bolus' in df_pd.columns:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            valid_bolus = df_pd[(df_pd['bolus'] > 0) & (df_pd['bolus'] < 20)]
+            sns.histplot(data=valid_bolus, x='bolus', bins=30)
+            plt.title('Distribución de Dosis de Bolus')
+            plt.xlabel('Dosis (U)')
+            plt.ylabel('Frecuencia')
+            safe_save_plot(fig, 'bolus_distribution.png')
+        
+        # 4. Patrones de glucosa por hora
+        if 'Timestamp' in df_pd.columns:
+            fig, ax = plt.subplots(figsize=(12, 6))
+            df_pd['hour'] = pd.to_datetime(df_pd['Timestamp']).dt.hour
+            valid_data = filter_extremes(df_pd, 'value')
+            sns.boxplot(data=valid_data, x='hour', y='value')
+            plt.title('Patrones de Glucosa por Hora')
+            plt.xlabel('Hora del Día')
+            plt.ylabel('Glucosa (mg/dL)')
+            safe_save_plot(fig, 'glucose_by_hour.png')
+        
+        # 5. Correlación entre variables
+        if len(df_pd.columns) > 2:
+            fig, ax = plt.subplots(figsize=(12, 8))
+            numeric_cols = df_pd.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 1:
+                corr_matrix = df_pd[numeric_cols].corr()
+                sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0)
+                plt.title('Matriz de Correlación')
+                safe_save_plot(fig, 'correlation_matrix.png')
+        
+    except Exception as e:
+        logger.error(f"Error generando plots: {e}")
+    finally:
+        plt.close('all')  # Cerrar todas las figuras al finalizar
 
 def generate_cv_splits(df: pl.DataFrame, output_dir: str):
     """
