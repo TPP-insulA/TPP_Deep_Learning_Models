@@ -1063,6 +1063,186 @@ class TRPOWrapper(nn.Module):
                 # Devolver ceros si hay error
                 return np.zeros((x_cgm.shape[0], 1))
 
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> float:
+        """
+        Realiza predicciones de dosis con variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        **context : dict
+            Variables contextuales como:
+            - carb_intake : float - Ingesta de carbohidratos
+            - iob : float - Insulina a bordo
+            - objective_glucose : float - Nivel objetivo de glucosa
+            - sleep_quality : float - Calidad del sueño
+            - work_intensity : float - Intensidad del trabajo
+            - exercise_intensity : float - Intensidad del ejercicio
+                
+        Retorna:
+        --------
+        float
+            Dosis de insulina recomendada en unidades
+        """
+        self.eval()  # Establecer en modo evaluación
+        
+        with torch.no_grad():
+            # Convertir a tensores si son arrays numpy
+            if not isinstance(x_cgm, torch.Tensor):
+                x_cgm = torch.tensor(x_cgm, dtype=torch.float32)
+            if not isinstance(x_other, torch.Tensor):
+                x_other = torch.tensor(x_other, dtype=torch.float32)
+            
+            # Mover tensores al dispositivo adecuado
+            x_cgm = x_cgm.to(CONST_DEVICE)
+            x_other = x_other.to(CONST_DEVICE)
+            
+            # Crear tensor para variables contextuales
+            context_values = [
+                context.get('carb_intake', 0.0),
+                context.get('iob', 0.0),
+                context.get('objective_glucose', 0.0),
+                context.get('sleep_quality', 5.0),
+                context.get('work_intensity', 0.0),
+                context.get('exercise_intensity', 0.0)
+            ]
+            
+            context_tensor = torch.tensor(context_values, dtype=torch.float32).to(CONST_DEVICE)
+            
+            # Asegurar que tiene la dimensión correcta (añadir dimensión de lote si es necesario)
+            if len(x_cgm.shape) > 1 and x_cgm.shape[0] > 1:
+                # Si hay múltiples muestras, usar solo la primera para predicción singular
+                x_cgm = x_cgm[0:1]
+                x_other = x_other[0:1]
+                context_tensor = context_tensor.unsqueeze(0)
+            elif len(x_cgm.shape) == 2:  # Si es (time_steps, features)
+                x_cgm = x_cgm.unsqueeze(0)  # Convertir a (1, time_steps, features)
+                context_tensor = context_tensor.unsqueeze(0)
+            
+            # Codificar entradas
+            cgm_encoded = self.cgm_encoder(x_cgm)
+            other_encoded = self.other_encoder(x_other)
+            
+            # Concatenar contexto con otras características
+            enhanced_other = torch.cat([other_encoded, context_tensor], dim=1)
+            
+            # Combinar características
+            combined = torch.cat([cgm_encoded, enhanced_other], dim=1)
+            
+            # Obtener estado para TRPO
+            state = self.combined_layer(combined)
+            
+            # Obtener acción determinística del actor TRPO
+            action = self.trpo_agent.get_action(state[0].cpu().numpy(), deterministic=True)
+            
+            # Convertir a dosis apropiada si es necesario
+            if self.trpo_agent.continuous:
+                dose = float(action[0]) if isinstance(action, np.ndarray) else float(action)
+            else:
+                # Para acciones discretas, convertir índice a valor de dosis
+                action_val = int(action[0]) if isinstance(action, np.ndarray) else int(action)
+                dose = float(action_val) / (self.trpo_agent.action_dim - 1) * 15.0
+            
+            # Asegurar que la dosis está en el rango válido
+            dose = max(0.0, min(dose, 15.0))
+            
+            return dose
+    
+    def forward_with_context(self, x_cgm: torch.Tensor, x_other: torch.Tensor, 
+                   context_tensor: torch.Tensor = None,
+                   carb_intake: float = None, iob: float = None, 
+                   objective_glucose: float = None, sleep_quality: float = None, 
+                   work_intensity: float = None, exercise_intensity: float = None) -> torch.Tensor:
+        """
+        Realiza un forward pass incluyendo variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        x_cgm : torch.Tensor
+            Datos CGM de entrada
+        x_other : torch.Tensor
+            Otras características de entrada
+        context_tensor : torch.Tensor, opcional
+            Tensor de contexto ya formado
+        carb_intake : float, opcional
+            Ingesta de carbohidratos en gramos
+        iob : float, opcional
+            Insulina a bordo (insulina activa en el cuerpo)
+        objective_glucose : float, opcional
+            Nivel objetivo de glucosa en sangre
+        sleep_quality : float, opcional
+            Calidad del sueño (escala de 0-10)
+        work_intensity : float, opcional
+            Intensidad del trabajo/estrés (escala de 0-10)
+        exercise_intensity : float, opcional
+            Intensidad del ejercicio (escala de 0-10)
+            
+        Retorna:
+        --------
+        torch.Tensor
+            Predicciones del modelo con contexto incorporado
+        """
+        # Verificar si se proporcionó un tensor de contexto o crear uno nuevo
+        if context_tensor is None:
+            context_values = [
+                carb_intake if carb_intake is not None else 0.0,
+                iob if iob is not None else 0.0,
+                objective_glucose if objective_glucose is not None else 0.0,
+                sleep_quality if sleep_quality is not None else 5.0,
+                work_intensity if work_intensity is not None else 0.0,
+                exercise_intensity if exercise_intensity is not None else 0.0
+            ]
+            context_tensor = torch.tensor(context_values, dtype=torch.float32).to(CONST_DEVICE)
+            
+            # Replicar para todas las muestras en el lote
+            if len(x_cgm.shape) > 1 and x_cgm.shape[0] > 1:
+                context_tensor = context_tensor.unsqueeze(0).repeat(x_cgm.shape[0], 1)
+            else:
+                context_tensor = context_tensor.unsqueeze(0)
+        
+        # Codificar entradas
+        cgm_encoded = self.cgm_encoder(x_cgm)
+        other_encoded = self.other_encoder(x_other)
+        
+        # Concatenar contexto con otras características
+        enhanced_other = torch.cat([other_encoded, context_tensor], dim=1)
+        
+        # Combinar todas las características
+        combined = torch.cat([cgm_encoded, enhanced_other], dim=1)
+        
+        # Obtener estado para TRPO
+        state = self.combined_layer(combined)
+        
+        # Obtener acciones para cada muestra en el lote
+        batch_size = state.shape[0]
+        actions = torch.zeros((batch_size, 1), device=CONST_DEVICE)
+        
+        for i in range(batch_size):
+            # Durante entrenamiento, mantener cierta estocasticidad para exploración
+            # Si self.training es True, usar deterministic=False para exploración
+            # Si no, usar deterministic=True para predicciones estables
+            deterministic = not self.training
+            action = self.trpo_agent.get_action(state[i].cpu().numpy(), deterministic=deterministic)
+            
+            if self.trpo_agent.continuous:
+                actions[i] = torch.tensor(action[0] if isinstance(action, np.ndarray) else action, 
+                                        device=CONST_DEVICE)
+            else:
+                # Manejar el caso discreto
+                if isinstance(action, np.ndarray) and action.size > 0:
+                    action_val = int(action[0])
+                else:
+                    action_val = int(action)
+                
+                # Escalar de discreto a continuo
+                action_scaled = float(action_val) / (self.trpo_agent.action_dim - 1) * 15.0
+                actions[i, 0] = action_scaled
+        
+        return actions
+
     def _prepare_tensor(self, x: Any) -> torch.Tensor:
         """
         Convierte a tensor y mueve al dispositivo adecuado.

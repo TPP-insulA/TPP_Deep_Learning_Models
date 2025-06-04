@@ -1099,6 +1099,160 @@ class DQNWrapper(nn.Module):
             
         return doses.cpu().numpy()
 
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> float:
+        """
+        Realiza predicciones de dosis con variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        **context : dict
+            Variables contextuales como:
+            - carb_intake : float - Ingesta de carbohidratos
+            - iob : float - Insulina a bordo
+            - objective_glucose : float - Nivel objetivo de glucosa
+            - sleep_quality : float - Calidad del sueño
+            - work_intensity : float - Intensidad del trabajo
+            - exercise_intensity : float - Intensidad del ejercicio
+                
+        Retorna:
+        --------
+        float
+            Dosis de insulina recomendada en unidades
+        """
+        # Convertir entradas a tensores si no lo son ya
+        if not isinstance(x_cgm, torch.Tensor):
+            x_cgm = torch.FloatTensor(x_cgm).to(CONST_DEVICE)
+            x_other = torch.FloatTensor(x_other).to(CONST_DEVICE)
+        
+        # Preparar tensor de contexto
+        context_values = [
+            context.get('carb_intake', 0.0),
+            context.get('iob', 0.0),
+            context.get('objective_glucose', 0.0),
+            context.get('sleep_quality', 5.0),
+            context.get('work_intensity', 0.0),
+            context.get('exercise_intensity', 0.0)
+        ]
+        context_tensor = torch.FloatTensor(context_values).to(CONST_DEVICE)
+        
+        # Asegurar que se procesa una sola muestra
+        if len(x_cgm.shape) > 1 and x_cgm.shape[0] > 1:
+            # Si hay múltiples muestras, usar solo la primera
+            x_cgm = x_cgm[0:1]
+            x_other = x_other[0:1]
+        
+        # Añadir dimensión de lote si es necesario
+        if len(x_cgm.shape) == 2:  # Si es (time_steps, features)
+            x_cgm = x_cgm.unsqueeze(0)  # Convertir a (1, time_steps, features)
+        
+        # Añadir dimensión de lote al contexto si es necesario
+        context_tensor = context_tensor.unsqueeze(0)  # (1, n_context_features)
+        
+        with torch.no_grad():
+            # Aplanar entradas
+            batch_size = x_cgm.shape[0]
+            cgm_flat = x_cgm.reshape(batch_size, -1)
+            other_flat = x_other.reshape(batch_size, -1)
+            
+            # Codificar entradas
+            cgm_encoded = self.cgm_encoder(cgm_flat)
+            other_encoded = self.other_encoder(other_flat)
+            
+            # Concatenar contexto con otras características
+            enhanced_other = torch.cat([other_encoded, context_tensor], dim=1)
+            
+            # Combinar todas las características
+            state = torch.cat([cgm_encoded, enhanced_other], dim=1)
+            
+            # Poner actor en modo evaluación y obtener acción determinística
+            self.ddpg_agent.actor.eval()
+            action = self.ddpg_agent.actor(state)
+            
+            # Extraer el valor de dosis como float
+            dose = float(action.cpu().numpy()[0][0])
+            
+            # Asegurar que el valor está en el rango válido
+            dose = max(0.0, min(dose, 15.0))
+            
+            return dose
+    
+    def forward_with_context(self, cgm_input: torch.Tensor, other_input: torch.Tensor, 
+                        context_tensor: torch.Tensor = None,
+                        carb_intake: float = None, iob: float = None, 
+                        objective_glucose: float = None, sleep_quality: float = None, 
+                        work_intensity: float = None, exercise_intensity: float = None) -> torch.Tensor:
+        """
+        Realiza un forward pass incluyendo variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        cgm_input : torch.Tensor
+            Datos CGM de entrada
+        other_input : torch.Tensor
+            Otras características de entrada
+        context_tensor : torch.Tensor, opcional
+            Tensor de contexto ya formado
+        carb_intake : float, opcional
+            Ingesta de carbohidratos en gramos
+        iob : float, opcional
+            Insulina a bordo (insulina activa en el cuerpo)
+        objective_glucose : float, opcional
+            Nivel objetivo de glucosa en sangre
+        sleep_quality : float, opcional
+            Calidad del sueño (escala de 0-10)
+        work_intensity : float, opcional
+            Intensidad del trabajo/estrés (escala de 0-10)
+        exercise_intensity : float, opcional
+            Intensidad del ejercicio (escala de 0-10)
+            
+        Retorna:
+        --------
+        torch.Tensor
+            Predicciones del modelo (acciones)
+        """
+        # Verificar si se proporcionó un tensor de contexto o crear uno nuevo
+        if context_tensor is None:
+            # Crear tensor de contexto a partir de variables individuales
+            context_values = [
+                carb_intake if carb_intake is not None else 0.0,
+                iob if iob is not None else 0.0,
+                objective_glucose if objective_glucose is not None else 0.0,
+                sleep_quality if sleep_quality is not None else 5.0,
+                work_intensity if work_intensity is not None else 0.0,
+                exercise_intensity if exercise_intensity is not None else 0.0
+            ]
+            context_tensor = torch.FloatTensor(context_values).to(CONST_DEVICE)
+            
+            # Replicar para todas las muestras en el lote si es necesario
+            if len(cgm_input.shape) > 1 and cgm_input.shape[0] > 1:
+                context_tensor = context_tensor.unsqueeze(0).repeat(cgm_input.shape[0], 1)
+            else:
+                context_tensor = context_tensor.unsqueeze(0)
+        
+        # Aplanar entradas si es necesario
+        batch_size = cgm_input.shape[0]
+        cgm_flat = cgm_input.reshape(batch_size, -1)
+        other_flat = other_input.reshape(batch_size, -1)
+        
+        # Codificar entradas
+        cgm_encoded = self.cgm_encoder(cgm_flat)
+        other_encoded = self.other_encoder(other_flat)
+        
+        # Concatenar contexto con otras características
+        enhanced_other = torch.cat([other_encoded, context_tensor], dim=1)
+        
+        # Combinar todas las características codificadas
+        state = torch.cat([cgm_encoded, enhanced_other], dim=1)
+        
+        # Obtener acciones usando el actor (política)
+        self.ddpg_agent.actor.train()  # Mantener en modo entrenamiento para este método
+        actions = self.ddpg_agent.actor(state)
+        
+        return actions
 
 def create_dqn_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int, ...]) -> DRLModelWrapperPyTorch:
     """

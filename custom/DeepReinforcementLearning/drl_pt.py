@@ -5,21 +5,10 @@ import torch.nn as nn
 import torch.optim as optim
 from tqdm.auto import tqdm
 
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_ACTOR, CONST_CRITIC, CONST_TARGET, CONST_PARAMS, CONST_DEVICE, CONST_MODEL_INIT_ERROR, CONST_LOSS, CONST_VAL_LOSS, CONST_EPSILON
 from config.models_config import EARLY_STOPPING_POLICY
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_warning, print_error, print_success
-
-# Constantes para uso repetido
-CONST_ACTOR = "actor"
-CONST_CRITIC = "critic"
-CONST_TARGET = "target"
-CONST_PARAMS = "params"
-CONST_DEVICE = "device"
-CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
-CONST_LOSS = "loss"
-CONST_VAL_LOSS = "val_loss"
-CONST_EPSILON = 1e-10
 
 class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
     """
@@ -750,6 +739,96 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         self._restore_best_weights()
         
         return history
+    
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> float:
+        """
+        Realiza predicciones de dosis con variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        **context : dict
+            Variables contextuales como:
+            - carb_intake : float - Ingesta de carbohidratos
+            - iob : float - Insulina a bordo
+            - objective_glucose : float - Nivel objetivo de glucosa
+            - sleep_quality : float - Calidad del sueño
+            - work_intensity : float - Intensidad del trabajo
+            - exercise_intensity : float - Intensidad del ejercicio
+            
+        Retorna:
+        --------
+        float
+            Dosis de insulina recomendada en unidades
+        """
+        # Verificar que el modelo esté inicializado
+        if self.model is None:
+            if self.is_class:
+                try:
+                    self.model = self.model_cls(**self.model_kwargs)
+                    if isinstance(self.model, nn.Module):
+                        self.model = self.model.to(self.device)
+                except Exception as e:
+                    print_debug(f"Error al inicializar el modelo: {e}")
+                    raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
+            else:
+                raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
+        
+        # Poner en modo evaluación
+        self.eval()
+        
+        # Verificar si el modelo tiene un método específico para contexto
+        if hasattr(self.model, 'predict_with_context'):
+            prediction_array = self.model.predict_with_context(x_cgm, x_other, **context)
+            return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
+        
+        # Si el modelo tiene predict pero no específico para contexto
+        if hasattr(self.model, 'predict'):
+            # Intentar pasar el contexto como kwargs
+            try:
+                prediction_array = self.model.predict([x_cgm, x_other], **context)
+                return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
+            except Exception:
+                # Si falla, usar predict normal
+                prediction_array = self.model.predict([x_cgm, x_other])
+                return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
+        
+        # Implementación estándar si no hay métodos específicos
+        with torch.no_grad():
+            x_cgm_t = torch.FloatTensor(x_cgm).to(self.device)
+            x_other_t = torch.FloatTensor(x_other).to(self.device)
+            
+            # Crear tensor de contexto si hay variables contextuales
+            if context:
+                # Extraer valores de contexto (usar 0 como valor por defecto)
+                context_values = [
+                    context.get('carb_intake', 0.0),
+                    context.get('iob', 0.0),
+                    context.get('objective_glucose', 0.0),
+                    context.get('sleep_quality', 5.0),
+                    context.get('work_intensity', 0.0),
+                    context.get('exercise_intensity', 0.0)
+                ]
+                
+                # Crear tensor - asegurar que solo procesamos una muestra a la vez
+                context_tensor = torch.FloatTensor(context_values).to(self.device).unsqueeze(0)
+                
+                # Si el modelo tiene un método forward_with_context, usarlo
+                if hasattr(self.model, 'forward_with_context'):
+                    predictions = self.model.forward_with_context(x_cgm_t, x_other_t, context_tensor)
+                else:
+                    # Concatenar con otras características como alternativa
+                    enhanced_features = torch.cat([x_other_t, context_tensor], dim=1)
+                    predictions = self.forward(x_cgm_t, enhanced_features)
+            else:
+                # Sin contexto, usar forward normal
+                predictions = self.forward(x_cgm_t, x_other_t)
+            
+            # Extraer y devolver el valor único
+            return float(predictions.cpu().numpy().flatten()[0])
 
     def save(self, path: str) -> None:
         """

@@ -20,6 +20,14 @@ CONST_FRAMEWORKS = {
     "jax": "JAX",
     "pytorch": "PyTorch"
 }
+CONST_ACTOR = "actor"
+CONST_CRITIC = "critic"
+CONST_TARGET = "target"
+CONST_PARAMS = "params"
+CONST_DEVICE = "device"
+CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
+CONST_EPSILON = 1e-10
+
 # Modelos de Aprendizaje Profundo
 ATT_ONLY = "Attention Only"
 CNN = "Convolutional Neural Network"

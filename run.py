@@ -192,7 +192,7 @@ if PROCESSING == "pandas":
      x_subject_test, scaler_cgm, scaler_other, scaler_y) = pd_split(df_pd)
 elif PROCESSING == "polars":
     cprint("Procesando datos con polars...", 'blue', 'bold')
-    df_pl: pl.DataFrame = pl_preprocess(SUBJECTS_PATH)
+    df_pl: pl.DataFrame = pl_preprocess()
     (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test, 
      x_subject_train, x_subject_val, x_subject_test, y_train, y_val, y_test, 
      x_subject_test, scaler_cgm, scaler_other, scaler_y) = pl_split(df_pl)
@@ -207,7 +207,8 @@ print(f"x_other_val: {x_other_val.shape}")
 print(f"x_other_test: {x_other_test.shape}")
 print(f"x_subject_train: {x_subject_train.shape}")
 print(f"x_subject_val: {x_subject_val.shape}")
-print(f"x_subject_test: {x_subject_test.shape}")
+#print(f"x_subject_test: {x_subject_test.shape}")
+print(f"{x_subject_test=}")
 print(f"y_train: {y_train.shape}")
 print(f"y_val: {y_val.shape}")
 print(f"y_test: {y_test.shape}")

@@ -13,6 +13,9 @@ import time
 import gym
 from tqdm.auto import tqdm
 
+from custom.printer import print_debug
+from constants.constants import CONST_MODEL_INIT_ERROR
+
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
@@ -1307,8 +1310,15 @@ class A2CWrapper(nn.Module):
             nn.ReLU()
         )
         
+        # Capa de codificación para variables contextuales
+        self.context_encoder = nn.Sequential(
+            nn.Linear(6, 16),  # 6 variables contextuales
+            nn.LayerNorm(16),
+            nn.ReLU()
+        )
+        
         # Capa para combinar características
-        self.combined_layer = nn.Linear(64 + 32, a2c_agent.state_dim)
+        self.combined_layer = nn.Linear(64 + 32 + 16, a2c_agent.state_dim)
         
         # Capa para mapear salidas del agente a dosis
         output_dim = 1 if a2c_agent.continuous else a2c_agent.action_dim
@@ -1344,8 +1354,11 @@ class A2CWrapper(nn.Module):
         # Codificar otras características
         other_encoded = self.other_encoder(other_features)
         
+        # Codificar contexto
+        context_encoded = self.context_encoder(other_features[:, -6:])
+        
         # Combinar características
-        combined = torch.cat([cgm_features, other_encoded], dim=1)
+        combined = torch.cat([cgm_features, other_encoded, context_encoded], dim=1)
         state = self.combined_layer(combined)
         
         # Obtener acciones del agente A2C
@@ -1599,7 +1612,7 @@ class A2CWrapper(nn.Module):
                 self.dose_predictor.weight.data.fill_(weight_val)
                 self.dose_predictor.bias.data.fill_(min_dose)
     
-    def predict(self, x: List[torch.Tensor]) -> np.ndarray:
+    def predict(self, x: List[torch.Tensor], **context) -> np.ndarray:
         """
         Realiza predicciones con el modelo entrenado.
         
@@ -1607,6 +1620,14 @@ class A2CWrapper(nn.Module):
         -----------
         x : List[torch.Tensor]
             Lista con [x_cgm, x_other]
+        context : dict, opcional
+            Contexto adicional:
+            - Nivel objetivo de glucosa (glucose_target)
+            - Insulin on Board (IoB)
+            - Consumo de carbohidratos (carb_intake)
+            - Calidad de Sueño (sleep_quality, 1-10)
+            - Intensidad del estrés laboral (work_stress_level, 1-10)
+            - Intensidad de E (physical_activity, 1-10)
             
         Retorna:
         --------
@@ -1631,6 +1652,196 @@ class A2CWrapper(nn.Module):
             doses = self(cgm_data, other_features)
             
             return doses.cpu().numpy()
+    
+    def predict_with_context(self, x: List[torch.Tensor], **context) -> float:
+        """
+        Realiza predicciones con el modelo entrenado considerando variables contextuales.
+        
+        Parámetros:
+        -----------
+        x : List[torch.Tensor]
+            Lista con [x_cgm, x_other]
+        context : dict, opcional
+            Contexto adicional:
+            - objective_glucose : float - Nivel objetivo de glucosa
+            - iob : float - Insulin on Board
+            - carb_intake : float - Consumo de carbohidratos
+            - sleep_quality : float - Calidad de sueño (1-10)
+            - work_intensity : float - Intensidad del trabajo (1-10)
+            - exercise_intensity : float - Intensidad del ejercicio (1-10)
+                
+        Retorna:
+        --------
+        float
+            Dosis recomendada a inyectar
+        """
+        self.eval()  # Establecer en modo evaluación
+        
+        with torch.no_grad():
+            cgm_data, other_features = x
+            
+            # Convertir a tensores si son arrays numpy
+            if not isinstance(cgm_data, torch.Tensor):
+                cgm_data = torch.tensor(cgm_data, dtype=torch.float32)
+            if not isinstance(other_features, torch.Tensor):
+                other_features = torch.tensor(other_features, dtype=torch.float32)
+            
+            # Mover tensores al dispositivo adecuado
+            cgm_data = cgm_data.to(CONST_DEVICE)
+            other_features = other_features.to(CONST_DEVICE)
+            
+            # Crear tensor para variables contextuales
+            context_values = [
+                context.get('carb_intake', 0.0),
+                context.get('iob', 0.0),
+                context.get('objective_glucose', 0.0),
+                context.get('sleep_quality', 5.0),
+                context.get('work_intensity', 0.0),
+                context.get('exercise_intensity', 0.0)
+            ]
+            
+            context_tensor = torch.tensor(context_values, dtype=torch.float32).to(CONST_DEVICE)
+            
+            # Asegurar que tiene la dimensión correcta (añadir dimensión de lote si es necesario)
+            if len(cgm_data.shape) > 1 and cgm_data.shape[0] > 1:
+                context_tensor = context_tensor.unsqueeze(0).repeat(cgm_data.shape[0], 1)
+            else:
+                context_tensor = context_tensor.unsqueeze(0)
+            
+            # Codificar datos CGM (ajustar dimensiones para Conv1D)
+            if cgm_data.dim() == 3:  # [batch, seq_len, features]
+                cgm_data = cgm_data.permute(0, 2, 1)  # -> [batch, features, seq_len]
+            elif cgm_data.dim() == 2:  # [seq_len, features]
+                cgm_data = cgm_data.permute(1, 0).unsqueeze(0)  # -> [1, features, seq_len]
+            
+            # Procesar con el modelo
+            cgm_features = self.cgm_encoder(cgm_data)
+            other_encoded = self.other_encoder(other_features)
+            
+            # Combinar características y contexto
+            if hasattr(self, 'context_encoder'):
+                # Si hay un encoder específico para el contexto, usarlo
+                context_encoded = self.context_encoder(context_tensor)
+                combined = torch.cat([cgm_features, other_encoded, context_encoded], dim=1)
+            else:
+                # Concatenar contexto directamente con otras características
+                enhanced_other = torch.cat([other_encoded, context_tensor], dim=1)
+                combined = torch.cat([cgm_features, enhanced_other], dim=1)
+            
+            # Codificar el estado combinado
+            state = self.combined_layer(combined)
+            
+            # Obtener acción del agente A2C
+            sample_state = state[0].detach().cpu().numpy()
+            action = self.a2c_agent.model.get_action(sample_state, deterministic=True)
+            
+            # Convertir acción a dosis
+            action_tensor = torch.FloatTensor([action]).to(CONST_DEVICE)
+            dose = self.dose_predictor(action_tensor.view(1, -1))
+            
+            # Retornar la dosis como un valor float
+            return float(dose.item())
+    
+    def forward_with_context(self, x_cgm: torch.Tensor, x_other: torch.Tensor, 
+                       carb_intake: float = None, iob: float = None, 
+                       objective_glucose: float = None, sleep_quality: float = None, 
+                       work_intensity: float = None, exercise_intensity: float = None) -> torch.Tensor:
+        """
+        Realiza un forward pass incluyendo variables contextuales adicionales.
+        
+        Parámetros:
+        -----------
+        x_cgm : torch.Tensor
+            Datos CGM de entrada
+        x_other : torch.Tensor
+            Otras características de entrada
+        carb_intake : float, opcional
+            Ingesta de carbohidratos en gramos
+        iob : float, opcional
+            Insulina a bordo (insulina activa en el cuerpo)
+        objective_glucose : float, opcional
+            Nivel objetivo de glucosa en sangre
+        sleep_quality : float, opcional
+            Calidad del sueño (escala de 0-10)
+        work_intensity : float, opcional
+            Intensidad del trabajo/estrés (escala de 0-10)
+        exercise_intensity : float, opcional
+            Intensidad del ejercicio (escala de 0-10)
+            
+        Retorna:
+        --------
+        torch.Tensor
+            Predicciones del modelo con contexto incorporado
+        """
+        # Verificar que el modelo esté inicializado
+        if self.model is None:
+            if self.is_class:
+                try:
+                    self.model = self.model_cls(**self.model_kwargs)
+                    if isinstance(self.model, nn.Module):
+                        self.model = self.model.to(self.device)
+                except Exception as e:
+                    print_debug(f"Error al inicializar el modelo: {e}")
+                    raise ValueError(CONST_MODEL_INIT_ERROR.format("realizar forward pass"))
+            else:
+                raise ValueError(CONST_MODEL_INIT_ERROR.format("realizar forward pass"))
+        
+        # Crear tensor de contexto si hay variables contextuales
+        context_values = [
+            carb_intake if carb_intake is not None else 0.0,
+            iob if iob is not None else 0.0,
+            objective_glucose if objective_glucose is not None else 0.0,
+            sleep_quality if sleep_quality is not None else 5.0,
+            work_intensity if work_intensity is not None else 0.0,
+            exercise_intensity if exercise_intensity is not None else 0.0
+        ]
+        
+        # Crear tensor y repetir para cada muestra en el batch
+        context_tensor = torch.tensor(context_values, dtype=torch.float32).to(self.device)
+        if len(x_cgm.shape) > 1 and x_cgm.shape[0] > 1:
+            context_tensor = context_tensor.unsqueeze(0).repeat(x_cgm.shape[0], 1)
+        else:
+            context_tensor = context_tensor.unsqueeze(0)
+        
+        # Verificar si el modelo tiene un método específico para forward con contexto
+        if hasattr(self.model, 'forward_with_context'):
+            return self.model.forward_with_context(x_cgm, x_other, context_tensor)
+        
+        # Alternativa: concatenar con otras características y usar forward estándar
+        enhanced_features = torch.cat([x_other, context_tensor], dim=1)
+        
+        # Intentar usar el forward del modelo subyacente
+        try:
+            if (hasattr(self.model, 'forward') and callable(self.model.forward)) or hasattr(self.model, '__call__'):
+                return self.model(x_cgm, enhanced_features)
+        except Exception as e:
+            print_debug(f"Error en forward con contexto: {e}")
+        
+        # Si no podemos usar forward directamente, intentar con predict_with_context
+        try:
+            # Convertir tensores a numpy para llamar a predict_with_context
+            x_cgm_np = x_cgm.cpu().numpy()
+            x_other_np = x_other.cpu().numpy()
+            
+            context_dict = {
+                'carb_intake': carb_intake,
+                'iob': iob,
+                'objective_glucose': objective_glucose,
+                'sleep_quality': sleep_quality,
+                'work_intensity': work_intensity,
+                'exercise_intensity': exercise_intensity
+            }
+            
+            # Filtrar None values
+            context_dict = {k: v for k, v in context_dict.items() if v is not None}
+            
+            # Llamar a predict_with_context
+            predictions_np = self.predict_with_context(x_cgm_np, x_other_np, **context_dict)
+            return torch.FloatTensor(predictions_np).to(self.device)
+        except Exception as e:
+            print_debug(f"Error al predecir con contexto: {e}")
+            # Devolver un tensor de ceros como fallback
+            return torch.zeros(x_cgm.shape[0], 1, device=self.device)
 
 
 class A3CWrapper(A2CWrapper):
