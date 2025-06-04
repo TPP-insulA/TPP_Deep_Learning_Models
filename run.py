@@ -186,7 +186,7 @@ cprint(f"Total sujetos: {len(subject_files)}", 'yellow', 'bold')
 
 if PROCESSING == "pandas":
     cprint("Procesando datos con pandas...", 'blue', 'bold')
-    df_pd: pd.DataFrame = pd_preprocess(SUBJECTS_PATH)
+    df_pd: pd.DataFrame = pd_preprocess()
     (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test, 
      x_subject_train, x_subject_val, x_subject_test, y_train, y_val, y_test, 
      x_subject_test, scaler_cgm, scaler_other, scaler_y) = pd_split(df_pd)
