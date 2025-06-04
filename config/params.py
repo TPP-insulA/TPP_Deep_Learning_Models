@@ -90,7 +90,7 @@ from models.pytorch.DeepReinforcementLearning.trpo import model_creator as pt_tr
 # Modo de Ejecución
 DEBUG = False
 FRAMEWORK_OP = 2
-PROCESSING_OP = 0
+PROCESSING_OP = 1
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.

@@ -104,7 +104,7 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
   numbering: "1 de 1",
 )
 
-#set text(font: "New Computer Modern")
+#set text(font: "New Computer Modern", lang: "es")
 #set heading(numbering: "1.")
 #show heading: set block(above: 1.4em, below: 1em)
 
@@ -180,13 +180,13 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
 === Historial de Entrenamiento
 #figure(
   image("{training_history_rel}", width: 71%),
-  caption: [Historial de entrenamiento para {model_name}],
+  caption: [Historial de entrenamiento para {CONST_MODELS_NAMES[model_name]}.],
 )
 
 === Predicciones
 #figure(
   image("{predictions_rel}", width: 71%),
-  caption: [Predicciones vs valores reales para {model_name}],
+  caption: [Predicciones vs valores reales para {CONST_MODELS_NAMES[model_name]}.],
 )
 
 """
