@@ -48,6 +48,10 @@ handler.setFormatter(ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
+# Color magenta para logs de tests de paciente anciana
+MAGENTA = '\033[95m'
+RESET = '\033[0m'
+
 def compute_glucose_patterns(cgm_values: List[float], extended_cgm: List[float] = None) -> Dict[str, float]:
     """
     Calcula patrones de glucosa a largo plazo y métricas de estabilidad.
@@ -607,32 +611,56 @@ def prepare_enhanced_observation(
     
     return obs.astype(np.float32)
 
+def safe_bolus_prediction(predicted_dose: float, current_cgm: float, carbs: float = 0, iob: float = 0, max_dose: float = 20.0, min_cgm: float = 80.0) -> float:
+    """
+    Ajusta la dosis predicha para maximizar la seguridad clínica.
+    - Si la glucosa actual < min_cgm, devuelve 0 y loggea advertencia.
+    - Simula el efecto de la dosis. Si la glucosa futura estimada < min_cgm o hay riesgo de hipo, reduce la dosis.
+    - Limita la dosis máxima.
+    """
+    if current_cgm < min_cgm:
+        logging.warning(f"[Seguridad] Glucosa actual {current_cgm:.1f} < {min_cgm}. Dosis forzada a 0.")
+        return 0.0
+    # Limitar dosis máxima
+    dose = min(predicted_dose, max_dose)
+    # Simular efecto clínico
+    clinical = compute_clinical_impact(current_cgm, dose, carbs, iob)
+    # Si hay riesgo de hipo, reducir dosis iterativamente
+    step = 0.5
+    while (clinical['estimated_future_glucose'] < min_cgm or clinical['hypo_risk'] > 0) and dose > 0:
+        dose = max(0.0, dose - step)
+        clinical = compute_clinical_impact(current_cgm, dose, carbs, iob)
+        logging.info(f"[Seguridad] Ajustando dosis a {dose:.2f} por riesgo de hipo/futuro {clinical['estimated_future_glucose']:.1f} mg/dL")
+    if dose < predicted_dose:
+        logging.info(f"[Seguridad] Dosis ajustada de {predicted_dose:.2f} a {dose:.2f} por validación clínica.")
+    return dose
+
 def predict_insulin_dose(
     model_path: str,
-    observation: np.ndarray
+    observation: np.ndarray,
+    current_cgm: float = None,
+    carbs: float = 0,
+    iob: float = 0,
+    max_dose: float = 20.0,
+    min_cgm: float = 80.0
 ) -> float:
     """
-    Predice la dosis de insulina usando un modelo PPO entrenado.
-    
-    Args:
-        model_path: Path to trained PPO model
-        observation: Prepared observation vector
-        
-    Returns:
-        Dosis de insulina predicha
+    Predice la dosis de insulina usando un modelo PPO entrenado y la valida clínicamente.
     """
     # Load trained model
     model = PPO.load(model_path)
-    
     # Create inference environment
     env = OhioT1DMInferenceEnv()
     env.set_observation(observation)
-    
     # Get prediction
     obs, _ = env.reset()
     action, _ = model.predict(obs, deterministic=True)
-    
-    return float(action[0])
+    predicted_dose = float(action[0])
+    # Si se proveen datos de contexto, validar seguridad
+    if current_cgm is not None:
+        safe_dose = safe_bolus_prediction(predicted_dose, current_cgm, carbs, iob, max_dose, min_cgm)
+        return safe_dose
+    return predicted_dose
 
 def evaluate_clinical_metrics(predictions: List[float], actuals: List[float], 
                             cgm_values: List[List[float]] = None) -> Dict[str, float]:
@@ -1101,7 +1129,9 @@ def train_with_enhanced_hyperparameters(
     net_arch: List[int] = [256, 256, 128],
     gamma: float = 0.99,
     n_steps: int = 4096,
-    n_epochs: int = 20
+    n_epochs: int = 20,
+    clip_range: float = 0.2,
+    ent_coef: float = 0.01
 ) -> PPO:
     """
     Entrena un modelo PPO con hiperparámetros mejorados y arquitectura de red optimizada.
@@ -1118,6 +1148,8 @@ def train_with_enhanced_hyperparameters(
         gamma: Factor de descuento
         n_steps: Número de pasos por actualización
         n_epochs: Número de épocas por actualización
+        clip_range: Rango de clip para la actualización de política
+        ent_coef: Coeficiente de entropía
         
     Returns:
         Modelo PPO entrenado
@@ -1166,6 +1198,35 @@ def train_with_enhanced_hyperparameters(
     logging.info("Concatenando DataFrames...")
     train_df = pl.concat(train_dfs)
     logging.info(f"DataFrame concatenado final. Forma: {train_df.shape}")
+
+    # Loggear estadísticas descriptivas del dataset de entrenamiento combinado
+    if not train_df.is_empty():
+        logging.info("Estadísticas descriptivas del dataset de entrenamiento combinado:")
+        # Seleccionar columnas numéricas relevantes para el análisis. Excluir identificadores y ventanas CGM expandidas.
+        relevant_cols_for_stats = [
+            col for col in train_df.columns 
+            if train_df[col].dtype in [pl.Float64, pl.Int64] and 
+            not col.startswith('cgm_') and 
+            col not in ['SubjectID', 'timestamp'] # Añadir otros IDs o no numéricos si es necesario
+        ]
+        if relevant_cols_for_stats:
+            desc_stats = train_df.select(relevant_cols_for_stats).describe()
+            logging.info(f"\n{desc_stats}")
+            # Loggear distribución de eventos de hipo/hiper si existen
+            if 'hypo_episodes_24h' in train_df.columns:
+                logging.info(f"Distribución de episodios de hipoglucemia (24h):\n{train_df['hypo_episodes_24h'].value_counts().sort('count', descending=True)}")
+            if 'hyper_episodes_24h' in train_df.columns:
+                logging.info(f"Distribución de episodios de hiperglucemia (24h):\n{train_df['hyper_episodes_24h'].value_counts().sort('count', descending=True)}")
+            if 'bolus' in train_df.columns:
+                logging.info(f"Distribución de dosis de bolus (cuantiles):")
+                logging.info(train_df.select(pl.col('bolus').quantile(q).alias(f"bolus_q{int(q*100)}") for q in [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]))
+            if 'carb_input' in train_df.columns:
+                logging.info(f"Distribución de carbohidratos (cuantiles):")
+                logging.info(train_df.select(pl.col('carb_input').quantile(q).alias(f"carbs_q{int(q*100)}") for q in [0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99]))
+        else:
+            logging.info("No se encontraron columnas numéricas relevantes para estadísticas descriptivas.")
+    else:
+        logging.warning("El DataFrame de entrenamiento está vacío. No se pueden calcular estadísticas.")
     
     # Crear entornos paralelos
     logging.info("Creando entornos paralelos...")
@@ -1197,8 +1258,8 @@ def train_with_enhanced_hyperparameters(
         n_epochs=n_epochs,
         gamma=gamma,
         gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.01,
+        clip_range=clip_range,
+        ent_coef=ent_coef,
         vf_coef=0.5,
         max_grad_norm=0.5,
         use_sde=False,
@@ -1208,6 +1269,7 @@ def train_with_enhanced_hyperparameters(
         policy_kwargs=dict(
             net_arch=net_arch
         ),
+        device='cpu',  # Forzar uso de CPU
         verbose=0  # Desactivar la barra de progreso por defecto
     )
     
@@ -1557,6 +1619,55 @@ def plot_clinical_results(
     except Exception as e:
         logging.error(f"Error al graficar los resultados clínicos: {e}")
 
+def test_elderly_patient_cases(model_path: str):
+    """
+    Testea el modelo con casos de una paciente anciana sedentaria con reglas fijas de dosis.
+    """
+    from datetime import datetime
+    elderly_cases = [
+        # Glucosa < 150 mg/dL → 0 unidades
+        {'cgm': 120, 'expected': 0},
+        {'cgm': 149, 'expected': 0},
+        # 150-200 mg/dL → 2 unidades
+        {'cgm': 150, 'expected': 2},
+        {'cgm': 180, 'expected': 2},
+        {'cgm': 200, 'expected': 2},
+        # 200-250 mg/dL → 4 unidades
+        {'cgm': 201, 'expected': 4},
+        {'cgm': 225, 'expected': 4},
+        {'cgm': 249, 'expected': 4},
+        # 250-300 mg/dL → 6 unidades
+        {'cgm': 250, 'expected': 6},
+        {'cgm': 275, 'expected': 6},
+        {'cgm': 299, 'expected': 6},
+        # >300 mg/dL → 8 unidades
+        {'cgm': 301, 'expected': 8},
+        {'cgm': 350, 'expected': 8},
+        {'cgm': 400, 'expected': 8},
+    ]
+    # Simular observaciones para cada caso
+    for i, case in enumerate(elderly_cases):
+        cgm_values = [case['cgm']] * 24  # Paciente estable, sin ejercicio
+        obs = prepare_enhanced_observation(
+            cgm_values=cgm_values,
+            carb_input=0.0,  # Sin ingesta de carbos
+            iob=0.0,         # Sin insulina activa
+            timestamp=datetime.now().replace(hour=7, minute=0),
+            meal_carbs=0.0,
+            meal_time_diff=0.0,
+            has_meal=0.0,
+            meals_in_window=0,
+            extended_cgm=cgm_values
+        )
+        pred = predict_insulin_dose(
+            model_path=model_path,
+            observation=obs,
+            current_cgm=case['cgm'],
+            carbs=0.0,
+            iob=0.0
+        )
+        print(f"{MAGENTA}[ELDERLY TEST] Caso {i+1}: CGM={case['cgm']} mg/dL | Dosis esperada={case['expected']} | Dosis modelo={pred:.2f}{RESET}")
+
 def main():
     """Función principal mejorada con todas las mejoras."""
     # Directorios base
@@ -1579,22 +1690,19 @@ def main():
     logging.info(f"Archivos de entrenamiento encontrados: {len(train_files)}")
     logging.info(f"Archivos de prueba encontrados: {len(test_files)}")
 
-    # Entrenar modelo mejorado
-    model = train_with_enhanced_hyperparameters(
+    #Entrenar un modelo nuevo
+    model_object = train_with_enhanced_hyperparameters( # Renombrado a model_object para evitar confusión
         train_files=train_files,
         output_dir=output_dir,
         tensorboard_log=tensorboard_log,
         total_timesteps=total_timesteps,
         n_envs=n_envs,
-        learning_rate=3e-5,  # Aumentado para mejor convergencia
-        batch_size=512,      # Aumentado para mejor estabilidad
-        net_arch=[512, 256, 128],  # Arquitectura más profunda
-        gamma=0.99,
-        n_steps=4096,
-        n_epochs=20,
-        clip_range=0.2,      # Aumentado para exploración más agresiva
-        ent_coef=0.02       # Aumentado para más exploración
+        # Los hiperparámetros específicos como learning_rate, batch_size, etc., 
+        # se toman de los argumentos por defecto de la función o se pueden pasar aquí.
     )
+    # Después del entrenamiento, la ruta al modelo guardado es conocida
+    model_path_to_evaluate = os.path.join(output_dir, 'final_model.zip')
+    logging.info(f"Modelo entrenado y guardado en: {model_path_to_evaluate}")
 
     # Evaluar modelo si existen datos de prueba
     if test_files:
@@ -1607,7 +1715,7 @@ def main():
                 logging.info(f"Evaluando paciente: {patient_id}")
                 
                 results = predict_from_preprocessed(
-                    model_path=os.path.join(output_dir, 'final_model'),
+                    model_path=model_path_to_evaluate, # Usar la ruta del modelo recién entrenado
                     preprocessed_data_path=test_file
                 )
                     
@@ -1648,56 +1756,77 @@ def main():
         enhanced_test_cases = [
             # Caso Mejorado 1: Comida normal con glucosa estable
             {
-                'cgm_values': [float(120 + np.sin(i/4)*5) for i in range(24)],  # Pequeña oscilación
-                'carb_input': 50.0,
-                'iob': 2.5,
-                'timestamp': datetime.now().replace(hour=12, minute=0),
-                'meal_carbs': 45.0,
-                'meal_time_diff': 0.5,
-                'has_meal': 1.0,
-                'meals_in_window': 1,
-                'extended_cgm': [float(115 + np.random.normal(0, 10)) for _ in range(48)]  # Historial 24h
+                'name': 'Comida Normal, Glucosa Estable',
+                'cgm_values': [float(120 + np.sin(i/4)*5) for i in range(24)],
+                'carb_input': 50.0, 'iob': 2.5, 'timestamp': datetime.now().replace(hour=12, minute=0),
+                'meal_carbs': 45.0, 'meal_time_diff': 0.5, 'has_meal': 1.0, 'meals_in_window': 1,
+                'extended_cgm': [float(115 + np.random.normal(0, 10)) for _ in range(48)]
             },
             # Caso Mejorado 2: Glucosa alta con comida grande
             {
-                'cgm_values': [float(280 + i*2) for i in range(24)],  # Tendencia ascendente
-                'carb_input': 100.0,
-                'iob': 0.0,
-                'timestamp': datetime.now().replace(hour=18, minute=30),
-                'meal_carbs': 95.0,
-                'meal_time_diff': 0.25,
-                'has_meal': 1.0,
-                'meals_in_window': 1,
+                'name': 'Glucosa Alta, Comida Grande',
+                'cgm_values': [float(280 + i*2) for i in range(24)],
+                'carb_input': 100.0, 'iob': 0.0, 'timestamp': datetime.now().replace(hour=18, minute=30),
+                'meal_carbs': 95.0, 'meal_time_diff': 0.25, 'has_meal': 1.0, 'meals_in_window': 1,
                 'extended_cgm': [float(250 + np.random.normal(0, 20)) for _ in range(48)]
             },
             # Caso Mejorado 3: Riesgo de hipoglucemia
             {
-                'cgm_values': [float(75 - i) for i in range(24)],  # Tendencia descendente
-                'carb_input': 0.0,
-                'iob': 5.0,
-                'timestamp': datetime.now().replace(hour=3, minute=0),
-                'meal_carbs': 0.0,
-                'meal_time_diff': 0.0,
-                'has_meal': 0.0,
-                'meals_in_window': 0,
+                'name': 'Riesgo Hipoglucemia (CGM Bajo, IOB Alto)',
+                'cgm_values': [float(75 - i) for i in range(24)], # Tendencia descendente
+                'carb_input': 0.0, 'iob': 5.0, 'timestamp': datetime.now().replace(hour=3, minute=0),
+                'meal_carbs': 0.0, 'meal_time_diff': 0.0, 'has_meal': 0.0, 'meals_in_window': 0,
                 'extended_cgm': [float(85 + np.random.normal(0, 15)) for _ in range(48)]
             },
             # Caso Mejorado 4: Fenómeno del alba
             {
-                'cgm_values': [float(140 + i*3) for i in range(24)],  # Tendencia ascendente (efecto alba)
-                'carb_input': 30.0,
-                'iob': 1.0,
-                'timestamp': datetime.now().replace(hour=6, minute=30),
-                'meal_carbs': 25.0,
-                'meal_time_diff': 0.5,
-                'has_meal': 1.0,
-                'meals_in_window': 1,
+                'name': 'Fenómeno del Alba (Hiperglucemia Matutina)',
+                'cgm_values': [float(140 + i*3) for i in range(24)],
+                'carb_input': 30.0, 'iob': 1.0, 'timestamp': datetime.now().replace(hour=6, minute=30),
+                'meal_carbs': 25.0, 'meal_time_diff': 0.5, 'has_meal': 1.0, 'meals_in_window': 1,
                 'extended_cgm': [float(130 + np.random.normal(0, 10)) for _ in range(48)]
+            },
+            # Nuevos Casos de Prueba Diversos
+            {
+                'name': 'Alta Sensibilidad Insulina (Hipoglucemia con Dosis Mínima)',
+                'cgm_values': [90.0] * 24, # CGM estable pero bajo
+                'carb_input': 10.0, # Comida muy pequeña
+                'iob': 1.0, # Algo de IOB
+                'timestamp': datetime.now().replace(hour=10, minute=0),
+                'meal_carbs': 10.0, 'meal_time_diff': 0.1, 'has_meal': 1.0, 'meals_in_window': 1,
+                'extended_cgm': [90.0] * 48
+            },
+            {
+                'name': 'Resistencia Insulina (Hiperglucemia Persistente)',
+                'cgm_values': [220.0] * 24, # CGM estable pero alto
+                'carb_input': 60.0, # Comida normal
+                'iob': 0.5, # Poca IOB
+                'timestamp': datetime.now().replace(hour=13, minute=0),
+                'meal_carbs': 60.0, 'meal_time_diff': 0.0, 'has_meal': 1.0, 'meals_in_window': 1,
+                'extended_cgm': [220.0] * 48 
+            },
+            {
+                'name': 'Deportista (Post-Ejercicio, Riesgo Hipo)',
+                'cgm_values': [100.0, 95.0, 90.0, 85.0, 80.0, 75.0] + [75.0]*18, # CGM bajando
+                'carb_input': 20.0, # Carbs de recuperación
+                'iob': 0.0, # Sin IOB pre-ejercicio
+                'timestamp': datetime.now().replace(hour=17, minute=0),
+                'meal_carbs': 20.0, 'meal_time_diff': 0.0, 'has_meal': 1.0, 'meals_in_window': 1,
+                'extended_cgm': [110.0 - i for i in range(24)] + [86.0]*24 # Historial de CGM descendente
+            },
+            {
+                'name': 'Comida Alta Grasa/Proteína (Efecto Retrasado)',
+                'cgm_values': [130.0] * 24, # CGM estable pre-comida
+                'carb_input': 50.0, # Carbs moderados, pero efecto lento esperado
+                'iob': 1.0,
+                'timestamp': datetime.now().replace(hour=19, minute=0),
+                'meal_carbs': 50.0, 'meal_time_diff': 0.0, 'has_meal': 1.0, 'meals_in_window': 1,
+                'extended_cgm': [130.0]*24 + [140.0, 150.0, 160.0, 170.0]*6 # Simula subida lenta post-comida
             }
         ]
         
         user_input_results = test_enhanced_user_inputs(
-            model_path=os.path.join(output_dir, 'final_model'),
+            model_path=model_path_to_evaluate, # Usar la ruta del modelo recién entrenado
             test_cases=enhanced_test_cases
         )
         
@@ -1738,6 +1867,9 @@ def main():
         logging.info(f"  - {test_base_dir}/processed_*.parquet")
 
     logging.info("¡Entrenamiento y evaluación del modelo mejorado de predicción de bolo de insulina completados!")
+
+    # Al final del main, correr los tests de la paciente anciana
+    test_elderly_patient_cases(model_path=model_path_to_evaluate) # Usar la ruta del modelo recién entrenado
 
 if __name__ == "__main__":
     main()
