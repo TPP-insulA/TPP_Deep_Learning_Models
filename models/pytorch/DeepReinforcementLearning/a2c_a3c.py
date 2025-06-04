@@ -20,17 +20,10 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config import A2C_A3C_CONFIG
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE, TARGET_GLUCOSE, POSITIVE_REWARD, MILD_PENALTY_REWARD, SEVERE_PENALTY_REWARD, CONST_DROPOUT, CONST_POLICY_LOSS, CONST_VALUE_LOSS, CONST_ENTROPY_LOSS, CONST_TOTAL_LOSS, CONST_EPISODE_REWARDS
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
-CONST_DROPOUT = "dropout"
-CONST_PARAMS = "params"
-CONST_POLICY_LOSS = "policy_loss"
-CONST_VALUE_LOSS = "value_loss"
-CONST_ENTROPY_LOSS = "entropy_loss"
-CONST_TOTAL_LOSS = "total_loss"
-CONST_EPISODE_REWARDS = "episode_rewards"
 CONST_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -1529,17 +1522,58 @@ class A2CWrapper(nn.Module):
             
             def step(self, action):
                 """Ejecuta un paso en el entorno con la acción dada."""
-                # Convertir acción a dosis según tipo de espacio
+                # Convertir acción a dosis
                 if isinstance(self.action_space, gym.spaces.Box):
-                    # Para acción continua, usar directamente (limitando al rango)
                     dose = np.clip(action[0], 0, 15)
                 else:
-                    # Para acción discreta, mapear a valor de dosis
                     dose = action / (self.model.a2c_agent.action_dim - 1) * 15
                 
-                # Calcular recompensa (negativo del error absoluto)
+                # Obtener target y calcular error de dosis
                 target = self.targets[self.current_idx]
-                reward = -abs(dose - target)
+                dose_error = abs(dose - target)
+                
+                # Normalizar error de dosis (asumiendo error máximo de 5 unidades)
+                normalized_dose_error = min(1.0, dose_error / 5.0)
+                dose_reward = -normalized_dose_error
+                
+                # Obtener y denormalizar glucosa
+                current_cgm = self.cgm[self.current_idx]
+                current_glucose_normalized = current_cgm[0, -1]  # Último valor
+                
+                # Denormalización segura
+                try:
+                    if hasattr(self, 'scaler_cgm') and self.scaler_cgm is not None:
+                        current_glucose = self.scaler_cgm.inverse_transform([[current_glucose_normalized]])[0, 0]
+                    else:
+                        # Si no hay escaler, aproximar usando estadísticas conocidas
+                        current_glucose = current_glucose_normalized * 60 + 140
+                except Exception as e:
+                    print(f"Error en denormalización: {e}")
+                    current_glucose = current_glucose_normalized
+                
+                # Recompensa de glucosa usando constantes definidas
+                if LOWER_BOUND_NORMAL_GLUCOSE_RANGE <= current_glucose <= UPPER_BOUND_NORMAL_GLUCOSE_RANGE:
+                    # Dentro del rango: recompensa basada en cercanía al óptimo
+                    distance_from_target = abs(current_glucose - TARGET_GLUCOSE)
+                    max_distance_in_range = max(TARGET_GLUCOSE - LOWER_BOUND_NORMAL_GLUCOSE_RANGE, 
+                                                UPPER_BOUND_NORMAL_GLUCOSE_RANGE - TARGET_GLUCOSE)
+                    glucose_reward = POSITIVE_REWARD * (1 - distance_from_target / max_distance_in_range)
+                elif current_glucose < LOWER_BOUND_NORMAL_GLUCOSE_RANGE:
+                    # Hipoglucemia: penalización proporcional
+                    hypoglycemia_severity = (LOWER_BOUND_NORMAL_GLUCOSE_RANGE - current_glucose) / 30
+                    glucose_reward = SEVERE_PENALTY_REWARD * min(1.0, hypoglycemia_severity)
+                else:  # current_glucose > UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+                    # Hiperglucemia: penalización proporcional
+                    hyperglycemia_severity = (current_glucose - UPPER_BOUND_NORMAL_GLUCOSE_RANGE) / 120
+                    glucose_reward = MILD_PENALTY_REWARD * min(1.0, hyperglycemia_severity)
+                
+                # Combinar recompensas con mejor balance
+                # Ajustar los pesos de la recompensa para enfatizar la precisión de la dosis
+                # reward = 0.8 * dose_reward + 0.2 * glucose_reward  # Dar más peso a la precisión de dosis
+
+                # Alternativamente, usar una función de recompensa adaptativa
+                dose_weight = 0.9 - 0.3 * min(1, abs(current_glucose - TARGET_GLUCOSE) / 50)  # Peso dinámico
+                reward = dose_weight * dose_reward + (1 - dose_weight) * glucose_reward
                 
                 # Avanzar al siguiente ejemplo
                 self.current_idx = (self.current_idx + 1) % self.max_idx
@@ -2001,6 +2035,7 @@ def create_a3c_model(cgm_shape: Tuple[int, ...], other_features_shape: Tuple[int
         
     Retorna:
     --------
+   
     DRLModelWrapperPyTorch
         Modelo A3C envuelto que implementa la interfaz del sistema
     """

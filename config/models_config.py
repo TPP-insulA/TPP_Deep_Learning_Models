@@ -234,12 +234,12 @@ A2C_A3C_CONFIG = {
     'epsilon': 1e-5,                     # Epsilon para estabilidad numérica en normalizaciones
     
     # Optimización
-    'learning_rate': 3e-4,               # Tasa de aprendizaje para actualización de parámetros
+    'learning_rate': 5e-4,               # Tasa de aprendizaje para actualización de parámetros
     'gamma': 0.99,                       # Factor de descuento para recompensas futuras
     'lambda': 0.95,                      # Factor lambda para cálculo de ventaja generalizada (GAE)
-    'entropy_coef': 0.01,                # Coeficiente para el término de entropía en la función de pérdida
+    'entropy_coef': 0.005,                # Coeficiente para el término de entropía en la función de pérdida
     'value_coef': 0.5,                   # Coeficiente para la pérdida de la función de valor
-    'max_grad_norm': 0.5                 # Valor máximo para recorte de norma del gradiente
+    'max_grad_norm': 1.0                 # Valor máximo para recorte de norma del gradiente
 }
 
 DDPG_CONFIG = {

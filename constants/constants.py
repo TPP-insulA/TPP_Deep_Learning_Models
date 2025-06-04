@@ -20,13 +20,40 @@ CONST_FRAMEWORKS = {
     "jax": "JAX",
     "pytorch": "PyTorch"
 }
+CONST_EPSILON = 1e-10
+
+# Constantes de Procesamiento
+DATE_FORMAT: str = "%d-%m-%Y %H:%M:%S"
+TIMESTAMP_COL: str = "Timestamp"
+SUBJECT_ID_COL: str = "SubjectID"
+GLUCOSE_COL: str = "value"
+BOLUS_COL: str = "bolus"
+MEAL_COL: str = "meal_carbs"
+BASAL_COL: str = "basal_rate"
+TEMP_BASAL_COL: str = "temp_basal_rate"
+
+# Constantes de los Modelos
+## Valores de Glucosa
+LOWER_BOUND_NORMAL_GLUCOSE_RANGE: float = 70.0
+UPPER_BOUND_NORMAL_GLUCOSE_RANGE: float = 180.0
+TARGET_GLUCOSE: float = 100.0
+POSITIVE_REWARD: float = 1.0
+MILD_PENALTY_REWARD: float = -0.5
+SEVERE_PENALTY_REWARD: float = -1.0
+## Constantes de texto
 CONST_ACTOR = "actor"
 CONST_CRITIC = "critic"
 CONST_TARGET = "target"
 CONST_PARAMS = "params"
 CONST_DEVICE = "device"
 CONST_MODEL_INIT_ERROR = "El modelo debe ser inicializado antes de {}"
-CONST_EPSILON = 1e-10
+CONST_DROPOUT = "dropout"
+CONST_PARAMS = "params"
+CONST_POLICY_LOSS = "policy_loss"
+CONST_VALUE_LOSS = "value_loss"
+CONST_ENTROPY_LOSS = "entropy_loss"
+CONST_TOTAL_LOSS = "total_loss"
+CONST_EPISODE_REWARDS = "episode_rewards"
 
 # Modelos de Aprendizaje Profundo
 ATT_ONLY = "Attention Only"

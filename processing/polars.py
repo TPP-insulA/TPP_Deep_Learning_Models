@@ -1,4 +1,5 @@
-from typing import Union
+from collections import defaultdict
+from typing import Optional, Union
 import polars as pl
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -27,45 +28,12 @@ OHIO_DATA_DIRS: list[str] = [
 ]
 OUTPUT_DIR: str = 'new_ohio/processed_data'
 PLOTS_DIR: str = 'new_ohio/processed_data/plots'
-DATE_FORMAT: str = "%d-%m-%Y %H:%M:%S"
-TIMESTAMP_COL: str = "Timestamp"
-SUBJECT_ID_COL: str = "SubjectID"
-GLUCOSE_COL: str = "value"
-BOLUS_COL: str = "bolus"
-MEAL_COL: str = "meal_carbs"
-BASAL_COL: str = "basal_rate"
-TEMP_BASAL_COL: str = "temp_basal_rate"
-CONST_DEFAULT_SEED: int = 42
+
+from constants.constants import CONST_DEFAULT_SEED, DATE_FORMAT, TIMESTAMP_COL, SUBJECT_ID_COL, GLUCOSE_COL, BOLUS_COL, MEAL_COL, BASAL_COL, TEMP_BASAL_COL
+from config.params import CONFIG_PROCESSING
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# Configuración global
-CONFIG: dict[str, Union[int, float, str]] = {
-    "batch_size": 128,
-    "window_hours": 2,
-    "window_steps": 24,  # 5-min steps in 2 hours
-    "insulin_lifetime_hours": 4.0,
-    "cap_normal": 30,
-    "cap_bg": 300,
-    "cap_iob": 5,
-    "cap_carb": 150,
-    "min_carbs": 0,
-    "max_carbs": 150,
-    "min_bg": 40,
-    "max_bg": 400,
-    "min_insulin": 0,
-    "max_insulin": 30,
-    "min_icr": 5,
-    "max_icr": 20,
-    "min_isf": 10,
-    "max_isf": 100,
-    "timezone": "UTC",
-    "max_work_intensity": 10,
-    "max_sleep_quality": 10,
-    "max_activity_intensity": 10,
-    "low_dose_threshold": 7.0,  # Umbral clínico para dosis baja de insulina
-}
 
 def load_excel_data(subject_path: str) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """
@@ -109,7 +77,7 @@ def load_excel_data(subject_path: str) -> tuple[pl.DataFrame, pl.DataFrame, pl.D
 
 def load_xml_data(data_dir: str) -> dict[str, pl.DataFrame]:
     """
-    Carga datos desde archivos XML en el directorio especificado.
+    Carga datos desde archivos XML en el directorio especificado, con validación de sujetos y soporte para múltiples tipos de datos.
 
     Parámetros:
     -----------
@@ -119,35 +87,75 @@ def load_xml_data(data_dir: str) -> dict[str, pl.DataFrame]:
     Retorna:
     --------
     dict[str, pl.DataFrame]
-        Diccionario con DataFrames por tipo de dato (glucose_level, bolus, meal, etc.).
+        Diccionario con DataFrames por tipo de dato (glucose_level, bolus, meal, basal, temp_basal, etc.).
     """
     logging.info(f"Cargando datos desde {data_dir}")
+    expected_subjects = {
+        '2018': ['559-ws-training', '563-ws-training', '570-ws-training', '575-ws-training', '588-ws-training', '591-ws-training'],
+        '2020': ['540-ws-training', '544-ws-training', '552-ws-training', '567-ws-training', '584-ws-training', '596-ws-training']
+    }
+    year = '2018' if '2018' in data_dir else '2020' if '2020' in data_dir else None
+    if year is None:
+        raise ValueError(f"No se pudo determinar el año del directorio: {data_dir}")
+    suffix = '-ws-training' if 'train' in data_dir else '-ws-testing'
+    expected_subjects[year] = [s.replace('-ws-training', suffix).replace('-ws-testing', suffix) for s in expected_subjects[year]]
+    xml_files = glob.glob(os.path.join(data_dir, "*.xml"))
+    found_subjects = [os.path.basename(f).split('.')[0] for f in xml_files]
+    missing_subjects = [s for s in expected_subjects[year] if s not in found_subjects]
+    if missing_subjects:
+        logging.error(f"Faltan datos para sujetos del año {year}: {missing_subjects}")
+        if not found_subjects:
+            raise ValueError(f"No se encontraron archivos XML en {data_dir}")
     data_dict: dict[str, pl.DataFrame] = {}
-    for xml_file in glob.glob(os.path.join(data_dir, "*.xml")):
+    subject_stats = defaultdict(lambda: defaultdict(int))
+    expected_types = [
+        'glucose_level', 'bolus', 'meal', 'basal', 'temp_basal', 'exercise', 'basis_steps', 'hypo_event',
+        'finger_stick', 'sleep', 'work', 'stressors', 'illness', 'basis_heart_rate', 'basis_gsr',
+        'basis_skin_temperature', 'basis_air_temperature', 'basis_sleep', 'acceleration'
+    ]
+    for xml_file in xml_files:
+        subject_id = os.path.basename(xml_file).split('.')[0]
+        logging.info(f"Procesando SubjectID: {subject_id} (Año {year})")
         try:
             tree = ET.parse(xml_file)
             root = tree.getroot()
-            subject_id: str = os.path.basename(xml_file).split('.')[0]
             for data_type_elem in root:
-                data_type: str = data_type_elem.tag
+                data_type = data_type_elem.tag
                 if data_type == 'patient':
                     continue
-                records: list[dict] = []
+                if data_type not in expected_types:
+                    continue
+                records = []
                 for event in data_type_elem:
-                    record_dict: dict = dict(event.attrib)
+                    record_dict = dict(event.attrib)
                     record_dict[SUBJECT_ID_COL] = subject_id
+                    record_dict['Year'] = year
                     records.append(record_dict)
                 if records:
-                    df: pl.DataFrame = pl.DataFrame(records)
-                    data_dict[data_type] = df
+                    df = pl.DataFrame(records)
+                    if 'value' in df.columns:
+                        df = df.with_columns(pl.col('value').cast(pl.Float64))
+                    data_dict[data_type] = pl.concat([data_dict.get(data_type, pl.DataFrame()), df])
+                    logging.info(f"SubjectID {subject_id}: {data_type}={len(records)} registros")
+                    subject_stats[subject_id][data_type] += len(records)
         except Exception as e:
             logging.error(f"Error procesando {xml_file}: {e}")
             continue
+    logging.info(f"\nEstadísticas por sujeto (Año {year}):")
+    for subject_id in sorted(subject_stats.keys()):
+        stats = subject_stats[subject_id]
+        stat_str = ", ".join([f"{k}={v}" for k, v in stats.items()])
+        logging.info(f"SubjectID {subject_id}: {stat_str}")
+    missing_types = [t for t in expected_types if t not in data_dict]
+    if missing_types:
+        logging.warning(f"Faltan tipos de datos: {missing_types}")
+    if len(subject_stats) != len(expected_subjects[year]):
+        logging.error(f"Se encontraron datos para {len(subject_stats)}/{len(expected_subjects[year])} sujetos")
     return data_dict
 
 def preprocess_xml_bolus_meal(data: dict[str, pl.DataFrame]) -> dict[str, pl.DataFrame]:
     """
-    Preprocesa los datos de bolus y meal de XML, renombrando columnas y convirtiendo timestamps.
+    Preprocesa los datos de bolus, meal, basal, temp_basal, exercise, basis_steps, hypo_event, etc., renombrando columnas y convirtiendo timestamps.
 
     Parámetros:
     -----------
@@ -157,38 +165,228 @@ def preprocess_xml_bolus_meal(data: dict[str, pl.DataFrame]) -> dict[str, pl.Dat
     Retorna:
     --------
     dict[str, pl.DataFrame]
-        Diccionario con DataFrames preprocesados de bolus y meal.
+        Diccionario con DataFrames preprocesados.
     """
     processed: dict[str, pl.DataFrame] = {}
-    # Procesar bolus
+    # Bolus
     if "bolus" in data:
-        bolus: pl.DataFrame = data["bolus"].clone()
+        bolus = data["bolus"].clone()
         if "dose" in bolus.columns:
             bolus = bolus.rename({"dose": BOLUS_COL})
+            bolus = bolus.with_columns(pl.col(BOLUS_COL).cast(pl.Float64))
         if "ts_begin" in bolus.columns:
             bolus = bolus.with_columns(
                 pl.col("ts_begin")
                 .str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT)
                 .alias(TIMESTAMP_COL)
             )
-        processed["bolus"] = bolus
-    # Procesar meal
+        valid_bolus = bolus.filter(pl.col(BOLUS_COL).is_not_null() & (pl.col(BOLUS_COL) > 0))
+        processed["bolus"] = valid_bolus
+        logging.info(f"Eventos bolus válidos: {valid_bolus.height}")
+
+    # Meal
     if "meal" in data:
-        meal: pl.DataFrame = data["meal"].clone()
+        meal = data["meal"].clone()
         if "carbs" in meal.columns:
             meal = meal.rename({"carbs": MEAL_COL})
+            meal = meal.with_columns(pl.col(MEAL_COL).cast(pl.Float64))
         if "ts" in meal.columns:
             meal = meal.with_columns(
                 pl.col("ts")
                 .str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT)
                 .alias(TIMESTAMP_COL)
             )
-        processed["meal"] = meal
+        valid_meal = meal.filter(pl.col(MEAL_COL).is_not_null() & (pl.col(MEAL_COL) > 0))
+        processed["meal"] = valid_meal
+        logging.info(f"Eventos meal válidos: {valid_meal.height}")
+
+    # Basal
+    if "basal" in data:
+        basal = data["basal"].clone()
+        basal = basal.rename({"value": BASAL_COL}).with_columns(
+            pl.col(BASAL_COL).cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basal"] = basal.filter(pl.col(BASAL_COL).is_not_null())
+        logging.info(f"Eventos basal válidos: {processed['basal'].height}")
+
+    # Temp Basal
+    if "temp_basal" in data:
+        temp_basal = data["temp_basal"].clone()
+        temp_basal = temp_basal.rename({"value": TEMP_BASAL_COL}).with_columns(
+            pl.col(TEMP_BASAL_COL).cast(pl.Float64),
+            pl.col("ts_begin").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["temp_basal"] = temp_basal.filter(pl.col(TEMP_BASAL_COL).is_not_null())
+        logging.info(f"Eventos temp_basal válidos: {processed['temp_basal'].height}")
+
+    # Exercise
+    if "exercise" in data:
+        exercise = data["exercise"].clone()
+        exercise = exercise.with_columns(
+            pl.col("intensity").cast(pl.Float64),
+            pl.col("duration").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["exercise"] = exercise.filter(pl.col("intensity").is_not_null())
+        logging.info(f"Eventos exercise válidos: {processed['exercise'].height}")
+
+    # Steps
+    if "basis_steps" in data:
+        steps = data["basis_steps"].clone()
+        steps = steps.rename({"value": "steps"}).with_columns(
+            pl.col("steps").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basis_steps"] = steps.filter(pl.col("steps").is_not_null())
+        logging.info(f"Eventos steps válidos: {processed['basis_steps'].height}")
+
+    # Hypo Event
+    if "hypo_event" in data:
+        hypo = data["hypo_event"].clone()
+        if "ts" in hypo.columns:
+            hypo = hypo.with_columns(
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["hypo_event"] = hypo
+        logging.info(f"Eventos hypo_event válidos: {processed['hypo_event'].height}")
+
+    # Finger Stick
+    if "finger_stick" in data:
+        finger_stick = data["finger_stick"].clone()
+        finger_stick = finger_stick.rename({"value": "finger_stick_bg"}).with_columns(
+            pl.col("finger_stick_bg").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["finger_stick"] = finger_stick.filter(pl.col("finger_stick_bg").is_not_null())
+        logging.info(f"Eventos finger_stick válidos: {processed['finger_stick'].height}")
+
+    # Sleep
+    if "sleep" in data:
+        sleep = data["sleep"].clone()
+        if "ts_begin" in sleep.columns and "ts_end" in sleep.columns:
+            sleep = sleep.with_columns(
+                pl.col("quality").cast(pl.Float64),
+                pl.col("ts_begin").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_begin"),
+                pl.col("ts_end").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_end")
+            )
+        elif "ts" in sleep.columns:
+            sleep = sleep.with_columns(
+                pl.col("quality").cast(pl.Float64),
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["sleep"] = sleep.filter(pl.col("quality").is_not_null())
+        logging.info(f"Eventos sleep válidos: {processed['sleep'].height}")
+
+    # Work
+    if "work" in data:
+        work = data["work"].clone()
+        if "ts_begin" in work.columns and "ts_end" in work.columns:
+            work = work.with_columns(
+                pl.col("intensity").cast(pl.Float64),
+                pl.col("ts_begin").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_begin"),
+                pl.col("ts_end").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_end")
+            )
+        elif "ts" in work.columns:
+            work = work.with_columns(
+                pl.col("intensity").cast(pl.Float64),
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["work"] = work.filter(pl.col("intensity").is_not_null())
+        logging.info(f"Eventos work válidos: {processed['work'].height}")
+
+    # Stressors
+    if "stressors" in data:
+        stressors = data["stressors"].clone()
+        if "ts" in stressors.columns:
+            stressors = stressors.with_columns(
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["stressors"] = stressors
+        logging.info(f"Eventos stressors válidos: {processed['stressors'].height}")
+
+    # Illness
+    if "illness" in data:
+        illness = data["illness"].clone()
+        if "ts" in illness.columns:
+            illness = illness.with_columns(
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["illness"] = illness
+        logging.info(f"Eventos illness válidos: {processed['illness'].height}")
+
+    # Basis Heart Rate
+    if "basis_heart_rate" in data:
+        heart_rate = data["basis_heart_rate"].clone()
+        heart_rate = heart_rate.rename({"value": "heart_rate"}).with_columns(
+            pl.col("heart_rate").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basis_heart_rate"] = heart_rate.filter(pl.col("heart_rate").is_not_null())
+        logging.info(f"Eventos heart_rate válidos: {processed['basis_heart_rate'].height}")
+
+    # Basis GSR
+    if "basis_gsr" in data:
+        gsr = data["basis_gsr"].clone()
+        gsr = gsr.rename({"value": "gsr"}).with_columns(
+            pl.col("gsr").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basis_gsr"] = gsr.filter(pl.col("gsr").is_not_null())
+        logging.info(f"Eventos gsr válidos: {processed['basis_gsr'].height}")
+
+    # Basis Skin Temperature
+    if "basis_skin_temperature" in data:
+        skin_temp = data["basis_skin_temperature"].clone()
+        skin_temp = skin_temp.rename({"value": "skin_temperature"}).with_columns(
+            pl.col("skin_temperature").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basis_skin_temperature"] = skin_temp.filter(pl.col("skin_temperature").is_not_null())
+        logging.info(f"Eventos skin_temperature válidos: {processed['basis_skin_temperature'].height}")
+
+    # Basis Air Temperature
+    if "basis_air_temperature" in data:
+        air_temp = data["basis_air_temperature"].clone()
+        air_temp = air_temp.rename({"value": "air_temperature"}).with_columns(
+            pl.col("air_temperature").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["basis_air_temperature"] = air_temp.filter(pl.col("air_temperature").is_not_null())
+        logging.info(f"Eventos air_temperature válidos: {processed['basis_air_temperature'].height}")
+
+    # Basis Sleep
+    if "basis_sleep" in data:
+        basis_sleep = data["basis_sleep"].clone()
+        if "ts_begin" in basis_sleep.columns and "ts_end" in basis_sleep.columns:
+            basis_sleep = basis_sleep.with_columns(
+                pl.col("quality").cast(pl.Float64),
+                pl.col("ts_begin").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_begin"),
+                pl.col("ts_end").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias("Timestamp_end")
+            )
+        elif "ts" in basis_sleep.columns:
+            basis_sleep = basis_sleep.with_columns(
+                pl.col("quality").cast(pl.Float64),
+                pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+            )
+        processed["basis_sleep"] = basis_sleep.filter(pl.col("quality").is_not_null())
+        logging.info(f"Eventos basis_sleep válidos: {processed['basis_sleep'].height}")
+
+    # Acceleration
+    if "acceleration" in data:
+        accel = data["acceleration"].clone()
+        accel = accel.rename({"value": "acceleration"}).with_columns(
+            pl.col("acceleration").cast(pl.Float64),
+            pl.col("ts").str.strptime(pl.Datetime(time_unit="us"), DATE_FORMAT).alias(TIMESTAMP_COL)
+        )
+        processed["acceleration"] = accel.filter(pl.col("acceleration").is_not_null())
+        logging.info(f"Eventos acceleration válidos: {processed['acceleration'].height}")
+
     return processed
 
 def align_events_to_cgm(cgm_df: pl.DataFrame, event_df: pl.DataFrame, event_time_col: str = TIMESTAMP_COL, tolerance_minutes: int = 5) -> pl.DataFrame:
     """
-    Alinea eventos (bolus, meal, etc.) con el timestamp de CGM más cercano dentro de una tolerancia.
+    Alinea eventos (bolus, meal, etc.) con el timestamp de CGM más cercano dentro de una tolerancia, con mejor logging.
 
     Parámetros:
     -----------
@@ -209,22 +407,61 @@ def align_events_to_cgm(cgm_df: pl.DataFrame, event_df: pl.DataFrame, event_time
     if cgm_df.is_empty() or event_df.is_empty():
         return event_df
 
-    cgm_times: np.ndarray = cgm_df[TIMESTAMP_COL].to_numpy()
-    aligned_rows: list[dict] = []
-    for row in event_df.iter_rows(named=True):
-        event_time = row[event_time_col]
-        if not isinstance(event_time, np.datetime64):
-            try:
-                event_time = np.datetime64(event_time)
-            except Exception:
-                continue
-        idx: int = np.argmin(np.abs(cgm_times - event_time))
-        nearest_cgm_time = cgm_times[idx]
-        diff_minutes: float = np.abs((nearest_cgm_time - event_time) / np.timedelta64(1, 'm'))
-        if diff_minutes <= tolerance_minutes:
-            row[TIMESTAMP_COL] = nearest_cgm_time
-            aligned_rows.append(row)
-    return pl.DataFrame(aligned_rows)
+    # Asegurar que las columnas de tiempo son datetime
+    cgm_df = ensure_timestamp_datetime(cgm_df)
+    event_df = ensure_timestamp_datetime(event_df, event_time_col)
+    
+    # Convertir tolerancia a timedelta
+    tolerance = timedelta(minutes=tolerance_minutes)
+    
+    # Obtener timestamps de CGM
+    cgm_times = cgm_df[TIMESTAMP_COL].to_list()
+    
+    # Función para encontrar el timestamp CGM más cercano
+    def find_nearest_cgm(event_time: datetime) -> Optional[datetime]:
+        if not cgm_times:
+            return None
+            
+        # Encontrar el timestamp CGM más cercano
+        nearest_time = min(cgm_times, key=lambda x: abs(x - event_time))
+        time_diff = abs(nearest_time - event_time)
+        
+        # Verificar si está dentro de la tolerancia
+        if time_diff <= tolerance:
+            return nearest_time
+        return None
+    
+    # Aplicar la función a cada evento
+    aligned_times = []
+    for event_time in event_df[event_time_col]:
+        nearest_cgm = find_nearest_cgm(event_time)
+        if nearest_cgm is not None:
+            aligned_times.append(nearest_cgm)
+        else:
+            aligned_times.append(event_time)
+    
+    # Crear nuevo DataFrame con tiempos alineados
+    aligned_df = event_df.with_columns(
+        pl.Series(name=TIMESTAMP_COL, values=aligned_times)
+    )
+    
+    # Filtrar eventos que no se pudieron alinear
+    aligned_df = aligned_df.filter(
+        pl.col(TIMESTAMP_COL).is_in(cgm_times)
+    )
+    
+    # Calcular estadísticas de alineación
+    total_events = len(event_df)
+    aligned_events = len(aligned_df)
+    lost_events = total_events - aligned_events
+    
+    if lost_events > 0:
+        logging.warning(f"Eventos descartados por estar fuera de tolerancia: {lost_events}")
+        logging.warning(f"Eventos sin CGM correspondiente: {lost_events}")
+    
+    logging.info(f"Eventos alineados: {aligned_events}/{total_events} ({aligned_events/total_events*100:.1f}%)")
+    
+    return aligned_df
 
 def preprocess_cgm(cgm: pl.DataFrame) -> pl.DataFrame:
     """
@@ -250,7 +487,7 @@ def preprocess_cgm(cgm: pl.DataFrame) -> pl.DataFrame:
 
 def join_signals(data: dict[str, pl.DataFrame]) -> pl.DataFrame:
     """
-    Une señales de CGM, bolus, meal, basal y temp_basal alineadas por Timestamp y SubjectID.
+    Une señales de CGM, bolus, meal, basal, temp_basal, exercise, steps, hypo_event, etc., alineadas por Timestamp y SubjectID.
 
     Parámetros:
     -----------
@@ -262,53 +499,239 @@ def join_signals(data: dict[str, pl.DataFrame]) -> pl.DataFrame:
     pl.DataFrame
         DataFrame unificado con todas las señales.
     """
-    df: pl.DataFrame = data["glucose_level"].clone()
-    # Join bolus
-    if "bolus" in data and not data["bolus"].is_empty():
-        df = df.join(
-            data["bolus"].select([TIMESTAMP_COL, BOLUS_COL, SUBJECT_ID_COL]),
-            on=[TIMESTAMP_COL, SUBJECT_ID_COL],
-            how="left"
-        )
-    else:
-        df = df.with_columns(pl.lit(None).alias(BOLUS_COL))
-    # Join meal
-    if "meal" in data and not data["meal"].is_empty():
-        df = df.join(
-            data["meal"].select([TIMESTAMP_COL, MEAL_COL, SUBJECT_ID_COL]),
-            on=[TIMESTAMP_COL, SUBJECT_ID_COL],
-            how="left"
-        )
-    else:
-        df = df.with_columns(pl.lit(None).alias(MEAL_COL))
-    # Join basal
-    if "basal" in data and "dose" in data["basal"].columns:
-        basal: pl.DataFrame = data["basal"].with_columns(
-            pl.col("dose").cast(pl.Float64)
-        ).rename({"dose": BASAL_COL})
-        if "ts_begin" in basal.columns:
-            basal = basal.with_columns(pl.col("ts_begin").str.strptime(pl.Datetime, DATE_FORMAT).alias(TIMESTAMP_COL))
-        df = df.join(
-            basal.select([TIMESTAMP_COL, SUBJECT_ID_COL, BASAL_COL]),
-            on=[TIMESTAMP_COL, SUBJECT_ID_COL],
-            how="left"
-        )
+    logging.info("Uniendo señales...")
+    cgm_data = data["glucose_level"]
+    cgm_data = preprocess_cgm(cgm_data)
+    cgm_data = cgm_data.fill_null(strategy="forward").fill_null(strategy="backward")
+    
+    # Datos base
+    bolus_data = data.get("bolus", pl.DataFrame())
+    meal_data = data.get("meal", pl.DataFrame())
+    basal_data = data.get("basal", pl.DataFrame())
+    temp_basal_data = data.get("temp_basal", pl.DataFrame())
+    exercise_data = data.get("exercise", pl.DataFrame())
+    steps_data = data.get("basis_steps", pl.DataFrame())
+    hypo_data = data.get("hypo_event", pl.DataFrame())
+    
+    # Nuevos datos
+    finger_stick_data = data.get("finger_stick", pl.DataFrame())
+    sleep_data = data.get("sleep", pl.DataFrame())
+    work_data = data.get("work", pl.DataFrame())
+    stressors_data = data.get("stressors", pl.DataFrame())
+    illness_data = data.get("illness", pl.DataFrame())
+    heart_rate_data = data.get("basis_heart_rate", pl.DataFrame())
+    gsr_data = data.get("basis_gsr", pl.DataFrame())
+    skin_temp_data = data.get("basis_skin_temperature", pl.DataFrame())
+    air_temp_data = data.get("basis_air_temperature", pl.DataFrame())
+    basis_sleep_data = data.get("basis_sleep", pl.DataFrame())
+    acceleration_data = data.get("acceleration", pl.DataFrame())
+
+    # Join bolus y meal
+    df = cgm_data.join(bolus_data, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_bolus")
+    df = df.join(meal_data, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_meal")
+    
+    # Basal
+    if not basal_data.is_empty() and TIMESTAMP_COL in basal_data.columns and TIMESTAMP_COL in df.columns:
+        df = df.join(basal_data, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_basal")
+        df = df.with_columns(pl.col(BASAL_COL).fill_null(0.0))
     else:
         df = df.with_columns(pl.lit(0.0).alias(BASAL_COL))
-    # Join temp_basal
-    if "temp_basal" in data and "dose" in data["temp_basal"].columns:
-        temp: pl.DataFrame = data["temp_basal"].with_columns(
-            pl.col("dose").cast(pl.Float64)
-        ).rename({"dose": TEMP_BASAL_COL})
-        if "ts_begin" in temp.columns:
-            temp = temp.with_columns(pl.col("ts_begin").str.strptime(pl.Datetime, DATE_FORMAT).alias(TIMESTAMP_COL))
-        df = df.join(
-            temp.select([TIMESTAMP_COL, SUBJECT_ID_COL, TEMP_BASAL_COL]),
-            on=[TIMESTAMP_COL, SUBJECT_ID_COL],
-            how="left"
+    
+    # Temp Basal
+    if not temp_basal_data.is_empty() and TIMESTAMP_COL in temp_basal_data.columns and TIMESTAMP_COL in df.columns:
+        df = df.join(temp_basal_data, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_temp_basal")
+        df = df.with_columns(
+            pl.col(TEMP_BASAL_COL).fill_null(0.0),
+            pl.col(TEMP_BASAL_COL).gt(0).alias("temp_basal_active"),
+            pl.when(pl.col("temp_basal_active")).then(pl.col(TEMP_BASAL_COL)).otherwise(pl.col(BASAL_COL)).alias("effective_basal_rate")
         )
     else:
-        df = df.with_columns(pl.lit(0.0).alias(TEMP_BASAL_COL))
+        df = df.with_columns(
+            pl.col(BASAL_COL).alias("effective_basal_rate"),
+            pl.lit(0.0).alias("temp_basal_active")
+        )
+    
+    # Exercise
+    if not exercise_data.is_empty() and TIMESTAMP_COL in exercise_data.columns and TIMESTAMP_COL in df.columns:
+        exercise_aligned = align_events_to_cgm(df, exercise_data, tolerance_minutes=15)
+        df = df.join(exercise_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_exercise")
+        df = df.with_columns(
+            pl.col("intensity").fill_null(0.0).alias("exercise_intensity"),
+            pl.col("duration").fill_null(0.0).alias("exercise_duration")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("exercise_intensity"),
+            pl.lit(0.0).alias("exercise_duration")
+        )
+    
+    # Steps
+    if not steps_data.is_empty() and TIMESTAMP_COL in steps_data.columns and TIMESTAMP_COL in df.columns:
+        steps_aligned = align_events_to_cgm(df, steps_data, tolerance_minutes=15)
+        df = df.join(steps_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_steps")
+        df = df.with_columns(
+            pl.col("steps").fill_null(0.0).alias("steps")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("steps")
+        )
+    
+    # Hypo event (binaria)
+    if not hypo_data.is_empty() and TIMESTAMP_COL in hypo_data.columns and TIMESTAMP_COL in df.columns:
+        hypo_aligned = align_events_to_cgm(df, hypo_data, tolerance_minutes=15)
+        hypo_timestamps = hypo_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in hypo_timestamps), return_dtype=pl.Float64).alias("hypo_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("hypo_event")
+        )
+
+    # Finger Stick
+    if not finger_stick_data.is_empty() and TIMESTAMP_COL in finger_stick_data.columns and TIMESTAMP_COL in df.columns:
+        finger_stick_aligned = align_events_to_cgm(df, finger_stick_data, tolerance_minutes=15)
+        df = df.join(finger_stick_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_finger_stick")
+        df = df.with_columns(
+            pl.col("finger_stick_bg").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("finger_stick_bg")
+        )
+
+    # Sleep (binaria)
+    if not sleep_data.is_empty() and "Timestamp_begin" in sleep_data.columns and TIMESTAMP_COL in df.columns:
+        sleep_aligned = align_events_to_cgm(df, sleep_data, event_time_col="Timestamp_begin", tolerance_minutes=15)
+        sleep_timestamps = sleep_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in sleep_timestamps), return_dtype=pl.Float64).alias("sleep_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("sleep_event")
+        )
+
+    # Work (binaria)
+    if not work_data.is_empty() and "Timestamp_begin" in work_data.columns and TIMESTAMP_COL in df.columns:
+        work_aligned = align_events_to_cgm(df, work_data, event_time_col="Timestamp_begin", tolerance_minutes=15)
+        work_timestamps = work_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in work_timestamps), return_dtype=pl.Float64).alias("work_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("work_event")
+        )
+
+    # Stressors (binaria)
+    if not stressors_data.is_empty() and TIMESTAMP_COL in stressors_data.columns and TIMESTAMP_COL in df.columns:
+        stressors_aligned = align_events_to_cgm(df, stressors_data, tolerance_minutes=15)
+        stressors_timestamps = stressors_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in stressors_timestamps), return_dtype=pl.Float64).alias("stressors_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("stressors_event")
+        )
+
+    # Illness (binaria)
+    if not illness_data.is_empty() and TIMESTAMP_COL in illness_data.columns and TIMESTAMP_COL in df.columns:
+        illness_aligned = align_events_to_cgm(df, illness_data, tolerance_minutes=15)
+        illness_timestamps = illness_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in illness_timestamps), return_dtype=pl.Float64).alias("illness_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("illness_event")
+        )
+
+    # Basis Heart Rate
+    if not heart_rate_data.is_empty() and TIMESTAMP_COL in heart_rate_data.columns and TIMESTAMP_COL in df.columns:
+        heart_rate_aligned = align_events_to_cgm(df, heart_rate_data, tolerance_minutes=15)
+        df = df.join(heart_rate_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_heart_rate")
+        df = df.with_columns(
+            pl.col("heart_rate").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("heart_rate")
+        )
+
+    # Basis GSR
+    if not gsr_data.is_empty() and TIMESTAMP_COL in gsr_data.columns and TIMESTAMP_COL in df.columns:
+        gsr_aligned = align_events_to_cgm(df, gsr_data, tolerance_minutes=15)
+        df = df.join(gsr_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_gsr")
+        df = df.with_columns(
+            pl.col("gsr").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("gsr")
+        )
+
+    # Basis Skin Temperature
+    if not skin_temp_data.is_empty() and TIMESTAMP_COL in skin_temp_data.columns and TIMESTAMP_COL in df.columns:
+        skin_temp_aligned = align_events_to_cgm(df, skin_temp_data, tolerance_minutes=15)
+        df = df.join(skin_temp_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_skin_temp")
+        df = df.with_columns(
+            pl.col("skin_temperature").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("skin_temperature")
+        )
+
+    # Basis Air Temperature
+    if not air_temp_data.is_empty() and TIMESTAMP_COL in air_temp_data.columns and TIMESTAMP_COL in df.columns:
+        air_temp_aligned = align_events_to_cgm(df, air_temp_data, tolerance_minutes=15)
+        df = df.join(air_temp_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_air_temp")
+        df = df.with_columns(
+            pl.col("air_temperature").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("air_temperature")
+        )
+
+    # Basis Sleep (binaria)
+    if not basis_sleep_data.is_empty() and "Timestamp_begin" in basis_sleep_data.columns and TIMESTAMP_COL in df.columns:
+        basis_sleep_aligned = align_events_to_cgm(df, basis_sleep_data, event_time_col="Timestamp_begin", tolerance_minutes=15)
+        basis_sleep_timestamps = basis_sleep_aligned[TIMESTAMP_COL].unique().to_list()
+        df = df.with_columns(
+            pl.col(TIMESTAMP_COL).map_elements(lambda x: float(x in basis_sleep_timestamps), return_dtype=pl.Float64).alias("basis_sleep_event")
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("basis_sleep_event")
+        )
+
+    # Acceleration
+    if not acceleration_data.is_empty() and TIMESTAMP_COL in acceleration_data.columns and TIMESTAMP_COL in df.columns:
+        acceleration_aligned = align_events_to_cgm(df, acceleration_data, tolerance_minutes=15)
+        df = df.join(acceleration_aligned, on=[TIMESTAMP_COL, SUBJECT_ID_COL], how="left", suffix="_acceleration")
+        df = df.with_columns(
+            pl.col("acceleration").fill_null(0.0)
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(0.0).alias("acceleration")
+        )
+
+    # Imputar valores faltantes
+    for col in [BOLUS_COL, MEAL_COL, "effective_basal_rate", "exercise_intensity", "exercise_duration", 
+                "steps", "hypo_event", "finger_stick_bg", "sleep_event", "work_event", "stressors_event", 
+                "illness_event", "heart_rate", "gsr", "skin_temperature", "air_temperature", 
+                "basis_sleep_event", "acceleration"]:
+        if col in df.columns:
+            df = df.with_columns(
+                pl.col(col).fill_null(0.0)
+            )
+    
+    logging.info(f"Señales unidas: {df.shape}")
     return df
 
 def ensure_timestamp_datetime(df: pl.DataFrame, col: str = TIMESTAMP_COL) -> pl.DataFrame:
@@ -374,9 +797,9 @@ def calculate_iob(bolus_time: datetime, basal_df: pl.DataFrame, half_life_hours:
             remaining: float = rate * (1 - (time_since_start / half_life_hours))
             iob += max(0.0, remaining)
     
-    return min(iob, CONFIG["cap_iob"])
+    return min(iob, CONFIG_PROCESSING["cap_iob"])
 
-def get_cgm_window(bolus_time: datetime, cgm_df: pl.DataFrame, window_hours: int = CONFIG["window_hours"]) -> np.ndarray:
+def get_cgm_window(bolus_time: datetime, cgm_df: pl.DataFrame, window_hours: int = CONFIG_PROCESSING["window_hours"]) -> np.ndarray:
     """
     Obtiene la ventana de datos CGM para un tiempo de bolo específico.
 
@@ -403,7 +826,7 @@ def get_cgm_window(bolus_time: datetime, cgm_df: pl.DataFrame, window_hours: int
         return None
     return window.get_column(GLUCOSE_COL).to_numpy()
 
-def generate_windows(df: pl.DataFrame, window_size: int = CONFIG["window_steps"]) -> pl.DataFrame:
+def generate_windows(df: pl.DataFrame, window_size: int = CONFIG_PROCESSING["window_steps"]) -> pl.DataFrame:
     """
     Genera ventanas de CGM de tamaño fijo antes de cada evento bolus.
 
@@ -468,151 +891,355 @@ def calculate_medians(bolus_df: pl.DataFrame, basal_df: pl.DataFrame) -> tuple[f
     
     return carb_median, iob_median
 
-def extract_features(df: pl.DataFrame, meal_df: pl.DataFrame) -> pl.DataFrame:
+def compute_glucose_patterns_24h(cgm_values: list[float]) -> dict[str, float]:
     """
-    Extrae características de las ventanas CGM y agrega información de meal.
-
-    Parámetros:
-    -----------
-    df : pl.DataFrame
-        DataFrame con ventanas CGM y datos de bolus.
-    meal_df : pl.DataFrame
-        DataFrame con datos de meals.
-
-    Retorna:
-    --------
-    pl.DataFrame
-        DataFrame con características extraídas.
+    Calcula patrones de glucosa de 24 horas para análisis clínico.
     """
-    df = df.with_columns([
-        pl.col("cgm_window").list.get(-1).alias("glucose_last"),
-        pl.col("cgm_window").list.mean().alias("glucose_mean"),
-        pl.col("cgm_window").list.std().alias("glucose_std"),
-        pl.col("cgm_window").list.min().alias("glucose_min"),
-        pl.col("cgm_window").list.max().alias("glucose_max"),
-        ((pl.col(TIMESTAMP_COL).dt.hour() * 60 + pl.col(TIMESTAMP_COL).dt.minute()) / (24 * 60)).alias("hour_of_day"),
-        pl.when(pl.col("cgm_window").list.len() > 0)
-        .then(pl.col("cgm_window").list.get(-1))
-        .otherwise(0.0)
-        .alias("bg_input"),
-        pl.lit(0.0).alias("insulin_on_board")
-    ])
+    if not cgm_values or len(cgm_values) == 0:
+        return {
+            'cgm_mean_24h': 120.0,
+            'cgm_std_24h': 0.0,
+            'cgm_median_24h': 120.0,
+            'cgm_range_24h': 0.0,
+            'hypo_episodes_24h': 0,
+            'hypo_percentage_24h': 0.0,
+            'hyper_episodes_24h': 0,
+            'hyper_percentage_24h': 0.0,
+            'time_in_range_24h': 100.0,
+            'cv_24h': 0.0,
+            'mage_24h': 0.0,
+            'glucose_trend_24h': 0.0
+        }
+    
+    values_array = np.array(cgm_values)
+    
+    # Basic statistics
+    patterns = {
+        'cgm_mean_24h': float(np.mean(values_array)),
+        'cgm_std_24h': float(np.std(values_array)),
+        'cgm_median_24h': float(np.median(values_array)),
+        'cgm_range_24h': float(np.max(values_array) - np.min(values_array))
+    }
+    
+    # Hypoglycemia analysis (< 70 mg/dL)
+    hypo_episodes = np.sum(values_array < CONFIG_PROCESSING['hypoglycemia_threshold'])
+    patterns['hypo_episodes_24h'] = int(hypo_episodes)
+    patterns['hypo_percentage_24h'] = float((hypo_episodes / len(values_array)) * 100)
+    
+    # Hyperglycemia analysis (> 180 mg/dL)
+    hyper_episodes = np.sum(values_array > CONFIG_PROCESSING['hyperglycemia_threshold'])
+    patterns['hyper_episodes_24h'] = int(hyper_episodes)
+    patterns['hyper_percentage_24h'] = float((hyper_episodes / len(values_array)) * 100)
+    
+    # Time in Range (70-180 mg/dL)
+    in_range = np.sum((values_array >= CONFIG_PROCESSING['tir_lower']) & (values_array <= CONFIG_PROCESSING['tir_upper']))
+    patterns['time_in_range_24h'] = float((in_range / len(values_array)) * 100)
+    
+    # Glucose variability
+    if len(values_array) > 1 and patterns['cgm_mean_24h'] > 0:
+        patterns['cv_24h'] = float((patterns['cgm_std_24h'] / patterns['cgm_mean_24h']) * 100)
+        glucose_changes = np.abs(np.diff(values_array))
+        patterns['mage_24h'] = float(np.mean(glucose_changes))
+        if len(values_array) >= 3:
+            time_points = np.arange(len(values_array))
+            slope, _ = np.polyfit(time_points, values_array, 1)
+            patterns['glucose_trend_24h'] = float(slope)
+        else:
+            patterns['glucose_trend_24h'] = 0.0
+    else:
+        patterns['cv_24h'] = 0.0
+        patterns['mage_24h'] = 0.0
+        patterns['glucose_trend_24h'] = 0.0
+    
+    return patterns
 
-    required_cols: list[str] = ["carb_input", BASAL_COL, TEMP_BASAL_COL, "meal_time_diff", "meal_time_diff_hours", "has_meal", "meals_in_window"]
-    for col in required_cols:
-        default: Union[float, int] = 0.0 if "time" not in col and "meals" not in col else 0
-        df = df.with_columns(pl.lit(default).cast(pl.Float64).alias(col))
+def encode_time_cyclical(timestamp: datetime) -> dict[str, float]:
+    """
+    Codifica características de tiempo cíclicamente usando seno y coseno.
+    """
+    hour_decimal = timestamp.hour + timestamp.minute / 60.0 + timestamp.second / 3600.0
+    hour_normalized = hour_decimal / 24.0
+    hour_radians = 2 * np.pi * hour_normalized
+    day_of_week = timestamp.weekday() / 7.0
+    day_radians = 2 * np.pi * day_of_week
+    return {
+        'hour_sin': float(np.sin(hour_radians)),
+        'hour_cos': float(np.cos(hour_radians)),
+        'day_sin': float(np.sin(day_radians)),
+        'day_cos': float(np.cos(day_radians)),
+        'hour_of_day_normalized': float(hour_normalized),
+        'day_of_week_normalized': float(day_of_week)
+    }
 
-    df = df.with_columns([
-        (pl.col("meal_time_diff") / 60.0).cast(pl.Float64).alias("meal_time_diff_hours"),
-        pl.when(pl.col("meal_time_diff") > 0).then(1.0).otherwise(0.0).cast(pl.Float64).alias("has_meal")
-    ])
+def compute_enhanced_meal_context(bolus_time: datetime, meal_df: pl.DataFrame, 
+                                window_hours: float = 2.0) -> dict[str, Union[float, int]]:
+    """
+    Calcula características mejoradas del contexto de comidas alrededor del tiempo del bolo.
+    """
+    if meal_df.is_empty():
+        return {
+            'meal_carbs': 0.0,
+            'meal_time_diff_minutes': 0.0,
+            'meal_time_diff_hours': 0.0,
+            'has_meal': 0.0,
+            'meals_in_window': 0,
+            'significant_meal': 0.0,
+            'total_carbs_window': 0.0,
+            'largest_meal_carbs': 0.0,
+            'meal_timing_score': 0.0
+        }
+    
+    start_time = bolus_time - timedelta(hours=window_hours/2)
+    end_time = bolus_time + timedelta(hours=window_hours)
+    meals_in_window = meal_df.filter(
+        (pl.col(TIMESTAMP_COL) >= start_time) & 
+        (pl.col(TIMESTAMP_COL) <= end_time)
+    )
+    
+    if meals_in_window.is_empty():
+        return {
+            'meal_carbs': 0.0,
+            'meal_time_diff_minutes': 0.0,
+            'meal_time_diff_hours': 0.0,
+            'has_meal': 0.0,
+            'meals_in_window': 0,
+            'significant_meal': 0.0,
+            'total_carbs_window': 0.0,
+            'largest_meal_carbs': 0.0,
+            'meal_timing_score': 0.0
+        }
+    
+    meals_with_diff = meals_in_window.with_columns(
+        (pl.col(TIMESTAMP_COL) - bolus_time).abs().alias("time_diff_abs")
+    ).sort("time_diff_abs")
+    
+    closest_meal = meals_with_diff.row(0, named=True)
+    time_diff = (closest_meal[TIMESTAMP_COL] - bolus_time).total_seconds()
+    meal_carbs = float(closest_meal.get(MEAL_COL, 0.0))
+    
+    all_meals = meals_in_window.to_dicts()
+    total_carbs = sum(float(meal.get(MEAL_COL, 0.0)) for meal in all_meals)
+    largest_meal = max((float(meal.get(MEAL_COL, 0.0)) for meal in all_meals), default=0.0)
+    
+    max_diff_seconds = window_hours * 3600
+    timing_score = max(0.0, 1.0 - abs(time_diff) / max_diff_seconds)
+    
+    return {
+        'meal_carbs': meal_carbs,
+        'meal_time_diff_minutes': float(time_diff / 60.0),
+        'meal_time_diff_hours': float(time_diff / 3600.0),
+        'has_meal': 1.0,
+        'meals_in_window': len(all_meals),
+        'significant_meal': 1.0 if meal_carbs > CONFIG_PROCESSING['significant_meal_threshold'] else 0.0,
+        'total_carbs_window': total_carbs,
+        'largest_meal_carbs': largest_meal,
+        'meal_timing_score': timing_score
+    }
 
-    if not meal_df.is_empty():
-        meal_df = meal_df.with_columns(pl.col(TIMESTAMP_COL).cast(pl.Datetime(time_unit="us")))
-        matched: list[dict] = []
-        for row in df.iter_rows(named=True):
-            bolus_time = row.get(TIMESTAMP_COL, None)
-            if bolus_time is None:
-                continue
-            start: datetime = bolus_time
-            end: datetime = bolus_time + timedelta(hours=1)
-            meals: pl.DataFrame = meal_df.filter((pl.col(TIMESTAMP_COL) >= start) & (pl.col(TIMESTAMP_COL) <= end))
-            if meals.height > 0:
-                meals = meals.with_columns((pl.col(TIMESTAMP_COL) - bolus_time).alias("time_diff")).sort("time_diff")
-                closest: dict = meals.to_dicts()[0]
-                meal_time_diff = closest.get("time_diff")
-                matched.append({
-                    TIMESTAMP_COL: bolus_time,
-                    MEAL_COL: float(closest.get(MEAL_COL, 0.0)),
-                    "meal_time_diff": float(meal_time_diff.total_seconds() / 60.0 if meal_time_diff else 0.0),
-                    "meals_in_window": float(meals.height)
-                })
+def compute_clinical_risk_indicators(cgm_values: list[float], current_iob: float = 0.0) -> dict[str, float]:
+    """
+    Calcula indicadores de riesgo clínico en tiempo real.
+    """
+    if not cgm_values:
+        return {
+            'current_hypo_risk': 0.0,
+            'current_hyper_risk': 0.0,
+            'glucose_rate_of_change': 0.0,
+            'glucose_acceleration': 0.0,
+            'stability_score': 1.0,
+            'iob_risk_factor': 0.0
+        }
+    
+    current_glucose = cgm_values[-1] if cgm_values else 120.0
+    
+    hypo_risk = 1.0 if current_glucose < CONFIG_PROCESSING['hypoglycemia_threshold'] else 0.0
+    hyper_risk = 1.0 if current_glucose > CONFIG_PROCESSING['hyperglycemia_threshold'] else 0.0
+    
+    if len(cgm_values) >= 2:
+        glucose_rate = cgm_values[-1] - cgm_values[-2]
+    else:
+        glucose_rate = 0.0
+    
+    if len(cgm_values) >= 3:
+        glucose_acceleration = (cgm_values[-1] - cgm_values[-2]) - (cgm_values[-2] - cgm_values[-3])
+    else:
+        glucose_acceleration = 0.0
+    
+    if len(cgm_values) >= 6:
+        recent_values = cgm_values[-6:]
+        stability_score = max(0.0, 1.0 - (np.std(recent_values) / 50.0))
+    else:
+        stability_score = 1.0
+    
+    iob_risk = min(1.0, current_iob / 5.0)
+    
+    return {
+        'current_hypo_risk': hypo_risk,
+        'current_hyper_risk': hyper_risk,
+        'glucose_rate_of_change': float(glucose_rate),
+        'glucose_acceleration': float(glucose_acceleration),
+        'stability_score': float(stability_score),
+        'iob_risk_factor': float(iob_risk)
+    }
+
+def extract_features(df: pl.DataFrame, meal_df: pl.DataFrame, extended_cgm_df: pl.DataFrame = None) -> pl.DataFrame:
+    """
+    Extrae características mejoradas para DRL, incluyendo contexto de basal, ejercicio, pasos, hipo_event.
+    """
+    logging.info("Extrayendo características mejoradas para DRL...")
+    enhanced_rows = []
+    for row in df.iter_rows(named=True):
+        # Features base
+        cgm_window = row.get("cgm_window", [])
+        basic_stats = {
+            "glucose_last": cgm_window[-1] if cgm_window else 120.0,
+            "glucose_mean": float(np.mean(cgm_window)) if cgm_window else 120.0,
+            "glucose_std": float(np.std(cgm_window)) if cgm_window else 0.0,
+            "glucose_min": float(np.min(cgm_window)) if cgm_window else 120.0,
+            "glucose_max": float(np.max(cgm_window)) if cgm_window else 120.0,
+        }
+        # Contexto de tiempo
+        time_features = encode_time_cyclical(row[TIMESTAMP_COL])
+        # Contexto de comidas
+        meal_context = compute_enhanced_meal_context(row[TIMESTAMP_COL], meal_df)
+        # Riesgo clínico
+        iob = row.get("insulin_on_board", 0.0)
+        risk_indicators = compute_clinical_risk_indicators(cgm_window, iob)
+        # Contexto de ejercicio y pasos
+        exercise_features = {
+            "exercise_intensity": row.get("exercise_intensity", 0.0),
+            "exercise_duration": row.get("exercise_duration", 0.0),
+            "exercise_in_window": row.get("exercise_in_window", 0.0),
+            "steps_in_window": row.get("steps_in_window", 0.0),
+        }
+        # Hipo-evento
+        hypo_features = {
+            "hypo_event_in_window": row.get("hypo_event_in_window", 0.0)
+        }
+        # Basal
+        basal_features = {
+            "effective_basal_rate": row.get("effective_basal_rate", 0.0),
+            "temp_basal_active": row.get("temp_basal_active", 0.0)
+        }
+        # Patrones de glucosa de 24h si hay datos extendidos
+        glucose_patterns = {}
+        if extended_cgm_df is not None:
+            subject_id = row[SUBJECT_ID_COL]
+            ts = row[TIMESTAMP_COL]
+            window_start = ts - timedelta(hours=24)
+            extended_window = extended_cgm_df.filter(
+                (pl.col(SUBJECT_ID_COL) == subject_id) &
+                (pl.col(TIMESTAMP_COL) >= window_start) &
+                (pl.col(TIMESTAMP_COL) <= ts)
+            ).sort(TIMESTAMP_COL)
+            if extended_window.height >= 288:  # 24 horas a 5 min
+                glucose_patterns = compute_glucose_patterns_24h(extended_window[GLUCOSE_COL].to_list())
             else:
-                matched.append({
-                    TIMESTAMP_COL: bolus_time,
-                    MEAL_COL: 0.0,
-                    "meal_time_diff": 0.0,
-                    "meals_in_window": 0.0
-                })
-
-        meals_info: pl.DataFrame = pl.DataFrame(matched)
-        if TIMESTAMP_COL in meals_info.columns:
-            meals_info = meals_info.with_columns(pl.col(TIMESTAMP_COL).cast(pl.Datetime(time_unit="us")))
-            df = df.with_columns(pl.col(TIMESTAMP_COL).cast(pl.Datetime(time_unit="us")))
-            df = df.join(meals_info, on=TIMESTAMP_COL, how="left")
-            df = df.with_columns([
-                pl.col(MEAL_COL).cast(pl.Float64).fill_null(0.0),
-                pl.col("meal_time_diff").cast(pl.Float64).fill_null(0.0),
-                pl.col("meals_in_window").cast(pl.Float64).fill_null(0.0),
-                (pl.col("meal_time_diff") / 60.0).cast(pl.Float64).alias("meal_time_diff_hours"),
-                pl.when(pl.col("meals_in_window") > 0).then(1.0).otherwise(0.0).cast(pl.Float64).alias("has_meal")
-            ])
-
-    return df
+                glucose_patterns = compute_glucose_patterns_24h([])
+        
+        enhanced_row = {
+            **row,
+            **basic_stats,
+            **time_features,
+            **meal_context,
+            **risk_indicators,
+            **exercise_features,
+            **hypo_features,
+            **basal_features,
+            **glucose_patterns
+        }
+        enhanced_rows.append(enhanced_row)
+    enhanced_df = pl.DataFrame(enhanced_rows)
+    # Normalización y log1p
+    for col in [BOLUS_COL, MEAL_COL, "effective_basal_rate", "exercise_intensity", "exercise_duration", "steps_in_window"]:
+        if col in enhanced_df.columns:
+            enhanced_df = enhanced_df.with_columns(
+                pl.col(col).log1p().alias(f"{col}_log1p")
+            )
+    # Normalizar features binarios
+    for col in ["exercise_in_window", "hypo_event_in_window", "temp_basal_active", "has_meal", "significant_meal"]:
+        if col in enhanced_df.columns:
+            enhanced_df = enhanced_df.with_columns(
+                pl.col(col).cast(pl.Float64)
+            )
+    logging.info(f"Características DRL extraídas. Forma: {enhanced_df.shape}")
+    return enhanced_df
 
 def transform_features(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Aplica transformaciones finales a las características para entrenamiento.
-
-    Parámetros:
-    -----------
-    df : pl.DataFrame
-        DataFrame con características extraídas.
-
-    Retorna:
-    --------
-    pl.DataFrame
-        DataFrame con características transformadas.
+    Aplica transformaciones mejoradas incluyendo transformaciones logarítmicas, normalización y expansión de características.
     """
-    for col in ["glucose_last", "glucose_mean", "glucose_std", "glucose_min", "glucose_max"]:
+    logging.info("Aplicando transformaciones mejoradas...")
+    
+    # Log1p transformations
+    log_transform_cols = [
+        BOLUS_COL, "carb_input", MEAL_COL, "insulin_on_board",
+        "total_carbs_window", "largest_meal_carbs"
+    ]
+    
+    for col in log_transform_cols:
+        if col in df.columns:
+            df = df.with_columns(
+                pl.col(col).log1p().alias(f"{col}_log1p")
+            )
+
+    # Normalize percentage features
+    percentage_cols = [
+        "hypo_percentage_24h", "hyper_percentage_24h", "time_in_range_24h", "cv_24h"
+    ]
+    
+    for col in percentage_cols:
+        if col in df.columns:
+            df = df.with_columns(
+                (pl.col(col) / 100.0).alias(f"{col}_normalized")
+            )
+    
+    # Normalize time features
+    if "meal_time_diff_hours" in df.columns:
         df = df.with_columns(
-            pl.col(col).cast(pl.Float64).log1p().alias(f"{col}_log1p")
+            (pl.col("meal_time_diff_hours") / 24.0).alias("meal_time_diff_normalized")
         )
+    
+    # Normalize glucose-related features
+    glucose_norm_cols = [
+        ("cgm_mean_24h", 200.0),
+        ("cgm_std_24h", 100.0),
+        ("cgm_median_24h", 200.0),
+        ("cgm_range_24h", 300.0),
+        ("mage_24h", 50.0),
+        ("glucose_trend_24h", 10.0)
+    ]
+    
+    for col, norm_factor in glucose_norm_cols:
+        if col in df.columns:
+            df = df.with_columns(
+                (pl.col(col) / norm_factor).alias(f"{col}_normalized")
+            )
+    
+    # Expand CGM window to individual columns
+    if "cgm_window" in df.columns:
+        window_size = CONFIG_PROCESSING["window_steps"]
+        for i in range(window_size):
+            df = df.with_columns(
+                pl.col("cgm_window").list.get(i, null_on_oob=True)
+                .fill_null(120.0)
+                .alias(f"cgm_{i}")
+            )
+        df = df.drop("cgm_window")
 
-    df = df.with_columns([
-        pl.when(pl.col("cgm_window").list.len() > 1)
-        .then(pl.col("cgm_window").list.get(-1) - pl.col("cgm_window").list.get(0))
-        .otherwise(0.0)
-        .cast(pl.Float64)
-        .alias("glucose_trend"),
-        pl.col("cgm_window").list.std().fill_null(0.0).cast(pl.Float64).alias("glucose_variability")
-    ])
-
-    df = df.with_columns([
-        pl.col("glucose_trend").cast(pl.Float64).alias("cgm_trend"),
-        pl.col("glucose_variability").cast(pl.Float64).alias("cgm_std")
-    ])
-
-    for col in [BOLUS_COL, "carb_input", MEAL_COL, "insulin_on_board"]:
+    # Create risk composite scores
+    if all(col in df.columns for col in ["current_hypo_risk", "stability_score", "iob_risk_factor"]):
         df = df.with_columns(
-            pl.col(col).cast(pl.Float64).log1p().alias(f"{col}_log1p")
+            (pl.col("current_hypo_risk") + pl.col("iob_risk_factor") * 0.5).alias("composite_hypo_risk")
         )
-
-    optional_features: list[str] = ['work_intensity', 'sleep_quality', 'activity_intensity']
-    for feature in optional_features:
-        if feature in df.columns:
-            df = df.with_columns([
-                pl.when(pl.col(feature).is_not_null())
-                .then(pl.col(feature) / CONFIG[f'max_{feature}'])
-                .otherwise(None)
-                .cast(pl.Float64)
-                .alias(feature)
-            ])
-
-    window_size: int = CONFIG["window_steps"]
-    cgm_cols: list[str] = [f"cgm_{i}" for i in range(window_size)]
-    df = df.with_columns([
-        pl.col("cgm_window").list.get(i).cast(pl.Float64).alias(f"cgm_{i}")
-        for i in range(window_size)
-    ])
-
-    for col in cgm_cols:
+    
+    if all(col in df.columns for col in ["current_hyper_risk", "glucose_rate_of_change"]):
         df = df.with_columns(
-            pl.col(col).cast(pl.Float64).log1p().alias(f"{col}_log")
+            (pl.col("current_hyper_risk") + (pl.col("glucose_rate_of_change") / 10.0).clip(0, 1)).alias("composite_hyper_risk")
         )
-
-    return df.drop("cgm_window")
+    
+    logging.info(f"Transformaciones mejoradas completadas. Forma final: {df.shape}")
+    return df
 
 def extract_features_excel(row: dict, cgm_window: np.ndarray, carb_median: float, iob_median: float, basal_df: pl.DataFrame, idx: int) -> dict:
     """
@@ -644,23 +1271,23 @@ def extract_features_excel(row: dict, cgm_window: np.ndarray, carb_median: float
     
     iob: float = calculate_iob(bolus_time, basal_df)
     iob = iob_median if iob == 0 else iob
-    iob = np.clip(iob, 0, CONFIG["cap_iob"])
+    iob = np.clip(iob, 0, CONFIG_PROCESSING["cap_iob"])
     
     hour_of_day: float = bolus_time.hour / 23.0
     
     bg_input: float = row["bgInput"] if row["bgInput"] is not None else cgm_window[-1]
     bg_input = max(bg_input, 50.0)
-    bg_input = np.clip(bg_input, 0, CONFIG["cap_bg"])
+    bg_input = np.clip(bg_input, 0, CONFIG_PROCESSING["cap_bg"])
     
     normal: float = row["normal"] if row["normal"] is not None else 0.0
-    normal = np.clip(normal, 0, CONFIG["cap_normal"])
+    normal = np.clip(normal, 0, CONFIG_PROCESSING["cap_normal"])
     
     isf_custom: float = 50.0 if normal <= 0 else (bg_input - 100) / normal
     isf_custom = np.clip(isf_custom, 10, 100)
     
     carb_input: float = row["carbInput"] if row["carbInput"] is not None else 0.0
     carb_input = carb_median if carb_input == 0 else carb_input
-    carb_input = np.clip(carb_input, 0, CONFIG["cap_carb"])
+    carb_input = np.clip(carb_input, 0, CONFIG_PROCESSING["cap_carb"])
     
     insulin_carb_ratio: float = row["insulinCarbRatio"] if row["insulinCarbRatio"] is not None else 10.0
     insulin_carb_ratio = np.clip(insulin_carb_ratio, 5, 20)
@@ -885,19 +1512,15 @@ def preprocess_data() -> pl.DataFrame:
 
     # Aplicar transform_features a df_excel para procesar cgm_window
     if not df_excel.is_empty():
-        # Asegurar que Timestamp sea Datetime con microsegundos
         df_excel = ensure_timestamp_datetime(df_excel, TIMESTAMP_COL)
-        # Asegurar que GLUCOSE_COL sea Float64 en cgm_window
         df_excel = df_excel.with_columns(
             pl.col("cgm_window").list.eval(pl.element().cast(pl.Float64)).alias("cgm_window")
         )
-        # Añadir columnas requeridas por extract_features (como meal_carbs, etc.)
         required_cols: list[str] = [MEAL_COL, BASAL_COL, TEMP_BASAL_COL]
         for col in required_cols:
             if col not in df_excel.columns:
                 df_excel = df_excel.with_columns(pl.lit(0.0).cast(pl.Float64).alias(col))
-        # Aplicar extract_features y transform_features
-        df_excel = extract_features(df_excel, pl.DataFrame())
+        df_excel = extract_features(df_excel, pl.DataFrame(), extended_cgm_df=None)
         df_excel = transform_features(df_excel)
 
     # Procesar datos XML
@@ -930,12 +1553,10 @@ def preprocess_data() -> pl.DataFrame:
         if BOLUS_COL in df_xml.columns:
             df_xml = df_xml.with_columns(pl.col(BOLUS_COL).cast(pl.Float64))
 
-        df_windows: pl.DataFrame = generate_windows(df_xml, window_size=CONFIG["window_steps"])
-        df_features: pl.DataFrame = extract_features(df_windows, data.get('meal'))
-        # Renombrar SubjectID a subject_id para consistencia y extraer la parte numérica
+        df_windows: pl.DataFrame = generate_windows(df_xml, window_size=CONFIG_PROCESSING["window_steps"])
+        df_features: pl.DataFrame = extract_features(df_windows, data.get('meal'), extended_cgm_df=df_xml)
         if SUBJECT_ID_COL in df_features.columns:
             df_features = df_features.rename({SUBJECT_ID_COL: "subject_id"})
-            # Extraer la parte numérica de subject_id (e.g., "588-ws-training" -> "588")
             df_features = df_features.with_columns(
                 pl.col("subject_id")
                 .str.extract(r"^(\d+)")
@@ -946,16 +1567,17 @@ def preprocess_data() -> pl.DataFrame:
         all_xml_dfs.append(df_final_xml)
 
     df_xml_combined = pl.concat(all_xml_dfs) if all_xml_dfs else pl.DataFrame()
+    
+    print(f"Datos XML combinados: {df_xml_combined.shape}")
 
     # Unificar datos
     if not df_excel.is_empty() and not df_xml_combined.is_empty():
-        # Obtener todas las columnas (unión)
         excel_cols: set[str] = set(df_excel.columns)
         xml_cols: set[str] = set(df_xml_combined.columns)
         all_cols: list[str] = sorted(list(excel_cols.union(xml_cols)))
         logging.info(f"Todas las columnas (unión): {all_cols}")
 
-        # Asegurar que ambos DataFrames tengan las mismas columnas
+        # Asegurar que las columnas estén presentes en ambos DataFrames
         for col in all_cols:
             if col not in df_excel.columns:
                 col_dtype = df_xml_combined[col].dtype
@@ -974,42 +1596,28 @@ def preprocess_data() -> pl.DataFrame:
                 else:
                     df_xml_combined = df_xml_combined.with_columns(pl.lit(None).cast(col_dtype).alias(col))
 
-        # Reordenar columnas para que coincidan con all_cols
         df_excel = df_excel.select(all_cols)
         df_xml_combined = df_xml_combined.select(all_cols)
 
-        # Asegurar tipos consistentes
-        logging.info("Tipos en df_excel después de agregar columnas:")
-        for col in all_cols:
-            logging.info(f"{col}: {df_excel[col].dtype}")
-        logging.info("Tipos en df_xml después de agregar columnas:")
-        for col in all_cols:
-            logging.info(f"{col}: {df_xml_combined[col].dtype}")
-
-        # Identificar columnas que deben ser numéricas (excluir columnas no numéricas)
+        # Definir columnas numéricas (excluyendo 'subject_id' y 'Timestamp')
         numeric_cols = [
             col for col in all_cols
             if col not in ['subject_id', 'Timestamp']
         ]
 
-        # Verificar si hay columnas de tipo List
-        for col in all_cols:
-            for df, df_name in [(df_excel, "df_excel"), (df_xml_combined, "df_xml_combined")]:
-                if isinstance(df[col].dtype, pl.List):
-                    logging.error(f"Columna '{col}' en {df_name} es de tipo List: {df[col].dtype}")
-                    df = df.with_columns(
-                        pl.col(col).list.first().cast(pl.Float64).fill_null(0.0).alias(col)
-                    )
+        # Asegurar que 'subject_id' sea Int64 en ambos DataFrames
+        df_excel = df_excel.with_columns(pl.col('subject_id').cast(pl.Int64))
+        df_xml_combined = df_xml_combined.with_columns(pl.col('subject_id').cast(pl.Int64))
 
-        # Convertir columnas numéricas a Float64, manejar columnas Object si existen
-        for col in numeric_cols:
+        # Manejar columnas de tipo List u Object y castear a Float64 para columnas numéricas
+        for col in all_cols:
             for df, df_name in [(df_excel, "df_excel"), (df_xml_combined, "df_xml_combined")]:
                 if isinstance(df[col].dtype, pl.List):
                     logging.warning(f"Columna '{col}' en {df_name} es de tipo List: {df[col].dtype}")
                     df = df.with_columns(
                         pl.col(col).list.first().cast(pl.Float64).fill_null(0.0).alias(col)
                     )
-                if df[col].dtype == pl.Object:
+                elif df[col].dtype == pl.Object:
                     logging.warning(f"Columna '{col}' en {df_name} es de tipo Object: {df[col].dtype}")
                     df = df.with_columns(
                         pl.col(col)
@@ -1018,20 +1626,21 @@ def preprocess_data() -> pl.DataFrame:
                         .fill_null(0.0)
                         .alias(col)
                     )
-                df = df.with_columns(pl.col(col).cast(pl.Float64).alias(col))
 
-        # Asegurar que subject_id sea Int64
-        df_excel = df_excel.with_columns(pl.col('subject_id').cast(pl.Int64))
-        df_xml_combined = df_xml_combined.with_columns(pl.col('subject_id').cast(pl.Int64))
+        # Castear todas las columnas numéricas a Float64
+        for col in numeric_cols:
+            df_excel = df_excel.with_columns(pl.col(col).cast(pl.Float64).fill_null(0.0).alias(col))
+            df_xml_combined = df_xml_combined.with_columns(pl.col(col).cast(pl.Float64).fill_null(0.0).alias(col))
 
-        # Verificar tipos después de la conversión
-        logging.info("Tipos en df_excel después de casteo:")
+        # Verificar tipos antes de la concatenación
+        logging.info("Tipos en df_excel antes de concatenar:")
         for col in all_cols:
             logging.info(f"{col}: {df_excel[col].dtype}")
-        logging.info("Tipos en df_xml después de casteo:")
+        logging.info("Tipos en df_xml_combined antes de concatenar:")
         for col in all_cols:
             logging.info(f"{col}: {df_xml_combined[col].dtype}")
 
+        # Concatenar los DataFrames
         df_final: pl.DataFrame = pl.concat([df_excel, df_xml_combined])
     elif not df_excel.is_empty():
         df_final = df_excel

@@ -1,6 +1,8 @@
 # Modelos
 ## Modelos TensorFlow
 ### Modelos de Aprendizaje Profundo
+from datetime import timedelta
+from typing import Union
 from models.tensorflow.DeepLearning.attention_only import create_attention_model as tf_create_attention_model
 from models.tensorflow.DeepLearning.cnn import create_cnn_model as tf_create_cnn_model
 from models.tensorflow.DeepLearning.fnn import create_fnn_model as tf_create_fnn_model
@@ -101,6 +103,58 @@ FRAMEWORK = FRAMEWORK_OPTIONS[FRAMEWORK_OP]
 ## Opciones: "pandas", "polars"
 PROCESSING_OPTIONS = ["pandas", "polars"]
 PROCESSING = PROCESSING_OPTIONS[PROCESSING_OP]
+
+# Configuración de Procesamiento
+CONFIG_PROCESSING: dict[str, Union[int, float, str]] = {
+    "batch_size": 128,
+    "window_hours": 2,
+    "window_steps": 24,  # 5-min steps in 2 hours
+    "window_size": 12,
+    "extended_window_size": 288,
+    "insulin_lifetime_hours": 4.0,
+    "cap_normal": 30,
+    "cap_bg": 300,
+    "cap_iob": 5,
+    "cap_carb": 150,
+    "min_carbs": 0,
+    "max_carbs": 150,
+    "min_bg": 40,
+    "max_bg": 400,
+    "min_insulin": 0,
+    "max_insulin": 30,
+    "min_icr": 5,
+    "max_icr": 20,
+    "min_isf": 10,
+    "max_isf": 100,
+    "timezone": "UTC",
+    "max_work_intensity": 10,
+    "max_sleep_quality": 10,
+    "max_activity_intensity": 10,
+    "low_dose_threshold": 7.0,
+    "min_cgm_points": 12,
+    "alignment_tolerance_minutes": 15,
+    "random_seed": 42,
+    "carb_effect_factor": 5,
+    "insulin_effect_factor": 50,
+    "glucose_min": 40,
+    "glucose_max": 400,
+    "bolus_max": 20.0,
+    "bolus_min": 0.1,
+    "partial_window_threshold": 6,
+    "event_tolerance": timedelta(minutes=15),
+    "basal_estimation_hours": (0, 24),
+    "basal_estimation_factor": 0.5,
+    "hypoglycemia_threshold": 70,
+    "hyperglycemia_threshold": 180,
+    "tir_lower": 70,
+    "tir_upper": 180,
+    "simulation_steps": 72,
+    "hypo_risk_threshold": 70,
+    "hyper_risk_threshold": 180,
+    "significant_meal_threshold": 20,
+}
+
+
 ## Modelos TensorFlow disponibles.
 TF_MODELS = {
     # TensorFlow
