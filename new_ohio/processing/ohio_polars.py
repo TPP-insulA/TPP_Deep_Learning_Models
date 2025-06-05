@@ -196,35 +196,35 @@ def load_data(data_dir: str) -> Dict[str, pl.DataFrame]:
                     if 'value' in df.columns:
                         df = df.with_columns(pl.col('value').cast(pl.Float64))
                     data_dict[data_type] = pl.concat([data_dict.get(data_type, pl.DataFrame()), df])
-                    logger.info(f"SubjectID {subject_id}: {data_type}={len(records)} registros")
+                    # logger.info(f"SubjectID {subject_id}: {data_type}={len(records)} registros")
                     subject_stats[subject_id][data_type] += len(records)
                     
                     # Mostrar estadísticas de valores para columnas numéricas
                     if 'value' in df.columns:
                         value_stats = df.select(pl.col('value')).describe()
-                        logger.info(f"Estadísticas de valores para {data_type}:")
-                        logger.info(f"  Min: {value_stats['value'].min():.2f}")
-                        logger.info(f"  Max: {value_stats['value'].max():.2f}")
-                        logger.info(f"  Mean: {value_stats['value'].mean():.2f}")
-                        logger.info(f"  Std: {value_stats['value'].std():.2f}")
+                        # logger.info(f"Estadísticas de valores para {data_type}:")
+                        # logger.info(f"  Min: {value_stats['value'].min():.2f}")
+                        # logger.info(f"  Max: {value_stats['value'].max():.2f}")
+                        # logger.info(f"  Mean: {value_stats['value'].mean():.2f}")
+                        # logger.info(f"  Std: {value_stats['value'].std():.2f}")
         
         except Exception as e:
             logger.error(f"Error procesando {xml_file}: {e}")
             continue
     
     # Mostrar columnas por tipo de evento y sujeto
-    logger.info("\nColumnas por tipo de evento y sujeto:")
-    for subject_id in sorted(event_columns_by_subject.keys()):
-        logger.info(f"\n{'-'*50}")
-        logger.info(f"SubjectID: {subject_id}")
-        for event_type, columns in sorted(event_columns_by_subject[subject_id].items()):
-            logger.info(f"  {event_type}: {sorted(columns)}")
+    # logger.info("\nColumnas por tipo de evento y sujeto:")
+    # for subject_id in sorted(event_columns_by_subject.keys()):
+    #     logger.info(f"\n{'-'*50}")
+    #     logger.info(f"SubjectID: {subject_id}")
+    #     for event_type, columns in sorted(event_columns_by_subject[subject_id].items()):
+    #         logger.info(f"  {event_type}: {sorted(columns)}")
     
-    logger.info(f"\nEstadísticas por sujeto (Año {year}):")
-    for subject_id in sorted(subject_stats.keys()):
-        stats = subject_stats[subject_id]
-        stat_str = ", ".join([f"{k}={v}" for k, v in stats.items()])
-        logger.info(f"SubjectID {subject_id}: {stat_str}")
+    # logger.info(f"\nEstadísticas por sujeto (Año {year}):")
+    # for subject_id in sorted(subject_stats.keys()):
+    #     stats = subject_stats[subject_id]
+    #     stat_str = ", ".join([f"{k}={v}" for k, v in stats.items()])
+    #     logger.info(f"SubjectID {subject_id}: {stat_str}")
     
     missing_types = [t for t in expected_types if t not in data_dict]
     if missing_types:
@@ -519,7 +519,7 @@ def align_events_to_cgm(cgm_df: pl.DataFrame, event_df: pl.DataFrame, event_time
         logger.warning(f"Eventos descartados por estar fuera de tolerancia: {lost_events}")
         logger.warning(f"Eventos sin CGM correspondiente: {lost_events}")
     
-    logger.info(f"Eventos alineados: {aligned_events}/{total_events} ({aligned_events/total_events*100:.1f}%)")
+    # logger.info(f"Eventos alineados: {aligned_events}/{total_events} ({aligned_events/total_events*100:.1f}%)")
     
     return aligned_df
 
@@ -657,7 +657,7 @@ def join_signals(cgm_df: pl.DataFrame,
             # Calcular porcentaje de valores no nulos
             if 'physiological_value' in joined_df.columns:
                 non_null_percentage = (joined_df['physiological_value'].is_not_null().sum() / len(joined_df)) * 100
-                logger.info(f"Señal physiological_value: {non_null_percentage:.1f}% valores no nulos")
+                # logger.info(f"Señal physiological_value: {non_null_percentage:.1f}% valores no nulos")
         
         # Verificar columnas críticas una última vez
         if 'value' not in joined_df.columns:
@@ -668,8 +668,8 @@ def join_signals(cgm_df: pl.DataFrame,
             raise ValueError("Columna 'bolus' perdida después de join con physiological")
         
         # Registrar forma final y columnas presentes
-        logger.info(f"Forma de datos unidos: {joined_df.shape}")
-        logger.info(f"Columnas presentes: {joined_df.columns}")
+        # logger.info(f"Forma de datos unidos: {joined_df.shape}")
+        # logger.info(f"Columnas presentes: {joined_df.columns}")
         
         return joined_df
         
@@ -765,19 +765,20 @@ def generate_windows(df: pl.DataFrame, window_size: int = 12) -> pl.DataFrame:
     
     # Reportar detalles de ventanas descartadas
     if discarded_count > 0:
-        logger.warning("Detalles de ventanas descartadas:")
-        for window in discarded_windows:
-            logger.warning(
-                f"SubjectID: {window['SubjectID']}, "
-                f"Timestamp: {window['Timestamp']}, "
-                f"Pasos: {window['Steps']}, "
-                f"Razón: {window['Reason']}"
-            )
+        # logger.warning("Detalles de ventanas descartadas:")
+        # for window in discarded_windows:
+        #     logger.warning(
+        #         f"SubjectID: {window['SubjectID']}, "
+        #         f"Timestamp: {window['Timestamp']}, "
+        #         f"Pasos: {window['Steps']}, "
+        #         f"Razón: {window['Reason']}"
+        #     )
+        pass
     
     # Combinar todas las ventanas válidas
     if windows:
         result = pl.concat(windows)
-        logger.info(f"Ventanas generadas: {result.shape}")
+        # logger.info(f"Ventanas generadas: {result.shape}")
         return result
     else:
         logger.error("No se generaron ventanas válidas")
@@ -1641,6 +1642,7 @@ def transform_enhanced_features(df: pl.DataFrame) -> pl.DataFrame:
 def simulate_glucose(cgm_values: list, bolus: float, carbs: float, basal_rate: float, exercise_intensity: float, steps: int = 72):
     """
     Simula glucosa para DRL, considerando basal y ejercicio.
+    Devuelve también la glucosa simulada a las 2 horas (24 pasos) y el TIR en 2 horas.
     """
     if not cgm_values:
         return {
@@ -1648,26 +1650,34 @@ def simulate_glucose(cgm_values: list, bolus: float, carbs: float, basal_rate: f
             'simulated_mean_6h': 120.0,
             'simulated_std_6h': 0.0,
             'simulated_hypo_6h': 0.0,
-            'simulated_hyper_6h': 0.0
+            'simulated_hyper_6h': 0.0,
+            'simulated_glucose_2h': 120.0,
+            'simulated_tir_2h': 0.0
         }
+    
     current_glucose = cgm_values[-1]
-    simulated_values = []
-    for _ in range(steps):
-        carb_effect = carbs * CONFIG['carb_effect_factor']
-        insulin_effect = (bolus + basal_rate * 0.083) * CONFIG['insulin_effect_factor']
-        exercise_effect = exercise_intensity * 2.0  # Reducción por actividad
-        glucose_change = carb_effect - insulin_effect - exercise_effect
-        current_glucose = max(CONFIG['glucose_min'], min(CONFIG['glucose_max'], current_glucose + glucose_change))
-        simulated_values.append(current_glucose)
-    tir = sum(CONFIG['tir_lower'] <= g <= CONFIG['tir_upper'] for g in simulated_values) / len(simulated_values)
-    hypo = sum(g < CONFIG['hypo_threshold'] for g in simulated_values) / len(simulated_values)
-    hyper = sum(g > CONFIG['hyper_threshold'] for g in simulated_values) / len(simulated_values)
+    
+    # Cálculo simplificado de glucosa a 2 horas
+    glucose_change = carbs * 5 - bolus * 10  # 5 mg/dL por gramo de carbos, -10 mg/dL por unidad de insulina
+    simulated_glucose_2h = current_glucose + glucose_change
+    
+    # Limitar valores entre 40 y 400 mg/dL
+    simulated_glucose_2h = max(CONFIG['glucose_min'], min(CONFIG['glucose_max'], simulated_glucose_2h))
+    
+    # Calcular TIR en 2 horas
+    tir_2h = 1.0 if CONFIG['tir_lower'] <= simulated_glucose_2h <= CONFIG['tir_upper'] else 0.0
+    
+    # Para mantener compatibilidad con el resto del código, generamos valores simulados para 6h
+    simulated_values = [simulated_glucose_2h] * steps
+    
     return {
-        'simulated_tir_6h': float(tir),
-        'simulated_mean_6h': float(np.mean(simulated_values)),
-        'simulated_std_6h': float(np.std(simulated_values)),
-        'simulated_hypo_6h': float(hypo),
-        'simulated_hyper_6h': float(hyper)
+        'simulated_tir_6h': float(tir_2h),  # Usamos el mismo valor para mantener compatibilidad
+        'simulated_mean_6h': float(simulated_glucose_2h),
+        'simulated_std_6h': 0.0,
+        'simulated_hypo_6h': float(simulated_glucose_2h < CONFIG['hypo_threshold']),
+        'simulated_hyper_6h': float(simulated_glucose_2h > CONFIG['hyper_threshold']),
+        'simulated_glucose_2h': float(simulated_glucose_2h),
+        'simulated_tir_2h': float(tir_2h)
     }
 
 def estimate_basal_rate(df: pl.DataFrame, subject_id: str) -> float:
@@ -1976,17 +1986,17 @@ def main():
             
             if 'bolus' in df_final.columns:
                 bolus_stats = df_final.select(pl.col('bolus')).describe()
-                logger.info(f"Estadísticas de bolus:\n{bolus_stats}")
+                # logger.info(f"Estadísticas de bolus:\n{bolus_stats}")
             
             if args.enhanced and 'time_in_range_24h' in df_final.columns:
                 tir_mean = df_final.select(pl.col('time_in_range_24h')).mean().item()
-                logger.info(f"Tiempo en Rango promedio: {tir_mean:.1f}%")
+                # logger.info(f"Tiempo en Rango promedio: {tir_mean:.1f}%")
 
             # Generar plots para cada conjunto de datos
             if CONFIG['log_clinical_metrics']:
                 plot_dir = f"{args.plots_dir}/{year}_{split}"
                 Path(plot_dir).mkdir(exist_ok=True, parents=True)
-                logger.info(f"Generando plots en {plot_dir}")
+                # logger.info(f"Generando plots en {plot_dir}")
                 
                 try:
                     # Convertir a pandas para plotting
@@ -2049,7 +2059,7 @@ def main():
                                 # Guardar figura con manejo de errores
                                 try:
                                     plt.savefig(f"{plot_dir}/{plot_name}", dpi=100, bbox_inches='tight')
-                                    logger.info(f"Plot generado: {plot_name}")
+                                    # logger.info(f"Plot generado: {plot_name}")
                                 except Exception as save_error:
                                     logger.error(f"Error guardando plot {plot_name}: {save_error}")
                                 finally:
