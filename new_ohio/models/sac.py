@@ -173,9 +173,8 @@ class OhioT1DMEnv(gym.Env):
         self.current_glucose = None
         self.current_subject = None
         
-        logger.info(f"Forma del espacio de observación: {len(self.feature_columns)}")
+        logger.info(f"Entorno inicializado con {len(self.feature_columns)} características")
         logger.info(f"Columnas de características: {self.feature_columns}")
-        logger.info(f"Características opcionales disponibles: {available_columns}")
 
     def save_normalization_stats(self, path: str):
         """Guarda las estadísticas de normalización en un archivo."""
@@ -453,6 +452,7 @@ class FQE:
     
     def __init__(self, state_dim: int, action_dim: int, device: str = 'cuda'):
         self.device = device
+        logger.info(f"Initializing FQE with state_dim={state_dim}, action_dim={action_dim}")
         self.q_network = Critic(state_dim, action_dim).to(device)
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=1e-3)
         
@@ -474,26 +474,28 @@ class FQE:
         if isinstance(dataset, DummyVecEnv):
             env = dataset.envs[0]
             df = env.df
+            # Obtener estadísticas de normalización del entorno original
+            state_mean = env.state_mean
+            state_std = env.state_std
+            feature_columns = env.feature_columns
         else:
             df = dataset
+            # Cargar estadísticas de normalización guardadas
+            state_mean, state_std, feature_columns = OhioT1DMEnv.load_normalization_stats('new_ohio/models/normalization_stats.json')
         
         # Limitar el dataset para debug/velocidad
         if len(df) > 1000:
             logger.warning(f"Reduciendo dataset de FQE de {len(df)} a 1000 muestras para acelerar debug.")
             df = df.sample(n=1000, seed=42)
         
-        # Obtener columnas de características del entorno
-        if isinstance(dataset, DummyVecEnv):
-            feature_columns = env.feature_columns
-        else:
-            feature_columns = [col for col in df.columns if col not in ['Timestamp', 'SubjectID']]
-        
-        # Convertir dataset a tensores
+        # Convertir dataset a tensores usando las columnas correctas
         states = torch.FloatTensor(df.select(feature_columns).to_numpy()).to(self.device)
         actions = torch.FloatTensor(df.select(['bolus']).to_numpy()).to(self.device)
         
-        # Crear entorno temporal para calcular rewards
-        temp_env = OhioT1DMEnv(df)
+        logger.info(f"FQE input shapes - states: {states.shape}, actions: {actions.shape}")
+        
+        # Crear entorno temporal usando las mismas estadísticas de normalización
+        temp_env = OhioT1DMEnv(df, state_mean, state_std)
         rewards = []
         next_states = []
         dones = []
@@ -506,7 +508,7 @@ class FQE:
             
             # Asegurar que current_glucose sea float
             try:
-                logger.info(f"current_state: {current_state}")
+                #logger.info(f"current_state: {current_state}")
                 current_glucose = float(current_state['glucose_last'])
             except (KeyError, ValueError):
                 current_glucose = 120.0  # Valor por defecto si no existe o no es convertible
@@ -688,27 +690,54 @@ def evaluate_model(model: SAC, env: DummyVecEnv, df_test: pl.DataFrame) -> Dict:
     # Calcular métricas clínicas
     clinical_metrics = calculate_clinical_metrics(glucose_values)
     
+    # Obtener dimensiones correctas del entorno
+    obs_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+    logger.info(f"Dimensiones del entorno - obs_dim: {obs_dim}, action_dim: {action_dim}")
+    
     # Calcular valor FQE
     fqe = FQE(
-        state_dim=env.observation_space.shape[0],
-        action_dim=env.action_space.shape[0],
+        state_dim=obs_dim,
+        action_dim=action_dim,
         device='cuda' if torch.cuda.is_available() else 'cpu'
     )
     fqe_value = fqe.evaluate(model, df_test)
     
-    # Calcular comparación estadística con línea base
-    baseline_metrics = calculate_clinical_metrics(df_test.select(['glucose_last']).to_numpy().flatten())
-    t_stat, p_value = stats.ttest_rel(glucose_values, df_test.select(['glucose_last']).to_numpy().flatten())
+    # Perform statistical comparison
+    logger.info(f"Performing statistical comparison...")
+    
+    # Obtener valores de glucosa del dataset de prueba
+    actual_glucose = df_test.select(['glucose_last']).to_numpy().flatten()
+    
+    # Asegurar que ambos arrays tengan la misma longitud
+    min_length = min(len(glucose_values), len(actual_glucose))
+    glucose_values = glucose_values[:min_length]
+    actual_glucose = actual_glucose[:min_length]
+    
+    logger.info(f"Glucose values shape: {glucose_values.shape}")
+    logger.info(f"Actual glucose values shape: {actual_glucose.shape}")
+    logger.info(f"Glucose values contains NaN: {np.isnan(glucose_values).any()}")
+    logger.info(f"Actual glucose values contains NaN: {np.isnan(actual_glucose).any()}")
+    
+    # Realizar prueba t independiente
+    t_stat, p_value = stats.ttest_ind(glucose_values, actual_glucose, equal_var=False)
+    
+    logger.info(f"T-statistic: {t_stat}")
+    logger.info(f"P-value: {p_value}")
     
     # Combinar todas las métricas
     results = {
         'clinical_metrics': clinical_metrics,
         'fqe_value': fqe_value,
         'statistical_comparison': {
-            't_statistic': float(t_stat),
-            'p_value': float(p_value)
+            't_statistic': float(t_stat) if not np.isnan(t_stat) else None,
+            'p_value': float(p_value) if not np.isnan(p_value) else None,
+            'mean_predicted': float(np.mean(glucose_values)),
+            'mean_actual': float(np.mean(actual_glucose)),
+            'std_predicted': float(np.std(glucose_values)),
+            'std_actual': float(np.std(actual_glucose))
         },
-        'baseline_metrics': baseline_metrics
+        'baseline_metrics': calculate_clinical_metrics(actual_glucose)
     }
     
     # Guardar resultados
@@ -730,7 +759,20 @@ def evaluate_saved_model(model_path: str, test_files: List[str]):
     logger.info(f"Cargando modelo desde {model_path}")
     
     # Cargar datos de prueba
-    test_df = pl.concat([pl.read_parquet(f) for f in test_files])
+    test_dfs = []
+    for f in test_files:
+        df = pl.read_parquet(f)
+        logger.info(f"Cargando {f}: {df.shape}")
+        test_dfs.append(df)
+    
+    # Encontrar columnas comunes
+    common_columns = set.intersection(*[set(df.columns) for df in test_dfs])
+    logger.info(f"Columnas comunes encontradas: {len(common_columns)}")
+    logger.info(f"Columnas comunes: {sorted(list(common_columns))}")
+    
+    # Seleccionar solo columnas comunes
+    test_dfs = [df.select(list(common_columns)) for df in test_dfs]
+    test_df = pl.concat(test_dfs)
     logger.info(f"Datos de prueba cargados: {test_df.shape}")
     
     # Crear entorno de prueba
@@ -744,9 +786,9 @@ def evaluate_saved_model(model_path: str, test_files: List[str]):
     results = evaluate_model(model, test_env, test_df)
     
     # Guardar resultados
-    results_path = "new_ohio/models/evaluation_results.txt"
+    results_path = "new_ohio/models/evaluation_results.json"
     with open(results_path, "w") as f:
-        f.write(str(results))
+        json.dump(results, f, indent=4)
     logger.info(f"Resultados guardados en {results_path}")
 
 class Actor(nn.Module):
@@ -755,48 +797,176 @@ class Actor(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(obs_dim, 256),
+            nn.LayerNorm(256),  # Add layer normalization
             nn.ReLU(),
             nn.Linear(256, 256),
+            nn.LayerNorm(256),  # Add layer normalization
             nn.ReLU(),
             nn.Linear(256, action_dim),
-            nn.Tanh()
+            nn.Sigmoid()  # Sigmoid for [0,1] range
         )
+        
+        # Initialize weights using Xavier/Glorot initialization
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0.0)
+        
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.to(self.device)
         
     def forward(self, obs):
-        return self.net(obs)
+        # Ensure input is on correct device and handle NaN
+        if isinstance(obs, np.ndarray):
+            obs = torch.FloatTensor(obs).to(self.device)
+        elif isinstance(obs, torch.Tensor):
+            obs = obs.to(self.device)
+            
+        # Check for NaN and replace with zeros
+        if torch.isnan(obs).any():
+            logger.warning("NaN detected in actor input. Replacing with zeros.")
+            obs = torch.nan_to_num(obs, nan=0.0)
+            
+        # Clip input values to prevent extreme values
+        obs = torch.clamp(obs, -10, 10)
+            
+        # Get action in [0,1] range
+        action = self.net(obs)
+        
+        # Check for NaN in output
+        if torch.isnan(action).any():
+            logger.warning("NaN detected in actor output. Replacing with zeros.")
+            action = torch.nan_to_num(action, nan=0.0)
+            
+        # Map to insulin dose range [0, CONFIG['bolus_max']]
+        action = action * CONFIG['bolus_max']
+        return action
         
     def action_log_prob(self, obs):
         """Calcula la acción y su log-probabilidad."""
+        # Ensure input is on correct device and handle NaN
+        if isinstance(obs, np.ndarray):
+            obs = torch.FloatTensor(obs).to(self.device)
+        elif isinstance(obs, torch.Tensor):
+            obs = obs.to(self.device)
+            
+        # Check for NaN and replace with zeros
+        if torch.isnan(obs).any():
+            logger.warning("NaN detected in actor input. Replacing with zeros.")
+            obs = torch.nan_to_num(obs, nan=0.0)
+            
+        # Clip input values
+        obs = torch.clamp(obs, -10, 10)
+            
         action = self.forward(obs)
-        # Para una distribución uniforme en [-1, 1], la log-probabilidad es constante
-        # log(1/2) = -log(2) ≈ -0.693
-        log_prob = torch.full_like(action, -0.693)
+        
+        # Calculate log probability using Beta distribution
+        alpha = torch.tensor(2.0, device=self.device)  # Shape parameter
+        beta = torch.tensor(2.0, device=self.device)   # Shape parameter
+        
+        # Normalize action to [0,1] range for Beta distribution
+        normalized_action = action / CONFIG['bolus_max']
+        
+        # Add small epsilon to prevent log(0)
+        epsilon = 1e-6
+        normalized_action = torch.clamp(normalized_action, epsilon, 1-epsilon)
+        
+        log_prob = torch.distributions.Beta(alpha, beta).log_prob(normalized_action)
+        
+        # Check for NaN in log probability
+        if torch.isnan(log_prob).any():
+            logger.warning("NaN detected in log probability. Replacing with zeros.")
+            log_prob = torch.nan_to_num(log_prob, nan=0.0)
+            
         return action, log_prob
 
 class Critic(nn.Module):
     """Red del crítico para estimar valores Q."""
     def __init__(self, obs_dim, action_dim, lr=1e-3):
         super().__init__()
+        logger.info(f"Initializing Critic with obs_dim={obs_dim}, action_dim={action_dim}")
+        
+        # Asegurar que las dimensiones sean correctas
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Inicializar redes con pesos normalizados
         self.q1 = nn.Sequential(
             nn.Linear(obs_dim + action_dim, 256),
+            nn.LayerNorm(256),  # Añadir normalización de capa
             nn.ReLU(),
             nn.Linear(256, 256),
+            nn.LayerNorm(256),  # Añadir normalización de capa
             nn.ReLU(),
             nn.Linear(256, 1)
         )
         self.q2 = nn.Sequential(
             nn.Linear(obs_dim + action_dim, 256),
+            nn.LayerNorm(256),  # Añadir normalización de capa
             nn.ReLU(),
             nn.Linear(256, 256),
+            nn.LayerNorm(256),  # Añadir normalización de capa
             nn.ReLU(),
             nn.Linear(256, 1)
         )
+        
+        # Inicializar pesos con Xavier/Glorot
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                nn.init.constant_(m.bias, 0.0)
+        
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        self.to(self.device)
         
     def forward(self, obs, action):
+        # Asegurar que las entradas estén en el dispositivo correcto
+        if isinstance(obs, np.ndarray):
+            obs = torch.FloatTensor(obs).to(self.device)
+        elif isinstance(obs, torch.Tensor):
+            obs = obs.to(self.device)
+            
+        if isinstance(action, np.ndarray):
+            action = torch.FloatTensor(action).to(self.device)
+        elif isinstance(action, torch.Tensor):
+            action = action.to(self.device)
+            
+        # Ensure inputs are 2D tensors
+        if len(obs.shape) == 1:
+            obs = obs.unsqueeze(0)
+        if len(action.shape) == 1:
+            action = action.unsqueeze(0)
+            
+        # Verify dimensions
+        if obs.shape[1] != self.obs_dim:
+            raise ValueError(f"Expected observation dimension {self.obs_dim}, got {obs.shape[1]}")
+        if action.shape[1] != self.action_dim:
+            raise ValueError(f"Expected action dimension {self.action_dim}, got {action.shape[1]}")
+            
+        # Concatenar y clipear valores para evitar explosión
         x = torch.cat([obs, action], dim=1)
-        return self.q1(x), self.q2(x)
+        x = torch.clamp(x, -10, 10)  # Clipear valores de entrada
+        
+        # Calcular Q-values con clipeo
+        q1 = torch.clamp(self.q1(x), -100, 100)
+        q2 = torch.clamp(self.q2(x), -100, 100)
+        
+        return q1, q2
+        
+    def update(self, obs, action, target_q):
+        """Actualiza el crítico con clipeo de gradientes."""
+        self.optimizer.zero_grad()
+        current_q1, current_q2 = self.forward(obs, action)
+        loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        loss.backward()
+        
+        # Clipear gradientes
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        
+        self.optimizer.step()
+        return loss.item()
 
 class CustomActorCriticPolicy(ActorCriticPolicy):
     """Política personalizada que implementa TD3+BC para aprendizaje fuera de línea."""
@@ -805,7 +975,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
         
         # Parámetros TD3+BC
-        self.alpha_bc = 0.1  # Coeficiente de clonación de comportamiento
+        self.alpha_bc = 0.5  # Aumentar coeficiente de clonación de comportamiento
         self.policy_delay = 2  # Retraso de política TD3
         self.noise_clip = 0.5  # Recorte de ruido TD3
         self.policy_noise = 0.2  # Ruido de política TD3
@@ -830,7 +1000,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         
         # Verificar NaN en entrada
         if torch.isnan(obs).any():
-            logger.warning("NaN detectado en observación. Reemplazando con ceros.")
+            logger.warning("NaN detected in observation. Replacing with zeros.")
             obs = torch.nan_to_num(obs, nan=0.0)
         
         # Obtener acción del actor
@@ -838,7 +1008,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         
         # Verificar NaN en salida
         if torch.isnan(action).any():
-            logger.warning("NaN detectado en acción. Reemplazando con ceros.")
+            logger.warning("NaN detected in action. Replacing with zeros.")
             action = torch.nan_to_num(action, nan=0.0)
         
         # Clipear acción al rango válido
@@ -862,7 +1032,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
         for tensor, name in [(obs, "obs"), (next_obs, "next_obs"), (actions, "actions"), 
                            (rewards, "rewards"), (dones, "dones")]:
             if torch.isnan(tensor).any():
-                logger.warning(f"NaN detectado en {name}. Reemplazando con ceros.")
+                logger.warning(f"NaN detected in {name}. Replacing with zeros.")
                 tensor = torch.nan_to_num(tensor, nan=0.0)
         
         # Calcular valores Q objetivo
@@ -911,7 +1081,7 @@ class CustomActorCriticPolicy(ActorCriticPolicy):
             
             # Verificar NaN en parámetros
             if torch.isnan(next(self.actor.parameters())) or torch.isnan(next(self.critic.parameters())):
-                raise ValueError("NaN detectado en parámetros del modelo")
+                raise ValueError("NaN detected in model parameters")
                 
     def _update_target(self, target, source):
         """Actualiza la red objetivo usando soft update."""
@@ -1025,10 +1195,44 @@ def main():
         "new_ohio/processed_data/test/processed_enhanced_2020_test.parquet"
     ]
     
-    if args.evaluate_only:
-        evaluate_saved_model(args.model_path, test_files)
+    # Si solo queremos ejecutar tests, cargar el modelo y ejecutar los tests correspondientes
+    if args.test_user_cases_only or args.test_fqe_only or args.evaluate_only:
+        # Cargar modelo
+        model = SAC.load(args.model_path)
+        logger.info(f"Modelo cargado desde {args.model_path}")
+        
+        # Cargar datos de prueba
+        test_dfs = []
+        for f in test_files:
+            df = pl.read_parquet(f)
+            logger.info(f"Cargando {f}: {df.shape}")
+            test_dfs.append(df)
+        
+        # Encontrar columnas comunes
+        common_columns = set.intersection(*[set(df.columns) for df in test_dfs])
+        logger.info(f"Columnas comunes encontradas: {len(common_columns)}")
+        
+        # Seleccionar solo columnas comunes
+        test_dfs = [df.select(list(common_columns)) for df in test_dfs]
+        test_df = pl.concat(test_dfs)
+        logger.info(f"Datos de prueba cargados: {test_df.shape}")
+        
+        # Crear entorno de prueba
+        test_env = DummyVecEnv([lambda: OhioT1DMEnv(test_df)])
+        
+        # Ejecutar tests según los argumentos
+        if args.test_user_cases_only:
+            logger.info("Ejecutando pruebas de casos de usuario...")
+            test_user_cases()
+        elif args.test_fqe_only:
+            logger.info("Ejecutando evaluación FQE...")
+            results = evaluate_model(model, test_env, test_df)
+        elif args.evaluate_only:
+            logger.info("Ejecutando evaluación completa...")
+            results = evaluate_model(model, test_env, test_df)
         return
     
+    # Si no estamos solo evaluando, proceder con el entrenamiento
     logger.info("Iniciando entrenamiento SAC fuera de línea para OhioT1DM")
     
     # Cargar y validar datos

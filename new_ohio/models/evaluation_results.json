@@ -10,10 +10,14 @@
         "LBGI": 0.10173330456018448,
         "HBGI": 0.6555393934249878
     },
-    "fqe_value": 63.12097930908203,
+    "fqe_value": 3.8824102878570557,
     "statistical_comparison": {
-        "t_statistic": NaN,
-        "p_value": NaN
+        "t_statistic": -5.277948765563824e-07,
+        "p_value": 0.9999995788822775,
+        "mean_predicted": 162.27078247070312,
+        "mean_actual": 162.27078272391708,
+        "std_predicted": 60.39621353149414,
+        "std_actual": 60.396211253013774
     },
     "baseline_metrics": {
         "TIR": 62.11944348045556,
