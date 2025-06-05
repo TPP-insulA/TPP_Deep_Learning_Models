@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import SARSA_CONFIG
+from config.models_config_old import SARSA_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para prevenir duplicación

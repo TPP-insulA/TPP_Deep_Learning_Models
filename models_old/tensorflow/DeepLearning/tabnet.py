@@ -10,7 +10,7 @@ from typing import Tuple, Dict, List, Any, Optional, Union, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import TABNET_CONFIG
+from config.models_config_old import TABNET_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para nombres repetidos

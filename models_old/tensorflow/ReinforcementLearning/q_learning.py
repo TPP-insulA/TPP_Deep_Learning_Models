@@ -10,7 +10,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import QLEARNING_CONFIG
+from config.models_config_old import QLEARNING_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 class QLearning:

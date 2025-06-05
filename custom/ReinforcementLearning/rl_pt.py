@@ -6,7 +6,7 @@ import torch.optim as optim
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Optional, Callable, Union
 
-from config.models_config import EARLY_STOPPING_POLICY
+from config.models_config_old import EARLY_STOPPING_POLICY
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_log, print_success, print_error, print_warning

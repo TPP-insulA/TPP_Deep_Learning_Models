@@ -9,7 +9,7 @@ from models_old.early_stopping import get_early_stopping, get_early_stopping_con
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import CNN_CONFIG, EARLY_STOPPING_POLICY
+from config.models_config_old import CNN_CONFIG, EARLY_STOPPING_POLICY
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para uso repetido

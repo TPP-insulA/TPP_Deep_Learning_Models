@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 sys.path.append(PROJECT_ROOT)
 
-from config.models_config import POLICY_ITERATION_CONFIG
+from config.models_config_old import POLICY_ITERATION_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 from custom.printer import print_warning

@@ -11,7 +11,7 @@ from typing import Dict, Tuple, List, Any, Optional, Callable
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 sys.path.append(PROJECT_ROOT)
 
-from config.models_config import TRANSFORMER_CONFIG
+from config.models_config_old import TRANSFORMER_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # --- Constantes ---

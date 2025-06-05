@@ -1,5 +1,5 @@
 from typing import Any, Tuple, Union
-from config.models_config import EARLY_STOPPING_POLICY
+from config.models_config_old import EARLY_STOPPING_POLICY
 
 class EarlyStopping:
     """

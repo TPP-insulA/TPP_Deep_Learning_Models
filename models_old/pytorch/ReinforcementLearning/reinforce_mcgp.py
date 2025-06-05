@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple, Optional, Union, Any, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import REINFORCE_CONFIG
+from config.models_config_old import REINFORCE_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.printer import print_debug, print_warning
 from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch

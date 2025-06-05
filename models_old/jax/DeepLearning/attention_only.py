@@ -9,7 +9,7 @@ from typing import Tuple, Dict, Any, Optional, Callable, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
+from config.models_config_old import ATTENTION_CONFIG, EARLY_STOPPING_POLICY
 from custom.DeepLearning.dl_jax import DLModelWrapperJAX
 from models_old.early_stopping import get_early_stopping_config
 

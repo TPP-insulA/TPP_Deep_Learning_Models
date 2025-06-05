@@ -15,7 +15,7 @@ from models_old.early_stopping import get_early_stopping_config
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import DQN_CONFIG, EARLY_STOPPING_POLICY
+from config.models_config_old import DQN_CONFIG, EARLY_STOPPING_POLICY
 from constants.constants import CONST_DEFAULT_SEED, CONST_RELU, CONST_TANH, CONST_LEAKY_RELU, CONST_GELU, CONST_LOSS, CONST_Q_VALUE, CONST_TRAINING
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import SAC_CONFIG
+from config.models_config_old import SAC_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_ACTOR_LOSS, CONST_CRITIC_LOSS, CONST_ALPHA_LOSS, CONST_TOTAL_LOSS, CONST_ENTROPY, CONST_EPISODE_REWARDS
 from models_old.early_stopping import get_early_stopping_config
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch

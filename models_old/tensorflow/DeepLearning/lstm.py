@@ -11,7 +11,7 @@ from typing import Tuple, Dict, Any, Optional, List, Union, Callable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import LSTM_CONFIG
+from config.models_config_old import LSTM_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 def get_activation_fn(activation_name: str) -> Any:

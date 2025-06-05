@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import PPO_CONFIG
+from config.models_config_old import PPO_CONFIG
 from custom.DeepReinforcementLearning.drl_model_wrapper import DRLModelWrapper
 
 # Constantes para uso repetido

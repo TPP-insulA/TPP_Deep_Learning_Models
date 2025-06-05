@@ -14,7 +14,7 @@ from custom.printer import print_debug
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import EARLY_STOPPING_POLICY, QLEARNING_CONFIG
+from config.models_config_old import EARLY_STOPPING_POLICY, QLEARNING_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 

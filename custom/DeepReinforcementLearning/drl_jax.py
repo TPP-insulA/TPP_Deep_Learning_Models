@@ -8,7 +8,7 @@ import pickle
 from tqdm.auto import tqdm
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from config.models_config import EARLY_STOPPING_POLICY
+from config.models_config_old import EARLY_STOPPING_POLICY
 from custom.model_wrapper import ModelWrapper
 from custom.printer import print_debug, print_info, print_warning, print_error, print_success
 

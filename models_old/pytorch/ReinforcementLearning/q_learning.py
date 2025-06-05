@@ -11,7 +11,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import QLEARNING_CONFIG
+from config.models_config_old import QLEARNING_CONFIG
 from constants.constants import CONST_DEFAULT_SEED
 from custom.ReinforcementLearning.rl_pt import RLModelWrapperPyTorch
 

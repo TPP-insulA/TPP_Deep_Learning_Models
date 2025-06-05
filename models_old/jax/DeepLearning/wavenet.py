@@ -9,7 +9,7 @@ from typing import Tuple, List, Dict, Any, Optional, Callable, Sequence
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import WAVENET_CONFIG
+from config.models_config_old import WAVENET_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 from custom.printer import print_warning
 

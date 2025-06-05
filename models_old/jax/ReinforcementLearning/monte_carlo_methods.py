@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 sys.path.append(PROJECT_ROOT)
 
 from constants.constants import CONST_DEFAULT_SEED
-from config.models_config import EARLY_STOPPING_POLICY, MONTE_CARLO_CONFIG
+from config.models_config_old import EARLY_STOPPING_POLICY, MONTE_CARLO_CONFIG
 from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 from custom.printer import print_warning
 

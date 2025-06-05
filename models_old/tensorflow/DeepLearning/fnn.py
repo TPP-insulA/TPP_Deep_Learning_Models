@@ -11,7 +11,7 @@ from typing import Dict, Tuple, Any, Optional, Callable, Union, List
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import FNN_CONFIG
+from config.models_config_old import FNN_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 
 # Constantes para cadenas repetidas

@@ -7,7 +7,7 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
-from config.params import DEBUG
+from config.params_old import DEBUG
 from training.common import (
     calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
     enhance_features, get_model_type, process_training_results

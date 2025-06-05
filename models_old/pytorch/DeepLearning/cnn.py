@@ -9,7 +9,7 @@ from typing import Tuple, Dict, Any, Optional, Callable, List
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import CNN_CONFIG
+from config.models_config_old import CNN_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 from custom.DeepLearning.dl_pt import DLModelWrapperPyTorch
 from models_old.early_stopping import get_early_stopping_config

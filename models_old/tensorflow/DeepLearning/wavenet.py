@@ -12,7 +12,7 @@ from typing import Tuple, Dict, List, Any, Optional, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import WAVENET_CONFIG
+from config.models_config_old import WAVENET_CONFIG
 
 # --- Constantes ---
 CONST_RELU: str = 'relu'

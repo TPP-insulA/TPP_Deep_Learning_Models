@@ -9,7 +9,7 @@ from typing import Dict, Tuple, List, Any, Optional, Callable, Union
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT)
 
-from config.models_config import TRANSFORMER_CONFIG
+from config.models_config_old import TRANSFORMER_CONFIG
 from custom.DeepLearning.dl_model_wrapper import DLModelWrapper
 from custom.DeepLearning.dl_pt import DLModelWrapperPyTorch
 from models_old.early_stopping import get_early_stopping_config

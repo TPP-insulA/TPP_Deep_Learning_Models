@@ -12,7 +12,7 @@ from keras._tf_keras.keras.saving import register_keras_serializable
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import VALUE_ITERATION_CONFIG
+from config.models_config_old import VALUE_ITERATION_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 
 # Constantes para cadenas repetidas

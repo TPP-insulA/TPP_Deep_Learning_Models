@@ -19,7 +19,7 @@ from constants.constants import CONST_MODEL_INIT_ERROR
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from config.models_config import A2C_A3C_CONFIG
+from config.models_config_old import A2C_A3C_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE, TARGET_GLUCOSE, POSITIVE_REWARD, MILD_PENALTY_REWARD, SEVERE_PENALTY_REWARD, CONST_DROPOUT, CONST_POLICY_LOSS, CONST_VALUE_LOSS, CONST_ENTROPY_LOSS, CONST_TOTAL_LOSS, CONST_EPISODE_REWARDS
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 

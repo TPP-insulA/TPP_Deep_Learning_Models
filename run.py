@@ -14,7 +14,7 @@ sys.path.append(PROJECT_ROOT)
 from custom.printer import cprint, coloured
 
 # Configuración 
-from config.params import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, USE_PT_MODELS, TF_MODELS, JAX_MODELS, PT_MODELS
+from config.params_old import FRAMEWORK, PROCESSING, USE_TF_MODELS, USE_JAX_MODELS, USE_PT_MODELS, TF_MODELS, JAX_MODELS, PT_MODELS
 
 # Procesamiento
 from processing.pandas import preprocess_data as pd_preprocess, split_data as pd_split

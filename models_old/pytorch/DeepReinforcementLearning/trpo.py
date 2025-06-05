@@ -12,7 +12,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 sys.path.append(PROJECT_ROOT)
 
-from config.models_config import TRPO_CONFIG
+from config.models_config_old import TRPO_CONFIG
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_CGM_ENCODER, CONST_OTHER_ENCODER, CONST_COMBINED_LAYER
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 from custom.printer import print_info, print_warning, print_error

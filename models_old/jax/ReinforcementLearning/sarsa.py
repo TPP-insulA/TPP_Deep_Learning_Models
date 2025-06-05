@@ -14,7 +14,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
-from config.models_config import SARSA_CONFIG, EARLY_STOPPING_POLICY
+from config.models_config_old import SARSA_CONFIG, EARLY_STOPPING_POLICY
 from custom.ReinforcementLearning.rl_jax import RLModelWrapperJAX
 
 # Constantes para rutas de figuras y etiquetas comunes

@@ -25,7 +25,7 @@ from constants.constants import (
     CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
 )
 from tqdm.auto import tqdm
-from config.params import DEBUG
+from config.params_old import DEBUG
 
 CONST_EPOCHS = 3 if DEBUG else CONST_DEFAULT_EPOCHS
 
