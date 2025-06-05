@@ -18,6 +18,7 @@ figures/various_models/jax
 figures/various_models/pytorch
 figures/various_models/tensorflow
 **/logs/**
+*.pdf
 
 .vscode/
 .github/

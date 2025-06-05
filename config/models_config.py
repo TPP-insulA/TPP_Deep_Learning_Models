@@ -239,7 +239,26 @@ A2C_A3C_CONFIG = {
     'lambda': 0.95,                      # Factor lambda para cálculo de ventaja generalizada (GAE)
     'entropy_coef': 0.005,                # Coeficiente para el término de entropía en la función de pérdida
     'value_coef': 0.5,                   # Coeficiente para la pérdida de la función de valor
-    'max_grad_norm': 1.0                 # Valor máximo para recorte de norma del gradiente
+    'max_grad_norm': 1.0,                # Valor máximo para recorte de norma del gradiente
+    
+    # Parámetros para aprendizaje offline
+    'offline_training': True,
+    'use_behavior_cloning': True,
+    'behavior_cloning_weight': 0.5,
+    'conservative_weight': 1.0,  # Peso para regularización conservadora
+    'bcq_threshold': 0.3,  # Umbral para Batch-Constrained Q-learning
+    'use_importance_sampling': True,
+    'importance_sampling_clip': 10.0,
+    
+    # Personalización de recompensa
+    'reward_hypoglycemia_weight': 2.0,  # Mayor peso para evitar hipoglucemia
+    'reward_hyperglycemia_weight': 1.0,
+    'reward_in_range_weight': 1.0,
+    
+    # Evaluación fuera de política
+    'off_policy_evaluation': True,
+    'evaluation_bootstrap_samples': 1000,
+    'evaluation_confidence_level': 0.95
 }
 
 DDPG_CONFIG = {

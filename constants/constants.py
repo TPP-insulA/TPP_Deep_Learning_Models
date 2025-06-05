@@ -74,6 +74,25 @@ CONST_TANH = "tanh"
 CONST_LEAKY_RELU = "leaky_relu"
 CONST_GELU = "gelu"
 
+# Constantes para aprendizaje por refuerzo offline
+OFFLINE_RL_REWARD_SCALE = 1.0
+OFFLINE_GAMMA = 0.99  # Factor de descuento para recompensas futuras
+OFFLINE_LAMBDA = 0.95  # Factor para GAE (Generalized Advantage Estimation)
+
+# Rangos de glucosa para función de recompensa
+HIPOGLUCEMIA_SEVERA = 54.0  # mg/dL
+HIPOGLUCEMIA = 70.0  # mg/dL 
+HIPERGLUCEMIA = 180.0  # mg/dL
+HIPERGLUCEMIA_SEVERA = 250.0  # mg/dL
+OBJETIVO_GLUCOSA = 100.0  # mg/dL - Objetivo ideal
+
+# Constantes para evaluación fuera de política
+CONST_IPS_CLIP = 10.0  # Clipping para importance sampling
+CONST_CQL_ALPHA = 1.0  # Parámetro para Conservative Q-Learning
+CONST_CONFIDENCE_LEVEL = 0.95  # Nivel de confianza para intervalos
+
+# ===============================
+
 # Modelos de Aprendizaje Profundo
 ATT_ONLY = "Attention Only"
 CNN = "Convolutional Neural Network"

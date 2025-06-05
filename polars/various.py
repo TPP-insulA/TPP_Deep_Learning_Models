@@ -41,14 +41,14 @@ matplotlib.use('Agg')
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
-from models.tensorflow.DeepLearning.attention_only import create_attention_model
-from models.tensorflow.DeepLearning.cnn import create_cnn_model
-from models.tensorflow.DeepLearning.gru import create_gru_model
-from models.tensorflow.DeepLearning.rnn import create_rnn_model
-from models.tensorflow.DeepLearning.tabnet import create_tabnet_model
-from models.tensorflow.DeepLearning.tcn import create_tcn_model
-from models.tensorflow.DeepLearning.transformer import create_transformer_model
-from models.tensorflow.DeepLearning.wavenet import create_wavenet_model
+from models_old.tensorflow.DeepLearning.attention_only import create_attention_model
+from models_old.tensorflow.DeepLearning.cnn import create_cnn_model
+from models_old.tensorflow.DeepLearning.gru import create_gru_model
+from models_old.tensorflow.DeepLearning.rnn import create_rnn_model
+from models_old.tensorflow.DeepLearning.tabnet import create_tabnet_model
+from models_old.tensorflow.DeepLearning.tcn import create_tcn_model
+from models_old.tensorflow.DeepLearning.transformer import create_transformer_model
+from models_old.tensorflow.DeepLearning.wavenet import create_wavenet_model
 
 # %% [markdown]
 # ## Constantes
