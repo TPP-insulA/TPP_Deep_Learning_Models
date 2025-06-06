@@ -468,6 +468,46 @@ def calculate_medians(bolus_df: pl.DataFrame, basal_df: pl.DataFrame) -> tuple[f
     
     return carb_median, iob_median
 
+def extract_context_features(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Extrae características de contexto para modelos DRL.
+
+    Parámetros:
+    -----------
+    df : pl.DataFrame
+        DataFrame con datos crudos
+        
+    Retorna:
+    --------
+    pl.DataFrame
+        DataFrame con características de contexto extraídas
+    """
+    # Asegurar que las columnas obligatorias existen
+    if GLUCOSE_COL not in df.columns:
+        raise ValueError(f"Columna {GLUCOSE_COL} no encontrada en el DataFrame")
+    if MEAL_COL not in df.columns:
+        raise ValueError(f"Columna {MEAL_COL} no encontrada en el DataFrame")
+    
+    # Extraer características de contexto
+    context_df = df.select([
+        pl.col(TIMESTAMP_COL),
+        pl.col(SUBJECT_ID_COL),
+        pl.col(GLUCOSE_COL).alias("glucose"),
+        pl.col(MEAL_COL).alias("carb_intake"),
+        pl.col("sleep_event").fill_null(0.0).alias("sleep_quality"),
+        pl.col("work_intensity").fill_null(0.0),
+        pl.col("exercise_intensity").fill_null(0.0)
+    ])
+    
+    # Normalizar características opcionales (escala 0-10)
+    context_df = context_df.with_columns([
+        pl.col("sleep_quality").map_elements(lambda x: min(10.0, max(0.0, x * 10))),
+        pl.col("work_intensity").map_elements(lambda x: min(10.0, max(0.0, x * 10))),
+        pl.col("exercise_intensity").map_elements(lambda x: min(10.0, max(0.0, x * 10)))
+    ])
+    
+    return context_df
+
 def extract_features(df: pl.DataFrame, meal_df: pl.DataFrame) -> pl.DataFrame:
     """
     Extrae características de las ventanas CGM y agrega información de meal.
@@ -1041,118 +1081,6 @@ def prepare_data_with_scaler(df_final_pd: pl.DataFrame, mask: pl.Series,
         data = data.reshape(*reshape)
     return data
 
-def split_data(df_final: pl.DataFrame) -> tuple:
-    """
-    Divide los datos siguiendo una estrategia para asegurar distribuciones 
-    equilibradas entre los conjuntos de entrenamiento, validación y prueba.
-
-    Parámetros:
-    -----------
-    df_final : pl.DataFrame
-        DataFrame con todos los datos preprocesados
-
-    Retorna:
-    --------
-    tuple
-        Tupla con múltiples elementos:
-        - x_cgm_train, x_cgm_val, x_cgm_test: datos CGM para cada conjunto
-        - x_other_train, x_other_val, x_other_test: otras características para cada conjunto
-        - x_subject_train, x_subject_val, x_subject_test: IDs de sujetos para cada conjunto
-        - y_train, y_val, y_test: etiquetas para cada conjunto
-        - subject_test: IDs de sujetos de prueba
-        - scaler_cgm, scaler_other, scaler_y: escaladores ajustados
-    """
-    start_time = time.time()
-    logging.info("Iniciando división de datos...")
-    
-    # Estadísticas por sujeto
-    subject_stats = df_final.group_by("subject_id").agg([
-        pl.col("bolus").mean().alias("mean_dose"),
-        pl.col("bolus").std().alias("std_dose")
-    ])
-    
-    # Obtener lista de sujetos ordenados por dosis media
-    sorted_subjects = subject_stats.sort("mean_dose").get_column("subject_id").to_list()
-    n_subjects = len(sorted_subjects)
-    train_size = int(0.8 * n_subjects)
-    val_size = int(0.1 * n_subjects)
-    test_size = n_subjects - train_size - val_size
-    logging.info(f"Total de sujetos: {n_subjects}, Train: {train_size}, Val: {val_size}, Test: {test_size}")
-
-    # Iniciar con sujeto específico para pruebas si está disponible
-    test_subjects = [49] if 49 in sorted_subjects else []
-    remaining_subjects = [s for s in sorted_subjects if s != 49]
-    train_subjects = []
-    val_subjects = []
-
-    # Aleatorizar la lista restante y convertir a pandas para cálculos
-    rng = np.random.default_rng(seed=CONST_DEFAULT_SEED)
-    rng.shuffle(remaining_subjects)
-    df_final_pd = df_final.to_pandas()
-    logging.info("Datos convertidos a pandas para procesamiento.")
-
-    # Distribuir sujetos entre los grupos
-    for subject in tqdm(remaining_subjects, desc="Asignando sujetos a grupos"):
-        train_subjects, val_subjects, test_subjects = assign_subject_to_group(
-            df_final_pd, subject, train_subjects, val_subjects, test_subjects,
-            train_size, val_size, test_size
-        )
-
-    # Crear máscaras para división de datos
-    train_mask = df_final_pd['subject_id'].isin(train_subjects)
-    val_mask = df_final_pd['subject_id'].isin(val_subjects)
-    test_mask = df_final_pd['subject_id'].isin(test_subjects)
-
-    # Mostrar estadísticas post-división
-    for set_name, mask in [("Train", train_mask), ("Val", val_mask), ("Test", test_mask)]:
-        y_temp = df_final_pd.loc[mask, 'bolus']
-        logging.info(f"Post-split {set_name} y: mean = {y_temp.mean()}, std = {y_temp.std()}")
-
-    # Definir columnas para diferentes grupos de características
-    cgm_columns = [f'cgm_{i}' for i in range(24)]
-    other_features = ['carb_input', 'bg_input', 'insulin_on_board', 'insulin_carb_ratio', 
-                      'insulin_sensitivity_factor', 'hour_of_day']
-
-    # Inicializar escaladores
-    scaler_cgm = StandardScaler().fit(df_final_pd.loc[train_mask, cgm_columns])
-    scaler_other = StandardScaler().fit(df_final_pd.loc[train_mask, other_features])
-    scaler_y = StandardScaler().fit(df_final_pd.loc[train_mask, 'bolus'].values.reshape(-1, 1))
-
-    # Preparar datos CGM
-    x_cgm_train = prepare_data_with_scaler(df_final_pd, train_mask, cgm_columns, scaler_cgm, reshape=(-1, 24, 1))
-    x_cgm_val = prepare_data_with_scaler(df_final_pd, val_mask, cgm_columns, scaler_cgm, reshape=(-1, 24, 1))
-    x_cgm_test = prepare_data_with_scaler(df_final_pd, test_mask, cgm_columns, scaler_cgm, reshape=(-1, 24, 1))
-    
-    # Preparar otras características
-    x_other_train = prepare_data_with_scaler(df_final_pd, train_mask, other_features, scaler_other)
-    x_other_val = prepare_data_with_scaler(df_final_pd, val_mask, other_features, scaler_other)
-    x_other_test = prepare_data_with_scaler(df_final_pd, test_mask, other_features, scaler_other)
-    
-    # Preparar etiquetas
-    y_train = scaler_y.transform(df_final_pd.loc[train_mask, 'bolus'].values.reshape(-1, 1)).flatten()
-    y_val = scaler_y.transform(df_final_pd.loc[val_mask, 'bolus'].values.reshape(-1, 1)).flatten()
-    y_test = scaler_y.transform(df_final_pd.loc[test_mask, 'bolus'].values.reshape(-1, 1)).flatten()
-
-    # Obtener IDs de sujeto
-    x_subject_train = df_final_pd.loc[train_mask, 'subject_id'].values
-    x_subject_val = df_final_pd.loc[val_mask, 'subject_id'].values
-    x_subject_test = df_final_pd.loc[test_mask, 'subject_id'].values
-    
-    # Imprimir resumen
-    logging.info(f"Entrenamiento CGM: {x_cgm_train.shape}, Validación CGM: {x_cgm_val.shape}, Prueba CGM: {x_cgm_test.shape}")
-    logging.info(f"Entrenamiento Otros: {x_other_train.shape}, Validación Otros: {x_other_val.shape}, Prueba Otros: {x_other_test.shape}")
-    logging.info(f"Entrenamiento Subject: {x_subject_train.shape}, Validación Subject: {x_subject_val.shape}, Prueba Subject: {x_subject_test.shape}")
-    logging.info(f"Sujetos de prueba: {test_subjects}")
-
-    elapsed_time = time.time() - start_time
-    logging.info(f"División de datos completa en {elapsed_time:.2f} segundos")
-    
-    return (x_cgm_train, x_cgm_val, x_cgm_test,
-            x_other_train, x_other_val, x_other_test,
-            x_subject_train, x_subject_val, x_subject_test,
-            y_train, y_val, y_test, test_subjects,
-            scaler_cgm, scaler_other, scaler_y)
-
 def calculate_stats_for_group(df: pl.DataFrame, subjects: list, feature: str = 'bolus') -> tuple:
     """
     Calcula media y desviación estándar para un grupo de sujetos usando Polars.
@@ -1436,15 +1364,15 @@ def main() -> None:
     """
     Función principal para ejecutar el preprocesamiento.
     """
-    # Configurar logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('preprocess.log'),
-            logging.StreamHandler()
-        ]
-    )
+    # # Configurar logging
+    # logging.basicConfig(
+    #     level=logging.INFO,
+    #     format='%(asctime)s - %(levelname)s - %(message)s',
+    #     handlers=[
+    #         logging.FileHandler('preprocess.log'),
+    #         logging.StreamHandler()
+    #     ]
+    # )
 
     start_time: float = time.time()
     logging.info("Inicio del preprocesamiento de datos.")
@@ -1455,42 +1383,37 @@ def main() -> None:
         logging.error("No se encontraron datos para procesar.")
         sys.exit(1)
 
-    # Guardar el DataFrame final como Parquet
-    output_path: str = "processed_data.parquet"
-    df_final.write_parquet(output_path)
-    logging.info(f"Datos guardados en {output_path}")
+    # # Guardar el DataFrame final como Parquet
+    # output_path: str = "processed_data.parquet"
+    # df_final.write_parquet(output_path)
+    # logging.info(f"Datos guardados en {output_path}")
 
     # Dividir datos en conjuntos de entrenamiento, validación y prueba
-    (x_cgm_train, x_cgm_val, x_cgm_test,
-     x_other_train, x_other_val, x_other_test,
-     x_subject_train, x_subject_val, x_subject_test,
-     y_train, y_val, y_test, test_subjects,
-     mean_std_cgm, mean_std_other, mean_std_y) = split_data(df_final)
+    (x_cgm_train, x_cgm_val, x_cgm_test, 
+    x_other_train, x_other_val, x_other_test,
+    x_subject_train, x_subject_val, x_subject_test,
+    y_train, y_val, y_test,
+    context_indices, scaler_cgm, scaler_other, scaler_y
+    ) = split_data(df_final)
+    
+    print(f"Context indices: {context_indices}")
 
     # Guardar los datos divididos como archivos NumPy para uso posterior
-    np.save("x_cgm_train.npy", x_cgm_train)
-    np.save("x_cgm_val.npy", x_cgm_val)
-    np.save("x_cgm_test.npy", x_cgm_test)
-    np.save("x_other_train.npy", x_other_train)
-    np.save("x_other_val.npy", x_other_val)
-    np.save("x_other_test.npy", x_other_test)
-    np.save("x_subject_train.npy", x_subject_train)
-    np.save("x_subject_val.npy", x_subject_val)
-    np.save("x_subject_test.npy", x_subject_test)
-    np.save("y_train.npy", y_train)
-    np.save("y_val.npy", y_val)
-    np.save("y_test.npy", y_test)
-    np.save("test_subjects.npy", np.array(test_subjects))
-    logging.info("Datos divididos guardados como archivos NumPy.")
+    # np.save("x_cgm_train.npy", x_cgm_train)
+    # np.save("x_cgm_val.npy", x_cgm_val)
+    # np.save("x_cgm_test.npy", x_cgm_test)
+    # np.save("x_other_train.npy", x_other_train)
+    # np.save("x_other_val.npy", x_other_val)
+    # np.save("x_other_test.npy", x_other_test)
+    # np.save("x_subject_train.npy", x_subject_train)
+    # np.save("x_subject_val.npy", x_subject_val)
+    # np.save("x_subject_test.npy", x_subject_test)
+    # np.save("y_train.npy", y_train)
+    # np.save("y_val.npy", y_val)
+    # np.save("y_test.npy", y_test)
+    # np.save("test_subjects.npy", np.array(test_subjects))
+    # logging.info("Datos divididos guardados como archivos NumPy.")
 
-    # Opcional: Guardar las estadísticas de estandarización
-    with open("mean_std_cgm.txt", "w") as f:
-        f.write(str(mean_std_cgm))
-    with open("mean_std_other.txt", "w") as f:
-        f.write(str(mean_std_other))
-    with open("mean_std_y.txt", "w") as f:
-        f.write(str(mean_std_y))
-    logging.info("Estadísticas de estandarización guardadas como archivos de texto.")
 
     elapsed_time: float = time.time() - start_time
     logging.info(f"Proceso completo en {elapsed_time:.2f} segundos")
