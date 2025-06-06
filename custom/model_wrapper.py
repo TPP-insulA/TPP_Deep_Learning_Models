@@ -83,6 +83,26 @@ class ModelWrapper:
         """
         raise NotImplementedError("El método predict debe ser implementado por las subclases")
     
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> np.ndarray:
+        """
+        Realiza predicciones con el modelo entrenado, considerando contexto adicional.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        **context : dict
+            Variables contextuales adicionales (ej: glucose, carb_intake)
+            
+        Retorna:
+        --------
+        np.ndarray
+            Predicciones del modelo
+        """
+        raise NotImplementedError("El método predict_with_context debe ser implementado por las subclases")
+    
     def evaluate(self, x_cgm: np.ndarray, x_other: np.ndarray, y: np.ndarray) -> float:
         """
         Evalúa el modelo con datos de prueba.

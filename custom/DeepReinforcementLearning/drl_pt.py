@@ -752,12 +752,11 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             Otras características para predicción
         **context : dict
             Variables contextuales como:
-            - carb_intake : float - Ingesta de carbohidratos
-            - iob : float - Insulina a bordo
-            - objective_glucose : float - Nivel objetivo de glucosa
-            - sleep_quality : float - Calidad del sueño
-            - work_intensity : float - Intensidad del trabajo
-            - exercise_intensity : float - Intensidad del ejercicio
+            - glucose : float - Nivel actual de glucosa (obligatorio)
+            - carb_intake : float - Ingesta de carbohidratos (obligatorio)
+            - sleep_quality : float - Calidad del sueño (opcional)
+            - work_intensity : float - Intensidad del trabajo (opcional)
+            - exercise_intensity : float - Intensidad del ejercicio (opcional)
             
         Retorna:
         --------
@@ -777,58 +776,54 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             else:
                 raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
         
+        # Verificar parámetros obligatorios
+        if 'glucose' not in context:
+            raise ValueError("El parámetro 'glucose' es obligatorio para predict_with_context")
+        if 'carb_intake' not in context:
+            raise ValueError("El parámetro 'carb_intake' es obligatorio para predict_with_context")
+        
         # Poner en modo evaluación
         self.eval()
         
         # Verificar si el modelo tiene un método específico para contexto
         if hasattr(self.model, 'predict_with_context'):
-            prediction_array = self.model.predict_with_context(x_cgm, x_other, **context)
-            return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
-        
-        # Si el modelo tiene predict pero no específico para contexto
-        if hasattr(self.model, 'predict'):
-            # Intentar pasar el contexto como kwargs
-            try:
-                prediction_array = self.model.predict([x_cgm, x_other], **context)
-                return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
-            except Exception:
-                # Si falla, usar predict normal
-                prediction_array = self.model.predict([x_cgm, x_other])
-                return float(prediction_array.flatten()[0]) if prediction_array.size > 0 else 0.0
+            return self.model.predict_with_context(x_cgm, x_other, **context)
         
         # Implementación estándar si no hay métodos específicos
         with torch.no_grad():
             x_cgm_t = torch.FloatTensor(x_cgm).to(self.device)
             x_other_t = torch.FloatTensor(x_other).to(self.device)
             
-            # Crear tensor de contexto si hay variables contextuales
-            if context:
-                # Extraer valores de contexto (usar 0 como valor por defecto)
-                context_values = [
-                    context.get('carb_intake', 0.0),
-                    context.get('iob', 0.0),
-                    context.get('objective_glucose', 0.0),
-                    context.get('sleep_quality', 5.0),
-                    context.get('work_intensity', 0.0),
-                    context.get('exercise_intensity', 0.0)
-                ]
-                
-                # Crear tensor - asegurar que solo procesamos una muestra a la vez
-                context_tensor = torch.FloatTensor(context_values).to(self.device).unsqueeze(0)
-                
-                # Si el modelo tiene un método forward_with_context, usarlo
-                if hasattr(self.model, 'forward_with_context'):
-                    predictions = self.model.forward_with_context(x_cgm_t, x_other_t, context_tensor)
-                else:
-                    # Concatenar con otras características como alternativa
-                    enhanced_features = torch.cat([x_other_t, context_tensor], dim=1)
-                    predictions = self.forward(x_cgm_t, enhanced_features)
-            else:
-                # Sin contexto, usar forward normal
-                predictions = self.forward(x_cgm_t, x_other_t)
+            # Crear tensor de contexto
+            glucose = context['glucose']
+            carb_intake = context['carb_intake']
+            sleep_quality = context.get('sleep_quality', 5.0)
+            work_intensity = context.get('work_intensity', 0.0)
+            exercise_intensity = context.get('exercise_intensity', 0.0)
             
-            # Extraer y devolver el valor único
-            return float(predictions.cpu().numpy().flatten()[0])
+            context_tensor = torch.FloatTensor([
+                glucose, carb_intake, sleep_quality,
+                work_intensity, exercise_intensity
+            ]).to(self.device)
+            
+            # Añadir dimensiones de lote si es necesario
+            if len(x_cgm_t.shape) == 2:  # Si es (time_steps, features)
+                x_cgm_t = x_cgm_t.unsqueeze(0)  # Convertir a (1, time_steps, features)
+            if len(x_other_t.shape) == 1:  # Si es (features)
+                x_other_t = x_other_t.unsqueeze(0)  # Convertir a (1, features)
+            context_tensor = context_tensor.unsqueeze(0)  # (1, context_features)
+            
+            # Mejorar x_other con contexto
+            enhanced_x_other = torch.cat([x_other_t, context_tensor], dim=1)
+            
+            # Predecir usando el modelo mejorado
+            predictions = self.forward(x_cgm_t, enhanced_x_other)
+            dose = predictions.cpu().numpy().flatten()[0]
+            
+            # Aplicar restricciones de seguridad
+            dose = max(0.0, min(dose, 20.0))
+            
+            return dose
 
     def save(self, path: str) -> None:
         """

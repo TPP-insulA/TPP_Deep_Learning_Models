@@ -171,9 +171,10 @@ class DRLModelWrapper(ModelWrapper):
         return self.wrapper.predict(x_cgm, x_other)
 
     def predict_dose(self, x_cgm: np.ndarray, x_other: np.ndarray, 
-               carb_intake: float = None, iob: float = None, 
-               objective_glucose: float = None, sleep_quality: float = None, 
-               work_intensity: float = None, exercise_intensity: float = None) -> float:
+                   glucose: float, carb_intake: float,
+                   sleep_quality: float = None, 
+                   work_intensity: float = None, 
+                   exercise_intensity: float = None) -> float:
         """
         Realiza una predicción de dosis de insulina para un momento específico.
         
@@ -183,12 +184,10 @@ class DRLModelWrapper(ModelWrapper):
             Datos CGM del paciente
         x_other : np.ndarray
             Otras características del paciente
-        carb_intake : float, opcional
-            Ingesta de carbohidratos en gramos
-        iob : float, opcional
-            Insulina a bordo (insulina activa en el cuerpo)
-        objective_glucose : float, opcional
-            Nivel objetivo de glucosa en sangre
+        glucose : float
+            Nivel actual de glucosa en mg/dL (obligatorio)
+        carb_intake : float
+            Ingesta de carbohidratos en gramos (obligatorio)
         sleep_quality : float, opcional
             Calidad del sueño (escala de 0-10)
         work_intensity : float, opcional
@@ -205,14 +204,13 @@ class DRLModelWrapper(ModelWrapper):
         if len(x_cgm.shape) == 2:  # Si es (time_steps, features)
             x_cgm = np.expand_dims(x_cgm, axis=0)  # Convertir a (1, time_steps, features)
         
-        # Crear diccionario de contexto para pasar a wrapper.predict
-        context = {}
-        if carb_intake is not None:
-            context['carb_intake'] = carb_intake
-        if iob is not None:
-            context['iob'] = iob
-        if objective_glucose is not None:
-            context['objective_glucose'] = objective_glucose
+        # Crear diccionario de contexto
+        context = {
+            'glucose': glucose,
+            'carb_intake': carb_intake
+        }
+        
+        # Añadir parámetros opcionales si están presentes
         if sleep_quality is not None:
             context['sleep_quality'] = sleep_quality
         if work_intensity is not None:
@@ -220,26 +218,8 @@ class DRLModelWrapper(ModelWrapper):
         if exercise_intensity is not None:
             context['exercise_intensity'] = exercise_intensity
         
-        # Obtener predicción directamente como float
-        if hasattr(self.wrapper, 'predict_with_context') and context:
-            return self.wrapper.predict_with_context(x_cgm, x_other, **context)
-        else:
-            # Si el wrapper no soporta context, usar predict normal y extraer el valor
-            prediction_array = self.wrapper.predict(x_cgm, x_other)
-            
-            # Extraer el valor singular de la predicción
-            if prediction_array is not None and prediction_array.size > 0:
-                # Tomar el primer valor si hay múltiples predicciones
-                dose = float(prediction_array.flatten()[0])
-                
-                # Asegurar que la dosis no sea negativa (validación básica)
-                dose = max(0.0, dose)
-                
-                return dose
-            else:
-                # Si no hay predicción válida, retornar 0
-                print_warning("No se pudo obtener una predicción válida. Retornando dosis 0.")
-                return 0.0
+        # Obtener predicción
+        return self.wrapper.predict_with_context(x_cgm, x_other, **context)
     
     def save(self, filepath: str) -> None:
         """
