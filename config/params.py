@@ -1,10 +1,12 @@
-# Modelos
-## Modelos TensorFlow
-### Modelos de Aprendizaje Profundo
 from datetime import timedelta
-from typing import Union
+from typing import Dict, Union
+# Modelos
+## PyTorch
 ### Modelos de Aprendizaje por Refuerzo Profundo
 
+# Evaluadores
+from validation.fqe import create_fqe_evaluator
+from validation.dre import create_dre_evaluator
 
 # Modo de Ejecución
 DEBUG = False
@@ -83,7 +85,7 @@ MODELS = {
 }
 
 # Modelos Pytorch a utilizar
-MODELS_USAGE = {
+MODELS_USAGE: Dict[str, bool] = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_ddpg": True,
     "pt_dqn": True,
@@ -92,11 +94,11 @@ MODELS_USAGE = {
 }
 
 EVALUATE = {
-    "pt_fqe": "",
-    "pt_dr": ""
+    "pt_fqe": create_fqe_evaluator,
+    "pt_dr": create_dre_evaluator
 }
 
-EVALUATE_USAGE = {
+EVALUATE_USAGE: Dict[str, bool] = {
     "pt_fqe": True,
-    "pt_dr": False
+    "pt_dr": True
 }
