@@ -1,84 +1,250 @@
 import os
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+from datetime import datetime
 from custom.printer import cprint
 from constants.constants import CONST_FRAMEWORKS, CONST_MODELS_NAMES, HEADERS_BACKGROUND, MODELS_BACKGROUND, ENSEMBLE_BACKGROUND
 
-def create_report(model_figures: Dict[str, Dict[str, str]], 
-                  ensemble_metrics: Dict[str, float],
-                  framework: str,
-                  project_root: str,
-                  figures_dir: str,
-                  metrics: Dict[str, Dict[str, float]]) -> str:
+def create_report(data: Dict[str, Any], output_path: str, figures_dir: str) -> str:
     """
-    Crea un reporte en formato Typst con los resultados de entrenamiento.
+    Crea un reporte en formato Typst con los resultados de entrenamiento, priorizando métricas clínicas.
     
     Parámetros:
     -----------
-    model_figures : Dict[str, Dict[str, str]]
-        Diccionario con rutas a figuras por modelo
-    ensemble_metrics : Dict[str, float]
-        Métricas del modelo ensemble
-    framework : str
-        Framework utilizado (tensorflow o jax)
-    project_root : str
-        Ruta base del proyecto
+    data : Dict[str, Any]
+        Diccionario con datos para el reporte incluyendo:
+        - title: Título del informe
+        - framework: Framework utilizado
+        - models: Información de modelos entrenados
+        - metrics: Métricas de regresión
+        - clinical_metrics: Métricas clínicas
+        - offline_evaluation: Resultados de evaluación offline (opcional)
+        - figures: Rutas a las figuras generadas
+    output_path : str
+        Ruta donde se guardará el reporte
     figures_dir : str
-        Directorio donde se guardan las figuras
-    metrics : Dict[str, Dict[str, float]]
-        Métricas de todos los modelos
+        Directorio donde se encuentran las figuras
         
     Retorna:
     --------
     str
         Ruta al archivo Typst generado
     """
-    # # Fecha actual para el reporte
-    # from datetime import datetime
-    # current_date = datetime.now().strftime("%Y-%m-%d")
+    # Obtener fecha actual para el informe
+    current_date = datetime.now().strftime("%d/%m/%Y")
     
-    # Crear directorio docs si no existe
-    docs_dir = os.path.join(project_root, "docs")
-    os.makedirs(docs_dir, exist_ok=True)
+    # Crear directorio para el informe si no existe
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
-    def get_min_max(data: Dict[str, Dict[str, float]], metric: str) -> tuple[float, float]:
+    # Obtener métricas clínicas
+    clinical_metrics = data.get('clinical_metrics', {})
+    
+    # Función para generar color según el valor clínico
+    def color_for_clinical(value: float, metric: str) -> str:
         """
-        Obtiene el mínimo y máximo valor de una métrica dada en los modelos.
-        
-        Parámetros:
-        -----------
-        data : Dict[str, Dict[str, float]]
-            Diccionario con métricas de los modelos
-        metric : str
-            Nombre de la métrica a evaluar (ej. 'mae', 'rmse', 'r2')
-        
-        Retorna:
-        --------
-        tuple[float, float]
-            Mínimo y máximo valor de la métrica
-        """
-        values = [model_metric[metric] for model_metric in data.values()]
-        return min(values), max(values)
-
-    def color_for_value(value: float, min_val: float, max_val: float, better_is_lower: bool = False) -> str:
-        """
-        Genera un color RGB como cadena para Typst.
+        Genera color para métricas clínicas.
         
         Parámetros:
         -----------
         value : float
-            Valor a evaluar
-        min_val : float
-            Valor mínimo de la métrica
-        max_val : float
-            Valor máximo de la métrica
-        better_is_lower : bool
-            Indica si un valor menor es mejor (default: False)
-        
+            Valor de la métrica
+        metric : str
+            Nombre de la métrica
+            
         Retorna:
         --------
         str
             Color en formato RGB para Typst
         """
+        if metric == 'time_in_range':
+            # Verde más intenso para valores más altos (mejor)
+            intensity = min(100, int(value * 2.55))
+            return f"rgb(0, {intensity}, 0)"
+        elif metric == 'time_below_range':
+            # Rojo más intenso para valores más altos (peor)
+            intensity = min(100, int(value * 2.55))
+            return f"rgb({intensity}, 0, 0)"
+        elif metric == 'time_above_range':
+            # Naranja más intenso para valores más altos (peor)
+            intensity = min(100, int(value * 2.55))
+            return f"rgb({intensity}, {intensity//2}, 0)"
+        return "black"
+    
+    # Inicio del documento Typst
+    typst_content = f"""
+#set page(
+  margin: 2cm,
+  numbering: "1 de 1",
+)
+
+#set text(font: "New Computer Modern", lang: "es")
+#set heading(numbering: "1.")
+#show heading: set block(above: 1.4em, below: 1em)
+
+#set table(
+  fill: (x, y) => {{
+    if y == 0 {{
+      rgb("{HEADERS_BACKGROUND}").lighten(40%)
+    }} else if x == 0 {{
+      rgb("{MODELS_BACKGROUND}")
+    }}
+  }},
+  align: center,
+)
+
+#align(center)[
+  #text(17pt)[*{data['title']}*]
+  #v(0.5em)
+  #text(13pt)[Fecha: *{data.get('date', current_date)}*]
+  #v(0.5em)
+  #text(13pt)[Framework: *{data['framework'].upper()}*]
+]
+
+= Métricas Clínicas y Resultados de Evaluación
+
+La eficacia de los modelos de dosificación de insulina se evalúa principalmente por su capacidad para mantener los niveles de glucosa dentro del rango objetivo (70-180 mg/dL).
+
+== Tiempo en Rango y Control Glucémico
+
+#figure(
+  table(
+    columns: 4,
+    align: center + horizon,
+    [*Modelo*], [*Tiempo en Rango (%)*], [*Tiempo Bajo Rango (%)*], [*Tiempo Sobre Rango (%)*],
+"""
+
+    # Agregar filas para cada modelo (métricas clínicas)
+    models = list(clinical_metrics.keys())
+    for model_name in models:
+        model_metrics = clinical_metrics[model_name]
+        tir = model_metrics.get('time_in_range', 0)
+        tbr = model_metrics.get('time_below_range', 0)
+        tar = model_metrics.get('time_above_range', 0)
+        
+        tir_color = color_for_clinical(tir, 'time_in_range')
+        tbr_color = color_for_clinical(tbr, 'time_below_range')
+        tar_color = color_for_clinical(tar, 'time_above_range')
+        
+        model_display_name = CONST_MODELS_NAMES.get(model_name, model_name)
+        
+        typst_content += f"""
+    [*{model_display_name}*], 
+    table.cell(fill: {tir_color}.lighten(80%), [{tir:.2f}%]), 
+    table.cell(fill: {tbr_color}.lighten(80%), [{tbr:.2f}%]), 
+    table.cell(fill: {tar_color}.lighten(80%), [{tar:.2f}%]),"""
+    
+    typst_content += f"""
+  ),
+  caption: [Comparación de métricas clínicas entre modelos],
+)
+
+Las métricas clave son:
+- *Tiempo en Rango (TIR)*: Porcentaje de tiempo que los niveles de glucosa permanecen entre 70-180 mg/dL.
+- *Tiempo Bajo Rango (TBR)*: Porcentaje de tiempo con glucosa <70 mg/dL (hipoglucemia).
+- *Tiempo Sobre Rango (TAR)*: Porcentaje de tiempo con glucosa >180 mg/dL (hiperglucemia).
+
+#figure(
+  image("{os.path.relpath(os.path.join(figures_dir, 'clinical_metrics.png'), os.path.dirname(output_path))}", width: 85%),
+  caption: [Visualización de métricas clínicas entre modelos],
+)
+"""
+
+    # Agregar sección de evaluación offline si existe
+    if 'offline_evaluation' in data:
+        offline_results = data['offline_evaluation']
+        typst_content += """
+== Evaluación con Métodos Offline RL
+
+La evaluación fuera de política (off-policy) permite estimar el rendimiento esperado de los modelos sin necesidad de probarlos directamente en pacientes.
+
+#figure(
+  table(
+    columns: 4,
+    align: center + horizon,
+    [*Modelo*], [*Valor Estimado*], [*Límite Inferior*], [*Límite Superior*],
+"""
+        
+        # Obtener primero los evaluadores disponibles
+        for model_name in offline_results:
+            evaluators = list(offline_results[model_name].keys())
+            break
+        
+        # Para cada evaluador, mostrar resultados de todos los modelos
+        for evaluator in evaluators:
+            # Agregar subtítulo del evaluador
+            typst_content += f"""
+  ),
+  caption: [Resultados de evaluación con {evaluator}],
+)
+
+=== Evaluación con {evaluator}
+
+#figure(
+  table(
+    columns: 4,
+    align: center + horizon,
+    [*Modelo*], [*Valor Estimado*], [*Límite Inferior*], [*Límite Superior*],
+"""
+            
+            # Agregar filas para cada modelo
+            for model_name in offline_results:
+                if evaluator in offline_results[model_name]:
+                    results = offline_results[model_name][evaluator]
+                    estimated = results.get('estimated_value', 0)
+                    lower = results.get('confidence_lower', 0)
+                    upper = results.get('confidence_upper', 0)
+                    
+                    model_display_name = CONST_MODELS_NAMES.get(model_name, model_name)
+                    
+                    typst_content += f"""
+    [*{model_display_name}*], [{estimated:.4f}], [{lower:.4f}], [{upper:.4f}],"""
+            
+            # Agregar figura si existe
+            if 'offline' in data.get('figures', {}):
+                for fig_path in data['figures']['offline']:
+                    if evaluator in fig_path:
+                        fig_rel_path = os.path.relpath(os.path.join(figures_dir, fig_path), os.path.dirname(output_path))
+                        typst_content += f"""
+  ),
+  caption: [Resultados de evaluación con {evaluator}],
+)
+
+#figure(
+  image("{fig_rel_path}", width: 80%),
+  caption: [Visualización de evaluación con {evaluator}],
+)
+"""
+                        break
+                else:
+                    typst_content += """
+  ),
+  caption: [Resultados de evaluación offline],
+)
+"""
+            else:
+                typst_content += """
+  ),
+  caption: [Resultados de evaluación offline],
+)
+"""
+
+    # Agregar sección de métricas de regresión (secundaria)
+    regression_metrics = data.get('metrics', {})
+    
+    typst_content += """
+
+= Métricas de Regresión (Secundarias)
+
+Aunque las métricas clínicas son más relevantes para evaluar el impacto real de los modelos en pacientes, las métricas de regresión proporcionan información sobre la precisión de las predicciones respecto a los datos de entrenamiento.
+
+"""
+
+    # Función para obtener min/max de métricas
+    def get_min_max(metrics_dict: Dict[str, Dict[str, float]], metric: str) -> tuple:
+        values = [model_metric.get(metric, 0) for model_metric in metrics_dict.values()]
+        return min(values), max(values)
+    
+    # Función para color según valor
+    def color_for_value(value: float, min_val: float, max_val: float, better_is_lower: bool = False) -> str:
         if min_val == max_val:
             t = 0.5
         else:
@@ -93,41 +259,13 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
             b = 0
         return f"rgb({r}, {g}, {b})"
     
-    mae_min, mae_max = get_min_max(metrics, "mae")
-    rmse_min, rmse_max = get_min_max(metrics, "rmse")
-    r2_min, r2_max = get_min_max(metrics, "r2")
+    # Obtener min/max para colores
+    mae_min, mae_max = get_min_max(regression_metrics, "mae")
+    rmse_min, rmse_max = get_min_max(regression_metrics, "rmse")
+    r2_min, r2_max = get_min_max(regression_metrics, "r2")
     
-    # Inicio del documento Typst
-    typst_content = f"""
-#set page(
-  margin: 2cm,
-  numbering: "1 de 1",
-)
-
-#set text(font: "New Computer Modern", lang: "es")
-#set heading(numbering: "1.")
-#show heading: set block(above: 1.4em, below: 1em)
-
-#set table(
-  fill: (x, y) =>
-    if y == 0 {{
-      rgb("{HEADERS_BACKGROUND}").lighten(40%)
-    }} else if x == 0 {{
-      rgb("{MODELS_BACKGROUND}")
-    }},
-  align: right,
-)
-
-#align(center)[
-  #text(17pt)[*Resultados de Entrenamiento de Modelos*]
-  #v(0.5em)
-  #text(13pt)[#underline[Framework]: *{CONST_FRAMEWORKS[framework]}*]
-]
-
-= Resumen de Resultados
-
-== Métricas de Rendimiento
-
+    # Métricas de regresión en tabla
+    typst_content += f"""
 #figure(
   table(
     columns: 4,
@@ -135,91 +273,89 @@ def create_report(model_figures: Dict[str, Dict[str, str]],
     [*Modelo*], [*MAE*], [*RMSE*], [*R²*],
 """
 
-    # Agregar filas para cada modelo
-    for model_name, model_metric in metrics.items():
-        mae_color = color_for_value(model_metric["mae"], mae_min, mae_max, better_is_lower=True)
-        rmse_color = color_for_value(model_metric["rmse"], rmse_min, rmse_max, better_is_lower=True)
-        r2_color = color_for_value(model_metric["r2"], r2_min, r2_max)
+    # Agregar filas para cada modelo (métricas de regresión)
+    for model_name in regression_metrics.keys():
+        model_metric = regression_metrics[model_name]
+        mae_color = color_for_value(model_metric.get("mae", 0), mae_min, mae_max, better_is_lower=True)
+        rmse_color = color_for_value(model_metric.get("rmse", 0), rmse_min, rmse_max, better_is_lower=True)
+        r2_color = color_for_value(model_metric.get("r2", 0), r2_min, r2_max)
+        
+        model_display_name = CONST_MODELS_NAMES.get(model_name, model_name)
+        
         typst_content += f"""
-    [*{CONST_MODELS_NAMES[model_name]}*], table.cell(fill: {mae_color}.lighten(37%), [{model_metric["mae"]:.4f}]), table.cell(fill: {rmse_color}.lighten(37%), [{model_metric["rmse"]:.4f}]), table.cell(fill: {r2_color}.lighten(37%),  [{model_metric["r2"]:.4f}]),"""
+    [*{model_display_name}*], 
+    table.cell(fill: {mae_color}.lighten(80%), [{model_metric.get("mae", 0):.4f}]), 
+    table.cell(fill: {rmse_color}.lighten(80%), [{model_metric.get("rmse", 0):.4f}]), 
+    table.cell(fill: {r2_color}.lighten(80%), [{model_metric.get("r2", 0):.4f}]),"""
     
-    # Agregar fila del ensemble
     typst_content += f"""
-    table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [*Ensemble*]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["mae"]:.4f}]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["rmse"]:.4f}]), table.cell(fill: rgb("{ENSEMBLE_BACKGROUND}"), [{ensemble_metrics["r2"]:.4f}]),
   ),
-  caption: [Comparación de métricas entre modelos],
+  caption: [Comparación de métricas de regresión entre modelos],
 )
 
-= Resultados por Modelo
-
+#figure(
+  image("{os.path.relpath(os.path.join(figures_dir, 'regression_metrics.png'), os.path.dirname(output_path))}", width: 85%),
+  caption: [Visualización de métricas de regresión],
+)
 """
 
-    # Agregar secciones para cada modelo
-    for model_name, figures in model_figures.items():
-        # Obtener rutas relativas para las imágenes
-        training_history = figures.get('training_history', '')
-        predictions = figures.get('predictions', '')
-        metrics_fig = figures.get('metrics', '')
-        
-        # Convertir rutas absolutas a relativas desde la ubicación del documento
-        if training_history:
-            training_history_rel = os.path.relpath(training_history, docs_dir)
-        if predictions:
-            predictions_rel = os.path.relpath(predictions, docs_dir)
-        if metrics_fig:
-            _ = os.path.relpath(metrics_fig, docs_dir)
+    # Agregar sección para cada modelo
+    typst_content += """
+= Análisis por Modelo
+
+A continuación se presentan los detalles de entrenamiento y evaluación para cada modelo.
+"""
+
+    for model_name in models:
+        model_history_fig = f"{model_name}_training.png"
         
         typst_content += f"""
-== Modelo: {CONST_MODELS_NAMES[model_name]}
+== Modelo: {CONST_MODELS_NAMES.get(model_name, model_name)}
 
-=== Métricas
-- MAE: {metrics[model_name]["mae"]:.4f}
-- RMSE: {metrics[model_name]["rmse"]:.4f}
-- R²: {metrics[model_name]["r2"]:.4f}
+=== Métricas Clínicas
+- Tiempo en Rango: {clinical_metrics[model_name].get('time_in_range', 0):.2f}%
+- Tiempo Bajo Rango: {clinical_metrics[model_name].get('time_below_range', 0):.2f}%
+- Tiempo Sobre Rango: {clinical_metrics[model_name].get('time_above_range', 0):.2f}%
+
+=== Métricas de Regresión
+- MAE: {regression_metrics.get(model_name, {}).get('mae', 0):.4f}
+- RMSE: {regression_metrics.get(model_name, {}).get('rmse', 0):.4f}
+- R²: {regression_metrics.get(model_name, {}).get('r2', 0):.4f}
 
 === Historial de Entrenamiento
 #figure(
-  image("{training_history_rel}", width: 71%),
-  caption: [Historial de entrenamiento para {CONST_MODELS_NAMES[model_name]}.],
+  image("{os.path.relpath(os.path.join(figures_dir, model_history_fig), os.path.dirname(output_path))}", width: 80%),
+  caption: [Historial de entrenamiento para {CONST_MODELS_NAMES.get(model_name, model_name)}],
 )
-
-=== Predicciones
-#figure(
-  image("{predictions_rel}", width: 71%),
-  caption: [Predicciones vs valores reales para {CONST_MODELS_NAMES[model_name]}.],
-)
-
 """
-    
-    # Agregar sección para el ensemble
+
+    # Agregar conclusiones    
     typst_content += f"""
-== Modelo Ensemble
-
-=== Métricas
-- MAE: {ensemble_metrics["mae"]:.4f}
-- RMSE: {ensemble_metrics["rmse"]:.4f}
-- R²: {ensemble_metrics["r2"]:.4f}
-
-=== Pesos del Ensemble
-#figure(
-  image("{os.path.relpath(os.path.join(figures_dir, 'ensemble_weights.png'), docs_dir)}", width: 71%),
-  caption: [Pesos optimizados para cada modelo en el ensemble],
-)
-
 = Conclusiones
 
-El framework {framework.upper()} fue utilizado para entrenar {len(model_figures)} modelos diferentes. 
-El modelo ensemble logró un MAE de {ensemble_metrics["mae"]:.4f}, un RMSE de {ensemble_metrics["rmse"]:.4f} 
-y un coeficiente R² de {ensemble_metrics["r2"]:.4f}.
+Se han evaluado varios modelos de aprendizaje por refuerzo profundo para la predicción de dosis de insulina.
+
+== Mejor Rendimiento Clínico
 
 """
+    # Identificar el mejor modelo por tiempo en rango
+    best_model = max(clinical_metrics.keys(), key=lambda m: clinical_metrics[m].get('time_in_range', 0))
+    best_tir = clinical_metrics[best_model].get('time_in_range', 0)
     
+    typst_content += f"""
+El modelo con mejor rendimiento clínico es *{CONST_MODELS_NAMES.get(best_model, best_model)}* con un tiempo en rango de {best_tir:.2f}%.
+
+== Consideraciones Adicionales
+
+Las métricas clínicas deben ser el principal criterio para seleccionar modelos en el contexto de dosificación de insulina, ya que están directamente relacionadas con el objetivo final de mantener niveles de glucosa en el rango seguro.
+
+"""
+
     # Guardar el archivo Typst
-    typst_path = os.path.join(docs_dir, f"models_results_{framework}.typ")
-    with open(typst_path, 'w') as f:
+    with open(output_path, 'w') as f:
         f.write(typst_content)
     
-    return typst_path
+    return output_path
 
 def render_to_pdf(typst_path: str) -> Optional[str]:
     """

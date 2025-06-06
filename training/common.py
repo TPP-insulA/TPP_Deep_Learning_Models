@@ -5,31 +5,108 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from scipy.optimize import minimize
 from joblib import Parallel, delayed
 from config.params import DEBUG
-from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
+from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES, CONST_FRAMEWORKS, CONST_DURATION_HOURS, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE
 from custom.printer import print_debug, print_info, print_warning, print_error
+from validation.simulator import GlucoseSimulator
 
-def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
+def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray, 
+                     simulator: GlucoseSimulator = None, initial_glucose=None, carb_intake=None) -> Dict[str, float]:
     """
     Calcula métricas de rendimiento para las predicciones del modelo.
     
     Parámetros:
     -----------
     y_true : np.ndarray
-        Valores objetivo verdaderos
+        Valores objetivo verdaderos (dosis de insulina reales)
     y_pred : np.ndarray
-        Valores predichos por el modelo
+        Valores predichos por el modelo (dosis predichas)
+    simulator : GlucoseSimulator, opcional
+        Simulador para cálculo de métricas clínicas
+    initial_glucose : np.ndarray, opcional
+        Valores iniciales de glucosa para simulación
+    carb_intake : np.ndarray, opcional
+        Valores de ingesta de carbohidratos para simulación
         
     Retorna:
     --------
     Dict[str, float]
-        Diccionario con métricas MAE, RMSE y R²
+        Diccionario con métricas estándar y clínicas
     """
-    return {
+    # Métricas de regresión estándar
+    metrics = {
         CONST_METRIC_MAE: float(mean_absolute_error(y_true, y_pred)),
         CONST_METRIC_RMSE: float(np.sqrt(mean_squared_error(y_true, y_pred))),
         CONST_METRIC_R2: float(r2_score(y_true, y_pred))
     }
+    
+    # Métricas clínicas si se proporciona simulador
+    if simulator is not None and initial_glucose is not None and carb_intake is not None:
+        clinical_metrics = evaluate_clinical_metrics(
+            simulator=simulator,
+            predictions=y_pred,
+            initial_glucose=initial_glucose,
+            carb_intake=carb_intake
+        )
+        metrics.update(clinical_metrics)
+    
+    return metrics
 
+def evaluate_clinical_metrics(simulator, predictions: np.ndarray, initial_glucose: np.ndarray, 
+                            carb_intake: np.ndarray, duration_hours: int = CONST_DURATION_HOURS) -> Dict[str, float]:
+    """
+    Evalúa métricas clínicas utilizando un simulador de glucosa.
+    
+    Parámetros:
+    -----------
+    simulator : GlucoseSimulator
+        Objeto simulador de glucosa
+    predictions : np.ndarray
+        Dosis de insulina predichas
+    initial_glucose : np.ndarray
+        Valores iniciales de glucosa
+    carb_intake : np.ndarray
+        Valores de ingesta de carbohidratos
+    duration_hours : int, opcional
+        Duración de la simulación en horas (default: 6)
+        
+    Retorna:
+    --------
+    Dict[str, float]
+        Diccionario con métricas clínicas
+    """
+    # Acumuladores de métricas clínicas
+    time_in_range = []
+    time_below_range = []
+    time_above_range = []
+    
+    # Simular para cada predicción
+    for i in range(len(predictions)):
+        # Simular trayectoria de glucosa
+        trajectory = simulator.simulate(
+            initial_glucose=initial_glucose[i],
+            insulin_doses=[predictions[i]],
+            carb_intake=[carb_intake[i]],
+            duration_hours=duration_hours
+        )
+        
+        # Calcular métricas de tiempo en rango
+        in_range = np.logical_and(
+            trajectory >= LOWER_BOUND_NORMAL_GLUCOSE_RANGE, 
+            trajectory <= UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+        )
+        below_range = trajectory < LOWER_BOUND_NORMAL_GLUCOSE_RANGE
+        above_range = trajectory > UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+        
+        time_in_range.append(np.mean(in_range) * 100)  # Porcentaje
+        time_below_range.append(np.mean(below_range) * 100)  # Porcentaje
+        time_above_range.append(np.mean(above_range) * 100)  # Porcentaje
+    
+    # Métricas clínicas promedio
+    return {
+        'time_in_range': float(np.mean(time_in_range)),
+        'time_below_range': float(np.mean(time_below_range)),
+        'time_above_range': float(np.mean(time_above_range))
+    }
 
 def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray], 
                               weights: Optional[np.ndarray] = None) -> np.ndarray:
@@ -77,77 +154,76 @@ def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray],
     return np.average(all_preds, axis=0, weights=weights)
 
 
-def optimize_ensemble_weights(predictions_dict: Dict[str, np.ndarray], 
-                             y_true: np.ndarray) -> np.ndarray:
+def optimize_ensemble_weights_clinical(predictions: Dict[str, np.ndarray], 
+                                     initial_glucose: np.ndarray,
+                                     carb_intake: np.ndarray,
+                                     simulator,
+                                     y_true: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Optimiza pesos del ensemble usando optimización.
+    Optimiza pesos del ensemble basado en métricas clínicas.
     
     Parámetros:
     -----------
-    predictions_dict : Dict[str, np.ndarray]
-        Diccionario con predicciones de cada modelo
-    y_true : np.ndarray
-        Valores objetivo verdaderos
+    predictions : Dict[str, np.ndarray]
+        Diccionario con predicciones por modelo
+    initial_glucose : np.ndarray
+        Valores iniciales de glucosa
+    carb_intake : np.ndarray
+        Valores de ingesta de carbohidratos
+    simulator : GlucoseSimulator
+        Simulador para métricas clínicas
+    y_true : np.ndarray, opcional
+        Dosis de insulina reales (para evaluación)
         
     Retorna:
     --------
-    np.ndarray
-        Pesos optimizados para cada modelo
+    Tuple[np.ndarray, np.ndarray]
+        (pesos optimizados, predicción del ensemble)
     """
-    # Asegurar que y_true sea 1D para consistencia
-    if y_true.ndim > 1:
-        y_true = y_true.reshape(-1)
-    
-    # Registrar los modelos y sus formas de predicción
-    print("\nFormas de predicciones de modelos antes de optimización:")
-    for model_name, preds in predictions_dict.items():
-        print(f"  {model_name}: {np.array(preds).shape}")
-    
-    def objective(weights: np.ndarray) -> float:
-        """
-        Función objetivo para optimización de pesos.
-        
-        Parámetros:
-        -----------
-        weights : np.ndarray
-            Pesos a optimizar
-            
-        Retorna:
-        --------
-        float
-            Error cuadrático medio
-        """
-        # Normalizar pesos
+    def objective(weights):
+        # Normalizar pesos para que sumen 1
         weights = weights / np.sum(weights)
-        # Obtener predicción del ensemble
-        ensemble_pred = create_ensemble_prediction(predictions_dict, weights)
-        # Asegurar que las predicciones del ensemble coincidan con la longitud de y_true
-        if len(ensemble_pred) > len(y_true):
-            ensemble_pred = ensemble_pred[:len(y_true)]
-        elif len(ensemble_pred) < len(y_true):
-            y_true_temp = y_true[:len(ensemble_pred)]
-            return mean_squared_error(y_true_temp, ensemble_pred)
-        # Calcular error
-        return mean_squared_error(y_true, ensemble_pred)
+        
+        # Crear predicción del ensemble
+        ensemble_pred = create_ensemble_prediction(predictions, weights)
+        
+        # Evaluar métricas clínicas
+        metrics = evaluate_clinical_metrics(
+            simulator=simulator,
+            predictions=ensemble_pred,
+            initial_glucose=initial_glucose,
+            carb_intake=carb_intake
+        )
+        
+        # Retornar negativo del tiempo en rango (para maximizarlo)
+        return -metrics['time_in_range']
     
-    n_models = len(predictions_dict)
+    # Pesos iniciales (ponderación equitativa)
+    n_models = len(predictions)
     initial_weights = np.ones(n_models) / n_models
-    bounds = [(0, 1) for _ in range(n_models)]
     
+    # Límites y restricciones
+    bounds = [(0, 1) for _ in range(n_models)]
+    constraints = {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+    
+    # Optimizar pesos
     try:
         result = minimize(
             objective,
             initial_weights,
             bounds=bounds,
-            constraints={'type': 'eq', 'fun': lambda w: np.sum(w) - 1}
+            constraints=constraints,
+            method='SLSQP'
         )
         optimized_weights = result.x / np.sum(result.x)
-        return optimized_weights
     except Exception as e:
         print(f"Error en optimización: {e}")
-        print("Volviendo a pesos iguales")
-        return initial_weights
-
+        optimized_weights = initial_weights
+    
+    # Crear predicción final del ensemble
+    ensemble_pred = create_ensemble_prediction(predictions, optimized_weights)
+    
+    return optimized_weights, ensemble_pred
 
 def enhance_features(x_cgm: np.ndarray, x_other: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """

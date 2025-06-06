@@ -13,13 +13,12 @@ from scipy.optimize import minimize
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
 from config.params import DEBUG
 from training.common import (
-    calculate_metrics, create_ensemble_prediction, optimize_ensemble_weights,
-    enhance_features, get_model_type, process_training_results
+    calculate_metrics, evaluate_clinical_metrics, optimize_ensemble_weights_clinical, get_model_type, enhance_features
 )
 from constants.constants import (
     CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
     CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, 
-    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES
+    CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES, CONST_DURATION_HOURS
 )
 from tqdm.auto import tqdm
 
