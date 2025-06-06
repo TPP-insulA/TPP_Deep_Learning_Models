@@ -171,28 +171,26 @@ class DRLModelWrapper(ModelWrapper):
         return self.wrapper.predict(x_cgm, x_other)
 
     def predict_dose(self, x_cgm: np.ndarray, x_other: np.ndarray, 
-                   glucose: float, carb_intake: float,
-                   sleep_quality: float = None, 
-                   work_intensity: float = None, 
-                   exercise_intensity: float = None) -> float:
+               carb_intake: float,
+               sleep_quality: int = None, 
+               work_intensity: int = None, 
+               exercise_intensity: int = None) -> float:
         """
         Realiza una predicción de dosis de insulina para un momento específico.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM del paciente
+            Datos CGM del paciente (array con mediciones de glucosa recientes)
         x_other : np.ndarray
             Otras características del paciente
-        glucose : float
-            Nivel actual de glucosa en mg/dL (obligatorio)
         carb_intake : float
             Ingesta de carbohidratos en gramos (obligatorio)
-        sleep_quality : float, opcional
+        sleep_quality : int, opcional
             Calidad del sueño (escala de 0-10)
-        work_intensity : float, opcional
+        work_intensity : int, opcional
             Intensidad del trabajo/estrés (escala de 0-10)
-        exercise_intensity : float, opcional
+        exercise_intensity : int, opcional
             Intensidad del ejercicio (escala de 0-10)
             
         Retorna:
@@ -204,9 +202,45 @@ class DRLModelWrapper(ModelWrapper):
         if len(x_cgm.shape) == 2:  # Si es (time_steps, features)
             x_cgm = np.expand_dims(x_cgm, axis=0)  # Convertir a (1, time_steps, features)
         
+        # Usar predict_with_context con los mismos parámetros
+        return self.predict_with_context(
+            x_cgm, x_other,
+            carb_intake=carb_intake,
+            sleep_quality=sleep_quality,
+            work_intensity=work_intensity,
+            exercise_intensity=exercise_intensity
+        )
+    
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray,
+        carb_intake: float,
+        sleep_quality: int = None,
+        work_intensity: int = None,
+        exercise_intensity: int = None) -> float:
+        """
+        Realiza predicciones con contexto adicional.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción (array con mediciones de glucosa recientes)
+        x_other : np.ndarray
+            Otras características para predicción
+        carb_intake : float
+            Ingesta de carbohidratos en gramos (obligatorio)
+        sleep_quality : int, opcional
+            Calidad del sueño (escala de 0-10)
+        work_intensity : int, opcional
+            Intensidad del trabajo (escala de 0-10)
+        exercise_intensity : int, opcional
+            Intensidad del ejercicio (escala de 0-10)
+                
+        Retorna:
+        --------
+        float
+            Dosis de insulina recomendada en unidades
+        """
         # Crear diccionario de contexto
         context = {
-            'glucose': glucose,
             'carb_intake': carb_intake
         }
         
@@ -218,8 +252,8 @@ class DRLModelWrapper(ModelWrapper):
         if exercise_intensity is not None:
             context['exercise_intensity'] = exercise_intensity
         
-        # Obtener predicción
-        return self.wrapper.predict_with_context(x_cgm, x_other, **context)
+        # Delegar al wrapper específico y asegurar que se retorne un float
+        return float(self.wrapper.predict_with_context(x_cgm, x_other, **context))
     
     def save(self, filepath: str) -> None:
         """

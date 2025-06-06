@@ -80,11 +80,11 @@ OFFLINE_GAMMA = 0.99  # Factor de descuento para recompensas futuras
 OFFLINE_LAMBDA = 0.95  # Factor para GAE (Generalized Advantage Estimation)
 
 # Rangos de glucosa para función de recompensa
-HIPOGLUCEMIA_SEVERA = 54.0  # mg/dL
-HIPOGLUCEMIA = 70.0  # mg/dL 
-HIPERGLUCEMIA = 180.0  # mg/dL
-HIPERGLUCEMIA_SEVERA = 250.0  # mg/dL
-OBJETIVO_GLUCOSA = 100.0  # mg/dL - Objetivo ideal
+SEVERE_HYPOGLYCEMIA_THRESHOLD = 54.0  # mg/dL
+HYPOGLYCEMIA_THRESHOLD = 70.0  # mg/dL 
+HYPERGLYCEMIA_THRESHOLD = 180.0  # mg/dL
+SEVERE_HYPERGLYCEMIA_THRESHOLD = 250.0  # mg/dL
+TARGET_GLUCOSE = 100.0  # mg/dL - Objetivo ideal
 
 # Constantes para evaluación fuera de política
 CONST_IPS_CLIP = 10.0  # Clipping para importance sampling

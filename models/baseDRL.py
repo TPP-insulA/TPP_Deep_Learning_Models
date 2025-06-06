@@ -100,21 +100,41 @@ class BaseDRLModel(nn.Module):
     def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> float:
         """
         Predice dosis de insulina con contexto.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción (array con mediciones de glucosa recientes)
+        x_other : np.ndarray
+            Otras características para predicción
+        **context : dict
+            Variables contextuales como:
+            - carb_intake : float - Ingesta de carbohidratos (obligatorio)
+            - sleep_quality : int - Calidad del sueño (opcional, 0-10)
+            - work_intensity : int - Intensidad del trabajo (opcional, 0-10)
+            - exercise_intensity : int - Intensidad del ejercicio (opcional, 0-10)
+            
+        Retorna:
+        --------
+        float
+            Dosis de insulina recomendada en unidades
         """
         # Verificar parámetros obligatorios
-        if 'glucose' not in context or 'carb_intake' not in context:
-            raise ValueError("Los parámetros 'glucose' y 'carb_intake' son obligatorios")
+        if 'carb_intake' not in context:
+            raise ValueError("El parámetro 'carb_intake' es obligatorio")
         
         # Convertir a tensores
         x_cgm_t = torch.FloatTensor(x_cgm).to(self.device)
         x_other_t = torch.FloatTensor(x_other).to(self.device)
         
-        # Crear tensor de contexto
-        glucose = float(context['glucose'])
+        # Obtener valores de contexto
         carb_intake = float(context['carb_intake'])
         sleep_quality = float(context.get('sleep_quality', 5.0))
         work_intensity = float(context.get('work_intensity', 0.0))
         exercise_intensity = float(context.get('exercise_intensity', 0.0))
+        
+        # Extraer valor de glucosa actual del array x_cgm (último valor)
+        current_glucose = float(x_cgm[-1, -1] if len(x_cgm.shape) > 1 else x_cgm[-1])
         
         # Asegurar dimensiones correctas
         if len(x_cgm_t.shape) == 2:
@@ -123,15 +143,131 @@ class BaseDRLModel(nn.Module):
             x_other_t = x_other_t.unsqueeze(0)
         
         # Implementación específica por algoritmo
-        # (Sobrescrita por subclases si es necesario)
         with torch.no_grad():
-            action = self(x_cgm_t, x_other_t)
+            # Crear tensor de contexto
+            context_tensor = torch.FloatTensor([
+                current_glucose, carb_intake, sleep_quality,
+                work_intensity, exercise_intensity
+            ]).to(self.device).unsqueeze(0)
+            
+            # Combinar con x_other
+            enhanced_x_other = torch.cat([x_other_t, context_tensor], dim=1)
+            
+            # Usar el modelo para predecir
+            features = self(x_cgm_t, enhanced_x_other)
+            action = self.actor(features) if hasattr(self, 'actor') else features
             dose = action.cpu().numpy().flatten()[0]
         
         # Aplicar límites de seguridad
         dose = max(0.0, min(dose, 20.0))
         
-        return dose
+        return float(dose)
+    
+    def evaluate_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, 
+                         carb_intake: np.ndarray,
+                         true_doses: np.ndarray = None,
+                         sleep_quality: np.ndarray = None,
+                         work_intensity: np.ndarray = None,
+                         exercise_intensity: np.ndarray = None,
+                         simulator = None) -> Dict[str, float]:
+        """
+        Evalúa el rendimiento del modelo con métricas clínicas usando contexto adicional.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para evaluación (array con mediciones de glucosa recientes)
+        x_other : np.ndarray
+            Otras características para evaluación
+        carb_intake : np.ndarray
+            Ingesta de carbohidratos en gramos para cada instancia (obligatorio)
+        true_doses : np.ndarray, opcional
+            Dosis reales de insulina para comparación
+        sleep_quality : np.ndarray, opcional
+            Calidad del sueño para cada instancia (escala de 0-10)
+        work_intensity : np.ndarray, opcional
+            Intensidad del trabajo para cada instancia (escala de 0-10)
+        exercise_intensity : np.ndarray, opcional
+            Intensidad del ejercicio para cada instancia (escala de 0-10)
+        simulator : object, opcional
+            Simulador de glucosa para evaluar las métricas clínicas
+            
+        Retorna:
+        --------
+        Dict[str, float]
+            Diccionario con métricas de evaluación clínica
+        """
+        # Validar que las dimensiones coincidan
+        n_samples = len(x_cgm)
+        if len(carb_intake) != n_samples:
+            raise ValueError("La cantidad de valores de ingesta de carbohidratos debe coincidir con la cantidad de muestras")
+        
+        # Inicializar resultados
+        predictions = []
+        time_in_range = []
+        time_below_range = []
+        time_above_range = []
+        clinical_metrics = {}
+        
+        # Realizar predicciones para cada muestra
+        for i in range(n_samples):
+            # Extraer valores de contexto
+            context = {
+                'carb_intake': float(carb_intake[i])
+            }
+            
+            # Agregar parámetros opcionales si están disponibles
+            if sleep_quality is not None:
+                context['sleep_quality'] = float(sleep_quality[i])
+            if work_intensity is not None:
+                context['work_intensity'] = float(work_intensity[i])
+            if exercise_intensity is not None:
+                context['exercise_intensity'] = float(exercise_intensity[i])
+            
+            # Predecir dosis
+            dose = self.predict_with_context(x_cgm[i:i+1], x_other[i:i+1], **context)
+            predictions.append(dose)
+            
+            # Evaluar con simulador si está disponible
+            if simulator is not None:
+                # Extraer glucosa inicial del CGM
+                initial_glucose = float(x_cgm[i, -1] if len(x_cgm[i].shape) > 0 else x_cgm[i])
+                
+                # Simular trayectoria de glucosa
+                trajectory = simulator.simulate(
+                    initial_glucose=initial_glucose,
+                    insulin_doses=[dose],
+                    carb_intake=[float(carb_intake[i])],
+                    duration_hours=6  # Duración estándar para evaluación
+                )
+                
+                # Calcular métricas clínicas
+                in_range = np.logical_and(trajectory >= 70.0, trajectory <= 180.0)
+                below_range = trajectory < 70.0
+                above_range = trajectory > 180.0
+                
+                time_in_range.append(100.0 * np.mean(in_range))
+                time_below_range.append(100.0 * np.mean(below_range))
+                time_above_range.append(100.0 * np.mean(above_range))
+        
+        # Calcular métricas clínicas agregadas
+        if simulator is not None:
+            clinical_metrics = {
+                'time_in_range': float(np.mean(time_in_range)),
+                'time_below_range': float(np.mean(time_below_range)),
+                'time_above_range': float(np.mean(time_above_range))
+            }
+        
+        # Calcular métricas de error si se proporcionan las dosis reales
+        if true_doses is not None:
+            mae = np.mean(np.abs(np.array(predictions) - true_doses))
+            rmse = np.sqrt(np.mean(np.square(np.array(predictions) - true_doses)))
+            clinical_metrics.update({
+                'mae': float(mae),
+                'rmse': float(rmse)
+            })
+        
+        return clinical_metrics
     
     def update(self, batch: Dict) -> Dict[str, float]:
         """

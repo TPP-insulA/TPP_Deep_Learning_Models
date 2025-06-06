@@ -740,90 +740,49 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         
         return history
     
-    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, **context) -> float:
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray,
+        carb_intake: float,
+        sleep_quality: int = None,
+        work_intensity: int = None,
+        exercise_intensity: int = None) -> float:
         """
-        Realiza predicciones de dosis con variables contextuales adicionales.
+        Realiza predicciones con contexto adicional.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM para predicción
+            Datos CGM para predicción (array con mediciones de glucosa recientes)
         x_other : np.ndarray
             Otras características para predicción
-        **context : dict
-            Variables contextuales como:
-            - glucose : float - Nivel actual de glucosa (obligatorio)
-            - carb_intake : float - Ingesta de carbohidratos (obligatorio)
-            - sleep_quality : float - Calidad del sueño (opcional)
-            - work_intensity : float - Intensidad del trabajo (opcional)
-            - exercise_intensity : float - Intensidad del ejercicio (opcional)
-            
+        carb_intake : float
+            Ingesta de carbohidratos en gramos (obligatorio)
+        sleep_quality : int, opcional
+            Calidad del sueño (escala de 0-10)
+        work_intensity : int, opcional
+            Intensidad del trabajo (escala de 0-10)
+        exercise_intensity : int, opcional
+            Intensidad del ejercicio (escala de 0-10)
+                
         Retorna:
         --------
         float
             Dosis de insulina recomendada en unidades
         """
-        # Verificar que el modelo esté inicializado
-        if self.model is None:
-            if self.is_class:
-                try:
-                    self.model = self.model_cls(**self.model_kwargs)
-                    if isinstance(self.model, nn.Module):
-                        self.model = self.model.to(self.device)
-                except Exception as e:
-                    print_debug(f"Error al inicializar el modelo: {e}")
-                    raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
-            else:
-                raise ValueError(CONST_MODEL_INIT_ERROR.format("predecir"))
+        # Crear diccionario de contexto
+        context = {
+            'carb_intake': carb_intake
+        }
         
-        # Verificar parámetros obligatorios
-        if 'glucose' not in context:
-            raise ValueError("El parámetro 'glucose' es obligatorio para predict_with_context")
-        if 'carb_intake' not in context:
-            raise ValueError("El parámetro 'carb_intake' es obligatorio para predict_with_context")
+        # Añadir parámetros opcionales si están presentes
+        if sleep_quality is not None:
+            context['sleep_quality'] = sleep_quality
+        if work_intensity is not None:
+            context['work_intensity'] = work_intensity
+        if exercise_intensity is not None:
+            context['exercise_intensity'] = exercise_intensity
         
-        # Poner en modo evaluación
-        self.eval()
-        
-        # Verificar si el modelo tiene un método específico para contexto
-        if hasattr(self.model, 'predict_with_context'):
-            return self.model.predict_with_context(x_cgm, x_other, **context)
-        
-        # Implementación estándar si no hay métodos específicos
-        with torch.no_grad():
-            x_cgm_t = torch.FloatTensor(x_cgm).to(self.device)
-            x_other_t = torch.FloatTensor(x_other).to(self.device)
-            
-            # Crear tensor de contexto
-            glucose = context['glucose']
-            carb_intake = context['carb_intake']
-            sleep_quality = context.get('sleep_quality', 5.0)
-            work_intensity = context.get('work_intensity', 0.0)
-            exercise_intensity = context.get('exercise_intensity', 0.0)
-            
-            context_tensor = torch.FloatTensor([
-                glucose, carb_intake, sleep_quality,
-                work_intensity, exercise_intensity
-            ]).to(self.device)
-            
-            # Añadir dimensiones de lote si es necesario
-            if len(x_cgm_t.shape) == 2:  # Si es (time_steps, features)
-                x_cgm_t = x_cgm_t.unsqueeze(0)  # Convertir a (1, time_steps, features)
-            if len(x_other_t.shape) == 1:  # Si es (features)
-                x_other_t = x_other_t.unsqueeze(0)  # Convertir a (1, features)
-            context_tensor = context_tensor.unsqueeze(0)  # (1, context_features)
-            
-            # Mejorar x_other con contexto
-            enhanced_x_other = torch.cat([x_other_t, context_tensor], dim=1)
-            
-            # Predecir usando el modelo mejorado
-            predictions = self.forward(x_cgm_t, enhanced_x_other)
-            dose = predictions.cpu().numpy().flatten()[0]
-            
-            # Aplicar restricciones de seguridad
-            dose = max(0.0, min(dose, 20.0))
-            
-            return dose
+        # Delegar al wrapper específico y asegurar que se retorne un float
+        return float(self.wrapper.predict_with_context(x_cgm, x_other, **context))
 
     def save(self, path: str) -> None:
         """
