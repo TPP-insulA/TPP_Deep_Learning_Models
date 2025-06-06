@@ -20,7 +20,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT) 
 
 from config.models_config_old import A2C_A3C_CONFIG
-from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE, TARGET_GLUCOSE, POSITIVE_REWARD, MILD_PENALTY_REWARD, SEVERE_PENALTY_REWARD, CONST_DROPOUT, CONST_POLICY_LOSS, CONST_VALUE_LOSS, CONST_ENTROPY_LOSS, CONST_TOTAL_LOSS, CONST_EPISODE_REWARDS
+from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE, MAX_REWARD, HYPER_PENALTY_BASE, SEVERE_HYPER_PENALTY, CONST_DROPOUT, CONST_POLICY_LOSS, CONST_VALUE_LOSS, CONST_ENTROPY_LOSS, CONST_TOTAL_LOSS, CONST_EPISODE_REWARDS
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 
 # Constantes para uso repetido
@@ -1552,20 +1552,20 @@ class A2CWrapper(nn.Module):
                     current_glucose = current_glucose_normalized
                 
                 # Recompensa de glucosa usando constantes definidas
-                if LOWER_BOUND_NORMAL_GLUCOSE_RANGE <= current_glucose <= UPPER_BOUND_NORMAL_GLUCOSE_RANGE:
+                if HYPOGLYCEMIA_THRESHOLD <= current_glucose <= HYPERGLYCEMIA_THRESHOLD:
                     # Dentro del rango: recompensa basada en cercanía al óptimo
                     distance_from_target = abs(current_glucose - TARGET_GLUCOSE)
-                    max_distance_in_range = max(TARGET_GLUCOSE - LOWER_BOUND_NORMAL_GLUCOSE_RANGE, 
-                                                UPPER_BOUND_NORMAL_GLUCOSE_RANGE - TARGET_GLUCOSE)
-                    glucose_reward = POSITIVE_REWARD * (1 - distance_from_target / max_distance_in_range)
-                elif current_glucose < LOWER_BOUND_NORMAL_GLUCOSE_RANGE:
+                    max_distance_in_range = max(TARGET_GLUCOSE - HYPOGLYCEMIA_THRESHOLD, 
+                                                HYPERGLYCEMIA_THRESHOLD - TARGET_GLUCOSE)
+                    glucose_reward = MAX_REWARD * (1 - distance_from_target / max_distance_in_range)
+                elif current_glucose < HYPOGLYCEMIA_THRESHOLD:
                     # Hipoglucemia: penalización proporcional
-                    hypoglycemia_severity = (LOWER_BOUND_NORMAL_GLUCOSE_RANGE - current_glucose) / 30
-                    glucose_reward = SEVERE_PENALTY_REWARD * min(1.0, hypoglycemia_severity)
-                else:  # current_glucose > UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+                    hypoglycemia_severity = (HYPOGLYCEMIA_THRESHOLD - current_glucose) / 30
+                    glucose_reward = SEVERE_HYPER_PENALTY * min(1.0, hypoglycemia_severity)
+                else:  # current_glucose > HYPERGLYCEMIA_THRESHOLD
                     # Hiperglucemia: penalización proporcional
-                    hyperglycemia_severity = (current_glucose - UPPER_BOUND_NORMAL_GLUCOSE_RANGE) / 120
-                    glucose_reward = MILD_PENALTY_REWARD * min(1.0, hyperglycemia_severity)
+                    hyperglycemia_severity = (current_glucose - HYPERGLYCEMIA_THRESHOLD) / 120
+                    glucose_reward = HYPER_PENALTY_BASE * min(1.0, hyperglycemia_severity)
                 
                 # Combinar recompensas con mejor balance
                 # Ajustar los pesos de la recompensa para enfatizar la precisión de la dosis
