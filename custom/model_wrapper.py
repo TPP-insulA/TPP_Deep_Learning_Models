@@ -6,6 +6,7 @@ import flax.linen as nn
 
 from constants.constants import CONST_DEFAULT_SEED, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE
 from validation.evaluator import ClinicalMetricsEvaluator
+from validation.simulator import GlucoseSimulator
 
 class ModelWrapper:
     """
@@ -135,7 +136,7 @@ class ModelWrapper:
         preds = self.predict(x_cgm, x_other)
         return float(np.mean((preds - y) ** 2))
     
-    def evaluate_clinical(self, simulator, x_cgm: np.ndarray, x_other: np.ndarray, 
+    def evaluate_clinical(self, simulator: GlucoseSimulator, x_cgm: np.ndarray, x_other: np.ndarray, 
                     initial_glucose: np.ndarray, carb_intake: np.ndarray, 
                     ground_truth_insulin: np.ndarray = None, 
                     simulation_hours: int = 24) -> Dict[str, float]:
@@ -183,11 +184,12 @@ class ModelWrapper:
         # Simular trayectorias de glucosa usando las dosis predichas
         glucose_trajectories = []
         for i in range(len(initial_glucose)):
-            glucose_trajectory = simulator.simulate(
+            glucose_trajectory = simulator.predict_glucose_trajectory(
                 initial_glucose=initial_glucose[i],
                 insulin_doses=[predicted_doses[i]],
-                carb_intake=[carb_intake[i]],
-                duration_hours=simulation_hours
+                carb_intakes=[carb_intake[i]],
+                timestamps=[0],
+                prediction_horizon=simulation_hours
             )
             glucose_trajectories.append(glucose_trajectory)
         

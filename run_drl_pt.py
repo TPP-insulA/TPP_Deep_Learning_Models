@@ -5,13 +5,14 @@ import pandas as pd
 import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.discriminant_analysis import StandardScaler
 import torch
 import json
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 from validation.model_validation import validate_dosing_model
 from validation.simulator import GlucoseSimulator
-from constants.constants import CONST_METRIC_MAE, CONST_METRIC_R2, CONST_METRIC_RMSE, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+from constants.constants import CONST_METRIC_MAE, CONST_METRIC_R2, CONST_METRIC_RMSE, SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE
 from training.pytorch import (
     train_multiple_models, calculate_metrics, evaluate_clinical_metrics, 
     optimize_ensemble_weights_clinical, enhance_features
@@ -23,7 +24,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT)
 
 # Printer
-from custom.printer import cprint, coloured
+from custom.printer import cprint, coloured, print_warning
 
 # Configuración 
 from config.params import FRAMEWORK, PROCESSING, MODELS, MODELS_USAGE, EVALUATE, EVALUATE_USAGE
@@ -67,7 +68,7 @@ def is_model_creator(fn: Any) -> bool:
         try:
             import inspect
             sig = inspect.signature(fn)
-            # Si no tiene parámetros, es probable que sea un model creator
+            # Si no tiene parámetros, es probable que es un model creator
             # que debe llamarse para obtener la función de creación real
             return len(sig.parameters) == 0
         except Exception:
@@ -145,31 +146,116 @@ cprint(f"Total sujetos: {len(subject_files)}", 'yellow', 'bold')
 if PROCESSING == "pandas":
     cprint("Procesando datos con pandas...", 'blue', 'bold')
     df_pd: pd.DataFrame = pd_preprocess()
-    (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test, 
-     x_subject_train, x_subject_val, x_subject_test, y_train, y_val, y_test, 
-     x_subject_test, scaler_cgm, scaler_other, scaler_y) = pd_split(df_pd)
+    # No usamos pd_split, trabajamos con todo el dataset
+    
+    # Extraer características
+    x_cgm = np.stack(df_pd['cgm_window'].to_numpy())
+    x_other = df_pd.drop(['cgm_window', 'bolus'], axis=1).to_numpy()
+    y = df_pd['bolus'].to_numpy()
+    
+    # Normalizar datos si es necesario
+    scaler_cgm = StandardScaler().fit(x_cgm.reshape(x_cgm.shape[0], -1))
+    scaler_other = StandardScaler().fit(x_other)
+    scaler_y = StandardScaler().fit(y.reshape(-1, 1))
+    
+    x_cgm = scaler_cgm.transform(x_cgm.reshape(x_cgm.shape[0], -1)).reshape(x_cgm.shape)
+    x_other = scaler_other.transform(x_other)
+    y = y.reshape(-1, 1).flatten()
 elif PROCESSING == "polars":
     cprint("Procesando datos con polars...", 'blue', 'bold')
     df_pl: pl.DataFrame = pl_preprocess()
-    (x_cgm_train, x_cgm_val, x_cgm_test, x_other_train, x_other_val, x_other_test, 
-     x_subject_train, x_subject_val, x_subject_test, y_train, y_val, y_test, 
-     x_subject_test, scaler_cgm, scaler_other, scaler_y) = pl_split(df_pl)
+    
+    print(df_pl.head())
+    print(df_pl.columns)
+    
+    # Verificar si existen columnas CGM secuenciales
+    cgm_cols = [col for col in df_pl.columns if col.startswith('cgm_') and col[4:].isdigit()]
+    cgm_cols.sort(key=lambda x: int(x.split('_')[1]))  # Ordenar numéricamente
+    
+    if not cgm_cols:
+        cprint("Advertencia: No se encontraron columnas CGM secuenciales (cgm_0, cgm_1, etc.)", 'yellow', 'bold')
+        cprint("Generando datos CGM a partir de columnas de glucosa disponibles...", 'blue')
+        
+        # Utilizar columnas de glucosa disponibles para crear datos de CGM
+        glucose_cols = [col for col in df_pl.columns if 'glucose' in col.lower() and df_pl[col].dtype in 
+                       [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]]
+        
+        if not glucose_cols:
+            cprint("Error: No se encontraron columnas de glucosa utilizables", 'red', 'bold')
+            sys.exit(1)
+            
+        cprint(f"Usando columnas de glucosa: {', '.join(glucose_cols)}", 'blue')
+        
+        # Crear un array de CGM sintético a partir de las columnas de glucosa disponibles
+        glucose_values = df_pl.select(glucose_cols).to_numpy()
+        # Asegurar que tenemos al menos 12 puntos (replicando si es necesario)
+        if glucose_values.shape[1] < 12:
+            repeats = int(np.ceil(12 / glucose_values.shape[1]))
+            glucose_values = np.tile(glucose_values, (1, repeats))
+            glucose_values = glucose_values[:, :12]  # Limitar a 12 puntos
+            
+        # Reshape para obtener la forma [muestras, pasos_tiempo, 1]
+        x_cgm = glucose_values.reshape(glucose_values.shape[0], glucose_values.shape[1], 1)
+    else:
+        # Proceder con columnas CGM secuenciales como antes
+        cprint(f"Usando {len(cgm_cols)} columnas CGM secuenciales", 'blue')
+        cgm_values = df_pl.select(cgm_cols).to_numpy()
+        x_cgm = cgm_values.reshape(cgm_values.shape[0], len(cgm_cols), 1)
+    
+    # Extraer columnas para features adicionales, SOLO NUMÉRICAS
+    exclude_cols = cgm_cols + ['bolus']
+    
+    # Identificar columnas de fecha/hora y strings para excluir
+    datetime_cols = [col for col in df_pl.columns if df_pl[col].dtype == pl.Datetime]
+    string_cols = [col for col in df_pl.columns if df_pl[col].dtype == pl.Utf8]
+    
+    # Agregar todas las columnas no numéricas a la lista de exclusión
+    exclude_cols += datetime_cols + string_cols
+    
+    # Seleccionar solo columnas numéricas para features
+    feature_cols = [col for col in df_pl.columns 
+                   if col not in exclude_cols 
+                   and col != 'bolus' 
+                   and df_pl[col].dtype in [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8]]
+    
+    # Verificar que tenemos columnas para usar
+    if not feature_cols:
+        cprint("Error: No se encontraron columnas numéricas para features", 'red', 'bold')
+        sys.exit(1)
+    
+    cprint(f"Usando {len(feature_cols)} columnas numéricas como features", 'blue')
+    
+    x_other = df_pl.select(feature_cols).to_numpy()
+    y = df_pl['bolus'].to_numpy()
+    
+    # Normalizar datos
+    scaler_cgm = StandardScaler().fit(x_cgm.reshape(x_cgm.shape[0], -1))
+    scaler_other = StandardScaler().fit(x_other)
+    scaler_y = StandardScaler().fit(y.reshape(-1, 1))
+    
+    x_cgm = scaler_cgm.transform(x_cgm.reshape(x_cgm.shape[0], -1)).reshape(x_cgm.shape)
+    x_other = scaler_other.transform(x_other)
+    y = y.reshape(-1, 1).flatten()
 
 # Mostrar información sobre los datos
 cprint("\n==== INFORMACIÓN DE DATOS ====", 'cyan', 'bold')
-print(f"x_cgm_train: {x_cgm_train.shape}")
-print(f"x_cgm_val: {x_cgm_val.shape}")
-print(f"x_cgm_test: {x_cgm_test.shape}")
-print(f"x_other_train: {x_other_train.shape}")
-print(f"x_other_val: {x_other_val.shape}")
-print(f"x_other_test: {x_other_test.shape}")
-print(f"x_subject_train: {x_subject_train.shape}")
-print(f"x_subject_val: {x_subject_val.shape}")
-#print(f"x_subject_test: {x_subject_test.shape}")
-print(f"{x_subject_test=}")
-print(f"y_train: {y_train.shape}")
-print(f"y_val: {y_val.shape}")
-print(f"y_test: {y_test.shape}")
+print(f"x_cgm: {x_cgm.shape}")
+print(f"x_other: {x_other.shape}")
+print(f"y: {y.shape}")
+
+# Crear conjuntos de validación (10% de los datos)
+# Esto mantiene algo de validación para monitoreo del entrenamiento
+val_size = int(0.1 * len(y))
+indices = np.random.permutation(len(y))
+val_indices = indices[:val_size]
+train_indices = indices[val_size:]
+
+x_cgm_train, x_cgm_val = x_cgm[train_indices], x_cgm[val_indices]
+x_other_train, x_other_val = x_other[train_indices], x_other[val_indices]
+y_train, y_val = y[train_indices], y[val_indices]
+
+# Para test, usamos también datos de validación (temporalmente)
+x_cgm_test, x_other_test, y_test = x_cgm_val, x_other_val, y_val
 
 # Mejorar características utilizando la función del framework seleccionado
 cprint("\n==== GENERACIÓN DE CARACTERÍSTICAS ADICIONALES ====", 'cyan', 'bold')
@@ -185,7 +271,8 @@ cprint(f"Formas de entrada para los modelos: CGM {input_shapes[0]}, Otros {input
 
 # Entrenamiento de modelos
 cprint("\n==== ENTRENAMIENTO DE MODELOS ====", 'cyan', 'bold')
-histories, predictions, metrics = train_multiple_models(
+
+histories, predictions, clinical_metrics, trained_models = train_multiple_models(
     model_creators=use_models,
     input_shapes=input_shapes,
     x_cgm_train=x_cgm_train_enhanced,
@@ -211,8 +298,22 @@ simulator = GlucoseSimulator()
 
 # Extraer valores iniciales de glucosa y carbohidratos del conjunto de prueba
 initial_glucose = np.array([x_cgm_test_enhanced[i, -1, 0] for i in range(len(x_cgm_test_enhanced))])
-carb_intake_idx = next((i for i, col in enumerate(x_other_test_enhanced[0]) 
-                        if 'carb' in getattr(x_other_test, 'columns', [''])[i].lower()), 0)
+
+# Manera más robusta de identificar la columna de carbohidratos
+carb_intake_idx = 0  # Valor por defecto en caso de no encontrarla
+
+# Si x_other_test es un DataFrame con columnas nombradas
+if hasattr(x_other_test, 'columns'):
+    columns = x_other_test.columns
+    carb_columns = [i for i, col in enumerate(columns) if 'carb' in str(col).lower()]
+    if carb_columns:
+        carb_intake_idx = carb_columns[0]
+# Si no tiene columnas nombradas, asumimos que es la primera columna de x_other_test_enhanced
+elif x_other_test_enhanced.shape[1] > 0:
+    # Usamos la primera columna como fallback
+    carb_intake_idx = 0
+    print_warning("No se encontraron nombres de columnas. Asumiendo que los carbohidratos están en la primera columna.")
+
 carb_intake = np.array([x_other_test_enhanced[i, carb_intake_idx] for i in range(len(x_other_test_enhanced))])
 
 # Evaluar métricas clínicas para cada modelo
@@ -226,9 +327,11 @@ for model_name, model_pred in predictions.items():
     clinical_results[model_name] = clinical_metrics
     
     cprint(f"\nMétricas clínicas para {model_name}:", 'green', 'bold')
-    cprint(f"  Tiempo en Rango: {clinical_metrics['time_in_range']:.2f}%", 'green')
+    cprint(f"  Tiempo Severamente Bajo Rango: {clinical_metrics['time_severe_below']:.2f}%", 'red')
     cprint(f"  Tiempo Bajo Rango: {clinical_metrics['time_below_range']:.2f}%", 'yellow')
+    cprint(f"  Tiempo en Rango: {clinical_metrics['time_in_range']:.2f}%", 'green')
     cprint(f"  Tiempo Sobre Rango: {clinical_metrics['time_above_range']:.2f}%", 'yellow')
+    cprint(f"  Tiempo Severamente Sobre Rango: {clinical_metrics['time_severe_above']:.2f}%", 'red')
     
     # Guardar métricas clínicas
     with open(os.path.join(RESULTS_SAVE_DIR, f"{model_name}_clinical_metrics.json"), 'w') as f:
@@ -294,26 +397,30 @@ if active_evaluators:
     offline_results = {}
     
     # Evaluar cada modelo con cada evaluador activo
-    for model_name, model in histories.items():
+    for model_name, model in trained_models.items():
         cprint(f"\nEvaluando modelo {model_name}...", 'blue')
         model_results = {}
         
-        for eval_name, evaluator in active_evaluators.items():
+        for eval_name, evaluator_creator in active_evaluators.items():
             cprint(f"  Aplicando evaluador {eval_name}...", 'blue')
+            eval_instance = evaluator_creator(input_shapes[0], input_shapes[1])
             
-            # Inicializar y ajustar evaluador
-            eval_instance = evaluator(input_shapes[0], input_shapes[1])
+            # Entrenar evaluador con los datos de entrenamiento
             eval_instance.fit(
-                x_cgm_train_enhanced, x_other_train_enhanced, y_train,
-                validation_data=((x_cgm_val_enhanced, x_other_val_enhanced), y_val)
+                x_cgm_train_enhanced, 
+                x_other_train_enhanced, 
+                y_train,
+                validation_data=((x_cgm_val_enhanced, x_other_val_enhanced), y_val),
+                epochs=50,
+                batch_size=64
             )
             
-            # Evaluar política del modelo
+            # Evaluar política del modelo usando directamente el modelo entrenado
             eval_metrics = eval_instance.evaluate_policy(
-                model, 
-                x_cgm_test_enhanced, 
-                x_other_test_enhanced, 
-                y_test,
+                policy=model,
+                x_cgm_test=x_cgm_test_enhanced,
+                x_other_test=x_other_test_enhanced,
+                y_test=y_test,
                 simulator=simulator
             )
             
@@ -433,16 +540,26 @@ if clinical_results:
     models = list(clinical_results.keys())
     tir_values = [clinical_results[m]['time_in_range'] for m in models]
     tbr_values = [clinical_results[m]['time_below_range'] for m in models]
+    tsb_values = [clinical_results[m]['time_severe_below'] for m in models]  # Nuevo
     tar_values = [clinical_results[m]['time_above_range'] for m in models]
-    
+    tsa_values = [clinical_results[m]['time_severe_above'] for m in models]  # Nuevo
+
     # Barras apiladas
     plt.subplot(1, 2, 1)
-    bars_tir = plt.bar(models, tir_values, label='Tiempo en Rango (70-180 mg/dL)', color='green')
-    bars_tbr = plt.bar(models, tbr_values, bottom=tir_values, label='Tiempo Bajo Rango (<70 mg/dL)', color='red')
-    
-    # Calcular posición para TAR
-    tir_tbr = [tir + tbr for tir, tbr in zip(tir_values, tbr_values)]
-    bars_tar = plt.bar(models, tar_values, bottom=tir_tbr, label='Tiempo Sobre Rango (>180 mg/dL)', color='orange')
+    bars_tsb = plt.bar(models, tsb_values, label='Hipoglucemia Severa (<54 mg/dL)', color='darkred')
+    bars_tbr = plt.bar(models, tbr_values, bottom=tsb_values, label='Hipoglucemia (54-70 mg/dL)', color='red')
+
+    # Posición para TIR
+    tsb_tbr = [tsb + tbr for tsb, tbr in zip(tsb_values, tbr_values)]
+    bars_tir = plt.bar(models, tir_values, bottom=tsb_tbr, label='Tiempo en Rango (70-180 mg/dL)', color='green')
+
+    # Posición para TAR
+    tsb_tbr_tir = [tsb + tbr + tir for tsb, tbr, tir in zip(tsb_values, tbr_values, tir_values)]
+    bars_tar = plt.bar(models, tar_values, bottom=tsb_tbr_tir, label='Hiperglucemia (180-250 mg/dL)', color='orange')
+
+    # Posición para TSA
+    tsb_tbr_tir_tar = [tsb + tbr + tir + tar for tsb, tbr, tir, tar in zip(tsb_values, tbr_values, tir_values, tar_values)]
+    bars_tsa = plt.bar(models, tsa_values, bottom=tsb_tbr_tir_tar, label='Hiperglucemia Severa (>250 mg/dL)', color='darkred')
     
     plt.title('Distribución de Métricas Clínicas')
     plt.xlabel('Modelo')
@@ -468,39 +585,7 @@ if clinical_results:
     plt.savefig(os.path.join(FIGURES_DIR, 'clinical_metrics.png'))
     plt.close()
 
-# 3. Visualización de métricas de regresión
-plt.figure(figsize=(12, 6))
-models = list(metrics.keys())
-mae_values = [metrics[m].get(CONST_METRIC_MAE, 0) for m in models]
-rmse_values = [metrics[m].get(CONST_METRIC_RMSE, 0) for m in models]
-r2_values = [metrics[m].get(CONST_METRIC_R2, 0) for m in models]
-
-x = np.arange(len(models))
-width = 0.35
-
-plt.subplot(1, 2, 1)
-plt.bar(x - width/2, mae_values, width, label='MAE')
-plt.bar(x + width/2, rmse_values, width, label='RMSE')
-plt.xlabel('Modelos')
-plt.ylabel('Error')
-plt.title('Comparación de Error de Predicción')
-plt.xticks(x, models, rotation=45)
-plt.legend()
-plt.grid(True)
-
-plt.subplot(1, 2, 2)
-plt.bar(x, r2_values, width, color='green')
-plt.xlabel('Modelos')
-plt.ylabel('R²')
-plt.title('Coeficiente de Determinación (R²)')
-plt.xticks(x, models, rotation=45)
-plt.grid(True)
-
-plt.tight_layout()
-plt.savefig(os.path.join(FIGURES_DIR, 'regression_metrics.png'))
-plt.close()
-
-# 4. Visualización de evaluaciones offline (si existen)
+# 3. Visualización de evaluaciones offline (si existen)
 if 'offline_results' in locals() and offline_results:
     evaluators = list(next(iter(offline_results.values())).keys())
     
@@ -531,47 +616,6 @@ if 'offline_results' in locals() and offline_results:
 # Generación de Reporte
 cprint("\n==== GENERACIÓN DE REPORTE ====", 'cyan', 'bold')
 
-# Preparar datos para el reporte
-report_data = {
-    'title': f'Informe de Modelos DRL para Dosificación de Insulina ({FRAMEWORK})',
-    'date': datetime.now().strftime('%d/%m/%Y'),
-    'framework': FRAMEWORK,
-    'models': {
-        'trained': list(metrics.keys()),
-        'best_clinical': max(clinical_results, key=lambda m: clinical_results[m]['time_in_range']) if clinical_results else None
-    },
-    'metrics': metrics,
-    'clinical_metrics': clinical_results,
-    'figures': {
-        'training': [f'{model_name}_training.png' for model_name in histories.keys()],
-        'clinical': ['clinical_metrics.png'],
-        'regression': ['regression_metrics.png']
-    }
-}
-
-# Agregar resultados de evaluación offline si existen
-if 'offline_results' in locals() and offline_results:
-    report_data['offline_evaluation'] = offline_results
-    report_data['figures']['offline'] = [f'{evaluator}_evaluation.png' for evaluator in evaluators]
-
-# Crear reporte
-try:
-    report_path = os.path.join(RESULTS_SAVE_DIR, f'drl_models_report_{FRAMEWORK}.typ')
-    create_report(
-        data=report_data,
-        output_path=report_path,
-        figures_dir=FIGURES_DIR
-    )
-    
-    # Renderizar a PDF si typst está disponible
-    pdf_path = render_to_pdf(report_path)
-    if pdf_path:
-        cprint(f"Reporte generado con éxito: {pdf_path}", 'green', 'bold')
-    else:
-        cprint(f"Reporte Typst generado: {report_path}", 'green', 'bold')
-        cprint("Para convertir a PDF, ejecute: typst compile <archivo.typ>", 'yellow')
-except Exception as e:
-    cprint(f"Error al generar el reporte: {e}", 'red', 'bold')
 
 # Finalización del proceso
 

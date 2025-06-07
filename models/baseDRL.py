@@ -3,6 +3,8 @@ import torch.nn as nn
 import numpy as np
 from typing import Dict, Tuple, List, Optional
 
+from validation.simulator import GlucoseSimulator
+
 class BaseDRLModel(nn.Module):
     """
     Clase base para modelos de aprendizaje por refuerzo profundo.
@@ -169,7 +171,7 @@ class BaseDRLModel(nn.Module):
                          sleep_quality: np.ndarray = None,
                          work_intensity: np.ndarray = None,
                          exercise_intensity: np.ndarray = None,
-                         simulator = None) -> Dict[str, float]:
+                         simulator: GlucoseSimulator = None) -> Dict[str, float]:
         """
         Evalúa el rendimiento del modelo con métricas clínicas usando contexto adicional.
         
@@ -234,11 +236,12 @@ class BaseDRLModel(nn.Module):
                 initial_glucose = float(x_cgm[i, -1] if len(x_cgm[i].shape) > 0 else x_cgm[i])
                 
                 # Simular trayectoria de glucosa
-                trajectory = simulator.simulate(
+                trajectory = simulator.predict_glucose_trajectory(
                     initial_glucose=initial_glucose,
                     insulin_doses=[dose],
-                    carb_intake=[float(carb_intake[i])],
-                    duration_hours=6  # Duración estándar para evaluación
+                    carb_intakes=[float(carb_intake[i])],
+                    timestamps=[0],
+                    prediction_horizon=6
                 )
                 
                 # Calcular métricas clínicas

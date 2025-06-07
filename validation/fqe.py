@@ -22,8 +22,11 @@ from tqdm import tqdm
 
 from constants.constants import (
     CONST_DEFAULT_BATCH_SIZE, OFFLINE_GAMMA, CONST_DEFAULT_EPOCHS,
-    CONST_CONFIDENCE_LEVEL
+    CONST_CONFIDENCE_LEVEL, SEVERE_HYPOGLYCEMIA_THRESHOLD,
+    HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD
 )
+from config.models_config import EARLY_STOPPING_POLICY
+from custom.printer import print_warning
 from validation.networks.QNetwork import QNetwork
 
 class FittedQEvaluation:
@@ -85,7 +88,7 @@ class FittedQEvaluation:
         self.bootstrap_estimates = []
     
     def _generate_rewards(self, x_cgm: np.ndarray, x_other: np.ndarray, 
-                        actions: np.ndarray) -> np.ndarray:
+                    actions: np.ndarray) -> np.ndarray:
         """
         Genera recompensas basadas en el mantenimiento de glucosa en rango.
         
@@ -103,24 +106,55 @@ class FittedQEvaluation:
         np.ndarray
             Recompensas calculadas
         """
-        # Extraer valores de glucosa actuales (último valor de cada serie CGM)
-        current_glucose = np.array([x[-1] for x in x_cgm.reshape(-1, self.cgm_input_dim[0])])
-        
         # Inicializar recompensas
         rewards = np.zeros_like(actions, dtype=np.float32)
         
-        # Asignar recompensas basadas en el rango de glucosa
-        # En rango (70-180 mg/dL) - recompensa positiva
-        in_range = (current_glucose >= 70.0) & (current_glucose <= 180.0)
-        rewards[in_range] = 1.0
+        # Extraer valores de glucosa actuales de manera segura según la forma de los datos
+        if len(x_cgm.shape) == 3:  # (samples, time_steps, features)
+            current_glucose = x_cgm[:, -1, 0]  # Último paso de tiempo, primera característica
+        elif len(x_cgm.shape) == 2:  # (samples, time_steps) o (samples, features)
+            if x_cgm.shape[0] == actions.shape[0]:  # Verificar si las muestras coinciden
+                if x_cgm.shape[1] > 1:
+                    current_glucose = x_cgm[:, -1]  # Último paso de tiempo
+                else:
+                    current_glucose = x_cgm[:, 0]  # Primera característica
+            else:
+                raise ValueError(f"Número de muestras no coincide: {x_cgm.shape[0]} vs {actions.shape[0]}")
+        else:
+            raise ValueError(f"Forma inesperada para x_cgm: {x_cgm.shape}")
         
-        # Hipoglucemia (<70 mg/dL) - penalización severa
-        hypo = current_glucose < 70.0
+        # Verificar que las dimensiones coincidan
+        if len(current_glucose) != len(rewards):
+            raise ValueError(f"Dimensiones no coinciden: {len(current_glucose)} valores de glucosa pero {len(rewards)} recompensas")
+        
+        # Hipoglucemia severa (<54 mg/dL) - penalización muy severa
+        severe_hypo = current_glucose < SEVERE_HYPOGLYCEMIA_THRESHOLD
+        rewards[severe_hypo] = -4.0
+        
+        # Hipoglucemia moderada (54-70 mg/dL) - penalización severa
+        hypo = np.logical_and(
+            current_glucose >= SEVERE_HYPOGLYCEMIA_THRESHOLD,
+            current_glucose < HYPOGLYCEMIA_THRESHOLD
+        )
         rewards[hypo] = -2.0
         
-        # Hiperglucemia (>180 mg/dL) - penalización moderada
-        hyper = current_glucose > 180.0
+        # En rango (70-180 mg/dL) - recompensa positiva
+        in_range = np.logical_and(
+            current_glucose >= HYPOGLYCEMIA_THRESHOLD, 
+            current_glucose <= HYPERGLYCEMIA_THRESHOLD
+        )
+        rewards[in_range] = 1.0
+        
+        # Hiperglucemia moderada (180-250 mg/dL) - penalización moderada
+        hyper = np.logical_and(
+            current_glucose > HYPERGLYCEMIA_THRESHOLD,
+            current_glucose <= SEVERE_HYPERGLYCEMIA_THRESHOLD
+        )
         rewards[hyper] = -1.0
+        
+        # Hiperglucemia severa (>250 mg/dL) - penalización severa
+        severe_hyper = current_glucose > SEVERE_HYPERGLYCEMIA_THRESHOLD
+        rewards[severe_hyper] = -3.0
         
         return rewards
     
@@ -128,7 +162,10 @@ class FittedQEvaluation:
            validation_data: Optional[Tuple] = None,
            batch_size: int = CONST_DEFAULT_BATCH_SIZE,
            epochs: int = CONST_DEFAULT_EPOCHS,
-           bootstrap_iterations: int = 20) -> Dict[str, List[float]]:
+           bootstrap_iterations: int = 20,
+           patience: int = EARLY_STOPPING_POLICY['early_stopping_patience'],
+           min_delta: float = EARLY_STOPPING_POLICY['early_stopping_min_delta'],
+           restore_best_weights: bool = EARLY_STOPPING_POLICY['early_stopping_restore_best_weights']) -> Dict[str, List[float]]:
         """
         Entrena el modelo FQE con los datos proporcionados.
         
@@ -148,7 +185,13 @@ class FittedQEvaluation:
             Número de épocas (default: 10)
         bootstrap_iterations : int, opcional
             Número de iteraciones bootstrap para intervalos de confianza (default: 20)
-            
+        patience : int, opcional
+            Número de épocas sin mejora antes de detener el entrenamiento
+        min_delta : float, opcional
+            Mínima mejora para considerar progreso
+        restore_best_weights : bool, opcional
+            Si restaurar los mejores pesos al finalizar
+        
         Retorna:
         --------
         Dict[str, List[float]]
@@ -172,12 +215,26 @@ class FittedQEvaluation:
             'val_loss': []
         }
         
-        # Entrenamiento principal
-        for epoch in range(epochs):
+        # Variables para early stopping
+        best_val_loss = float('inf')
+        best_weights = None
+        early_stop_counter = 0
+        
+        # Crear barras de progreso
+        epoch_progress = tqdm(range(epochs), desc="Entrenamiento", position=0)
+        
+        # Línea de métricas que se actualizará dinámicamente
+        metrics_line = ""
+        
+        for epoch in epoch_progress:
             epoch_loss = 0.0
             self.q_network.train()
             
-            for batch_cgm, batch_other, batch_actions, batch_rewards in tqdm(dataloader, desc=f"Época {epoch+1}/{epochs}"):
+            # Barra de progreso para los batches (no mostrará progreso individual)
+            batch_progress = tqdm(dataloader, desc=f"Época {epoch+1}/{epochs}", 
+                           leave=False, position=1)
+            
+            for batch_cgm, batch_other, batch_actions, batch_rewards in batch_progress:
                 batch_cgm = batch_cgm.to(self.device)
                 batch_other = batch_other.to(self.device)
                 batch_actions = batch_actions.to(self.device)
@@ -186,7 +243,7 @@ class FittedQEvaluation:
                 # Forward pass
                 q_values = self.q_network(batch_cgm, batch_other, batch_actions)
                 
-                # Para el estado siguiente, usamos la misma acción (simplificación para FQE en este contexto)
+                # Para el estado siguiente, usamos la misma acción (simplificación para FQE)
                 with torch.no_grad():
                     target_q_values = batch_rewards + self.gamma * self.target_q_network(
                         batch_cgm, batch_other, batch_actions
@@ -211,12 +268,48 @@ class FittedQEvaluation:
             history['loss'].append(avg_loss)
             
             # Validación si hay datos disponibles
+            val_loss = None
             if validation_data:
                 val_loss = self._validate(validation_data[0][0], validation_data[0][1], validation_data[1])
                 history['val_loss'].append(val_loss)
-                print(f"Época {epoch+1}/{epochs} - Pérdida: {avg_loss:.4f} - Pérdida val: {val_loss:.4f}")
+                metrics_line = f"Pérdida: {avg_loss:.4f} - Pérdida val: {val_loss:.4f}"
+                
+                # Verificación para early stopping con datos de validación
+                if val_loss < best_val_loss - min_delta:
+                    best_val_loss = val_loss
+                    if restore_best_weights:
+                        best_weights = {k: v.cpu().clone() for k, v in self.q_network.state_dict().items()}
+                    early_stop_counter = 0
+                else:
+                    early_stop_counter += 1
             else:
-                print(f"Época {epoch+1}/{epochs} - Pérdida: {avg_loss:.4f}")
+                # Sin datos de validación, usar pérdida de entrenamiento
+                metrics_line = f"Pérdida: {avg_loss:.4f}"
+                
+                # Verificación para early stopping con pérdida de entrenamiento
+                if avg_loss < best_val_loss - min_delta:
+                    best_val_loss = avg_loss
+                    if restore_best_weights:
+                        best_weights = {k: v.cpu().clone() for k, v in self.q_network.state_dict().items()}
+                    early_stop_counter = 0
+                else:
+                    early_stop_counter += 1
+            
+            # Actualizar descripción de la barra de progreso con las métricas
+            epoch_progress.set_description(f"Entrenamiento: {metrics_line}")
+            
+            # Verificar si se debe activar early stopping
+            if early_stop_counter >= patience:
+                epoch_progress.write(f"Early stopping en época {epoch+1}")
+                break
+        
+        # Restaurar los mejores pesos si corresponde
+        if restore_best_weights and best_weights is not None:
+            self.q_network.load_state_dict(best_weights)
+            if val_loss is not None:
+                epoch_progress.write(f"Restaurados mejores pesos con pérdida de validación: {best_val_loss:.4f}")
+            else:
+                epoch_progress.write(f"Restaurados mejores pesos con pérdida de entrenamiento: {best_val_loss:.4f}")
         
         # Realizar bootstrap para intervalos de confianza
         self._bootstrap(x_cgm, x_other, y_actions, bootstrap_iterations)
@@ -309,8 +402,8 @@ class FittedQEvaluation:
         
         Parámetros:
         -----------
-        policy : ModelWrapper
-            Política (modelo) a evaluar
+        policy : ModelWrapper or Dict
+            Política (modelo) a evaluar o diccionario con historial
         x_cgm_test : np.ndarray
             Datos CGM de prueba
         x_other_test : np.ndarray
@@ -327,13 +420,44 @@ class FittedQEvaluation:
         """
         self.q_network.eval()
         
-        # Obtener acciones de la política
-        if hasattr(policy, 'predict'):
-            actions = policy.predict(x_cgm_test, x_other_test)
+        # Manejar el caso donde policy es un diccionario (historial) en lugar de un modelo
+        if isinstance(policy, dict):
+            # Si se pasó un diccionario de historial, usamos directamente las predicciones
+            if 'predictions' in policy:
+                actions = policy['predictions']
+            else:
+                # Si no hay predicciones, no podemos evaluar
+                print_warning("No se pueden evaluar políticas sin método predict o predicciones")
+                return {
+                    'estimated_value': 0.0,
+                    'confidence_lower': 0.0,
+                    'confidence_upper': 0.0,
+                    'bootstrap_std': 0.0
+                }
         else:
-            # Manejar el caso del wrapper del ensamble
-            actions = np.array([policy.predict(x_cgm_test[i:i+1], x_other_test[i:i+1]) 
-                               for i in range(len(x_cgm_test))])
+            # Obtener acciones de la política (modelo)
+            # Primero intentar con predict_with_context si está disponible
+            if hasattr(policy, 'predict_with_context'):
+                # Crear un array para almacenar las predicciones
+                actions = np.zeros(len(x_cgm_test))
+                
+                # Extraer índice de carbohidratos (asumimos que está en la primera posición)
+                carb_intake_idx = 0
+                
+                # Hacer predicciones individualmente con contexto
+                for i in range(len(x_cgm_test)):
+                    carb_intake = float(x_other_test[i, carb_intake_idx])
+                    actions[i] = policy.predict_with_context(
+                        x_cgm_test[i:i+1], 
+                        x_other_test[i:i+1],
+                        carb_intake=carb_intake
+                    )
+            elif hasattr(policy, 'predict'):
+                actions = policy.predict(x_cgm_test, x_other_test)
+            else:
+                # Manejar el caso del wrapper del ensamble
+                actions = np.array([policy.predict(x_cgm_test[i:i+1], x_other_test[i:i+1]) 
+                                   for i in range(len(x_cgm_test))])
         
         # Convertir a tensores
         x_cgm_tensor = torch.FloatTensor(x_cgm_test).to(self.device)

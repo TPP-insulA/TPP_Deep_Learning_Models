@@ -5,7 +5,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from scipy.optimize import minimize
 from joblib import Parallel, delayed
 from config.params import DEBUG
-from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES, CONST_FRAMEWORKS, CONST_DURATION_HOURS, LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+from constants.constants import CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2, CONST_MODELS, CONST_BEST_PREFIX, CONST_LOGS_DIR, CONST_DEFAULT_EPOCHS, CONST_DEFAULT_BATCH_SIZE, CONST_DEFAULT_SEED, CONST_FIGURES_DIR, CONST_MODEL_TYPES, CONST_FRAMEWORKS, CONST_DURATION_HOURS, SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE
 from custom.printer import print_debug, print_info, print_warning, print_error
 from validation.simulator import GlucoseSimulator
 
@@ -51,7 +51,7 @@ def calculate_metrics(y_true: np.ndarray, y_pred: np.ndarray,
     
     return metrics
 
-def evaluate_clinical_metrics(simulator, predictions: np.ndarray, initial_glucose: np.ndarray, 
+def evaluate_clinical_metrics(simulator: GlucoseSimulator, predictions: np.ndarray, initial_glucose: np.ndarray, 
                             carb_intake: np.ndarray, duration_hours: int = CONST_DURATION_HOURS) -> Dict[str, float]:
     """
     Evalúa métricas clínicas utilizando un simulador de glucosa.
@@ -78,34 +78,50 @@ def evaluate_clinical_metrics(simulator, predictions: np.ndarray, initial_glucos
     time_in_range = []
     time_below_range = []
     time_above_range = []
+    time_severe_below = []
+    time_severe_above = []
     
     # Simular para cada predicción
     for i in range(len(predictions)):
         # Simular trayectoria de glucosa
-        trajectory = simulator.simulate(
+        trajectory = simulator.predict_glucose_trajectory(
             initial_glucose=initial_glucose[i],
             insulin_doses=[predictions[i]],
-            carb_intake=[carb_intake[i]],
-            duration_hours=duration_hours
+            carb_intakes=[carb_intake[i]],
+            timestamps=[0],
+            prediction_horizon=duration_hours
         )
         
-        # Calcular métricas de tiempo en rango
+        # Calcular métricas de tiempo en diferentes rangos de glucosa
+        severe_below = trajectory < SEVERE_HYPOGLYCEMIA_THRESHOLD
+        below_range = np.logical_and(
+            trajectory >= SEVERE_HYPOGLYCEMIA_THRESHOLD,
+            trajectory < HYPOGLYCEMIA_THRESHOLD
+        )
         in_range = np.logical_and(
-            trajectory >= LOWER_BOUND_NORMAL_GLUCOSE_RANGE, 
-            trajectory <= UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+            trajectory >= HYPOGLYCEMIA_THRESHOLD, 
+            trajectory <= HYPERGLYCEMIA_THRESHOLD
         )
-        below_range = trajectory < LOWER_BOUND_NORMAL_GLUCOSE_RANGE
-        above_range = trajectory > UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+        above_range = np.logical_and(
+            trajectory > HYPERGLYCEMIA_THRESHOLD,
+            trajectory <= SEVERE_HYPERGLYCEMIA_THRESHOLD
+        )
+        severe_above = trajectory > SEVERE_HYPERGLYCEMIA_THRESHOLD
         
-        time_in_range.append(np.mean(in_range) * 100)  # Porcentaje
+        # Calcular porcentajes de tiempo en cada rango
+        time_severe_below.append(np.mean(severe_below) * 100)  # Porcentaje
         time_below_range.append(np.mean(below_range) * 100)  # Porcentaje
+        time_in_range.append(np.mean(in_range) * 100)  # Porcentaje
         time_above_range.append(np.mean(above_range) * 100)  # Porcentaje
+        time_severe_above.append(np.mean(severe_above) * 100)  # Porcentaje
     
     # Métricas clínicas promedio
     return {
         'time_in_range': float(np.mean(time_in_range)),
         'time_below_range': float(np.mean(time_below_range)),
-        'time_above_range': float(np.mean(time_above_range))
+        'time_severe_below': float(np.mean(time_severe_below)),
+        'time_above_range': float(np.mean(time_above_range)),
+        'time_severe_above': float(np.mean(time_severe_above))
     }
 
 def create_ensemble_prediction(predictions_dict: Dict[str, np.ndarray], 

@@ -35,20 +35,16 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         """
         ModelWrapper.__init__(self)
         nn.Module.__init__(self)
-        super().__init__()
         
-        # Determinar si es una clase o una instancia
-        self.is_class = isinstance(model_or_cls, type) or callable(model_or_cls)
-        
+        # Determinar correctamente si es una clase o una instancia
+        self.is_class = isinstance(model_or_cls, type)
+    
         if self.is_class:
             self.model_cls = model_or_cls
+            self.model = None
             self.model_kwargs = model_kwargs
-            # Inicializar el modelo inmediatamente si es posible
-            try:
-                self.model = self.model_cls(**self.model_kwargs)
-            except Exception:
-                self.model = None
         else:
+            self.model_cls = type(model_or_cls)
             self.model = model_or_cls
             self.model_kwargs = {}
             

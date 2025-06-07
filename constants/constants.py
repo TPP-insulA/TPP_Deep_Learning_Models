@@ -37,13 +37,35 @@ BASAL_COL: str = "basal_rate"
 TEMP_BASAL_COL: str = "temp_basal_rate"
 
 # Constantes de los Modelos
-## Valores de Glucosa
-LOWER_BOUND_NORMAL_GLUCOSE_RANGE: float = 70.0
-UPPER_BOUND_NORMAL_GLUCOSE_RANGE: float = 180.0
-TARGET_GLUCOSE: float = 100.0
-POSITIVE_REWARD: float = 1.0
-MILD_PENALTY_REWARD: float = -0.5
-SEVERE_PENALTY_REWARD: float = -1.0
+# Rangos de glucosa para función de recompensa
+SEVERE_HYPOGLYCEMIA_THRESHOLD: float = 54.0  # mg/dL
+HYPOGLYCEMIA_THRESHOLD: float = 70.0  # mg/dL 
+HYPERGLYCEMIA_THRESHOLD: float = 180.0  # mg/dL
+SEVERE_HYPERGLYCEMIA_THRESHOLD: float = 250.0  # mg/dL
+TARGET_GLUCOSE: float = 125.0  # mg/dL - Objetivo ideal
+
+# Métricas de recompensa
+SEVERE_HYPO_PENALTY = -10.0  # Penalización severa para hipoglucemia grave
+HYPO_PENALTY_BASE = -5.0     # Penalización base para hipoglucemia
+HYPER_PENALTY_BASE = -3.0    # Penalización base para hiperglucemia
+SEVERE_HYPER_PENALTY = -7.0  # Penalización para hiperglucemia grave
+MAX_REWARD = 1.0             # Recompensa máxima para nivel óptimo
+
+# Configuración para simulación
+SIMULATION_HOURS = 6         # Horas de simulación para métricas clínicas
+DEFAULT_CARB_INTAKE = 50.0   # Ingesta de carbohidratos predeterminada
+MAX_IOB = 5.0                # Máximo de insulina a bordo
+
+# Constantes para aprendizaje por refuerzo offline
+OFFLINE_RL_REWARD_SCALE = 1.0
+OFFLINE_GAMMA = 0.99  # Factor de descuento para recompensas futuras
+OFFLINE_LAMBDA = 0.95  # Factor para GAE (Generalized Advantage Estimation)
+
+# Constantes para evaluación fuera de política
+CONST_IPS_CLIP: float = 10.0  # Clipping para importance sampling
+CONST_CQL_ALPHA: float = 1.0  # Parámetro para Conservative Q-Learning
+CONST_CONFIDENCE_LEVEL: float = 0.95  # Nivel de confianza para intervalos
+
 ## Constantes de texto
 CONST_ACTOR = "actor"
 CONST_ACTOR_LOSS = "actor_loss"
@@ -75,23 +97,6 @@ CONST_TANH = "tanh"
 CONST_LEAKY_RELU = "leaky_relu"
 CONST_GELU = "gelu"
 
-# Constantes para aprendizaje por refuerzo offline
-OFFLINE_RL_REWARD_SCALE = 1.0
-OFFLINE_GAMMA = 0.99  # Factor de descuento para recompensas futuras
-OFFLINE_LAMBDA = 0.95  # Factor para GAE (Generalized Advantage Estimation)
-
-# Rangos de glucosa para función de recompensa
-SEVERE_HYPOGLYCEMIA_THRESHOLD = 54.0  # mg/dL
-HYPOGLYCEMIA_THRESHOLD = 70.0  # mg/dL 
-HYPERGLYCEMIA_THRESHOLD = 180.0  # mg/dL
-SEVERE_HYPERGLYCEMIA_THRESHOLD = 250.0  # mg/dL
-TARGET_GLUCOSE = 100.0  # mg/dL - Objetivo ideal
-
-# Constantes para evaluación fuera de política
-CONST_IPS_CLIP = 10.0  # Clipping para importance sampling
-CONST_CQL_ALPHA = 1.0  # Parámetro para Conservative Q-Learning
-CONST_CONFIDENCE_LEVEL = 0.95  # Nivel de confianza para intervalos
-
 # ===============================
 
 # Modelos de Aprendizaje Profundo
@@ -119,7 +124,13 @@ DDPG = "Deep Deterministic Policy Gradient"
 DQN = "Deep Q-Network"
 PPO = "Proximal Policy Optimization"
 SAC = "Soft Actor-Critic"
+TD3_BC = "Twin Delayed Deep Deterministic Policy Gradient with Behavior Cloning"
 TRPO = "Trust Region Policy Optimization"
+
+# Evaluación
+FQE = "Fitted Q Evaluation"
+DRE = "Doubly Robust Evaluation"
+# CQL = "Conservative Q-Learning"
 # Mapa de Nombres de Modelos
 CONST_MODELS_NAMES = {
     # Modelos de Aprendizaje Profundo
@@ -203,6 +214,7 @@ CONST_MODELS_NAMES = {
     "pt_ppo": PPO,
     "pt_sac": SAC,
     "pt_trpo": TRPO,
+    "pt_td3_bc": TD3_BC,
 }
 # Reporte
 HEADERS_BACKGROUND = "#e7da27"

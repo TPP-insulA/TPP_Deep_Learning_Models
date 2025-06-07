@@ -3,7 +3,7 @@ from typing import Dict, Union
 # Modelos
 ## PyTorch
 ### Modelos de Aprendizaje por Refuerzo Profundo
-
+from models.drl.ddpg import create_ddpg_model
 # Evaluadores
 from validation.fqe import create_fqe_evaluator
 from validation.dre import create_dre_evaluator
@@ -12,6 +12,7 @@ from validation.dre import create_dre_evaluator
 DEBUG = False
 FRAMEWORK_OP = 2
 PROCESSING_OP = 1
+USE_EXCEL_DATA = False
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
@@ -78,7 +79,7 @@ CONFIG_PROCESSING: dict[str, Union[int, float, str]] = {
 ## Modelos PyTorch disponibles.
 MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
-    "pt_ddpg": "",
+    "pt_ddpg": create_ddpg_model,
     "pt_dqn": "",
     "pt_sac": "",
     "pt_td3_bc": "",
@@ -88,9 +89,9 @@ MODELS = {
 MODELS_USAGE: Dict[str, bool] = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
     "pt_ddpg": True,
-    "pt_dqn": True,
-    "pt_sac": True,
-    "pt_td3_bc": True,
+    "pt_dqn": False,
+    "pt_sac": False,
+    "pt_td3_bc": False,
 }
 
 EVALUATE = {

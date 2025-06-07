@@ -7,7 +7,10 @@ import os
 
 from validation.simulator import GlucoseSimulator
 from validation.metrics import evaluate_glucose_control
-from constants.constants import LOWER_BOUND_NORMAL_GLUCOSE_RANGE, UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+from constants.constants import (
+    SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, 
+    HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE
+)
 
 def validate_dosing_model_pl(
     model: Any,
@@ -369,34 +372,57 @@ def validate_model_with_simulator(model: Any, test_data: Dict[str, np.array], si
         Métricas de control glucémico como tiempo en rango, eventos de hipoglucemia e hiperglucemia
     """
     time_in_range_percentages = []
+    time_below_range = []
+    time_severe_below = []
+    time_above_range = []
+    time_severe_above = []
     
     for i in range(len(test_data['x_cgm'])):
         # Obtener glucosa inicial y otros datos contextuales
         initial_glucose = test_data['x_cgm'][i][-1][-1]  # última lectura de glucosa
-        carb_intake = test_data['x_other'][i][0]  # Assuming carb intake is first feature
+        carb_intake = test_data['x_other'][i][0]  # Suponiendo que la ingesta de carbohidratos es la primera característica
         
-        # Get model's predicted dose
+        # Obtener dosis predicha por el modelo
         predicted_dose = model.predict(test_data['x_cgm'][i:i+1], test_data['x_other'][i:i+1])[0]
         
-        # Simulate glucose trajectory for next 6 hours with 5-min intervals
+        # Simular trayectoria de glucosa por 6 horas con intervalos de 5 min
         glucose_trajectory = simulator.predict_glucose_trajectory(
             initial_glucose=initial_glucose,
             insulin_doses=[predicted_dose],
             carb_intakes=[carb_intake],
-            timestamps=[0],  # Dose given at time 0
-            prediction_horizon=6  # Simulate 6 hours ahead
+            timestamps=[0],  # Dosis administrada en tiempo 0
+            prediction_horizon=6  # Simular 6 horas hacia adelante
         )
         
-        # Calculate time in range
-        in_range = np.logical_and(
-            glucose_trajectory >= LOWER_BOUND_NORMAL_GLUCOSE_RANGE,
-            glucose_trajectory <= UPPER_BOUND_NORMAL_GLUCOSE_RANGE
+        # Calcular tiempo en cada rango
+        severe_below = glucose_trajectory < SEVERE_HYPOGLYCEMIA_THRESHOLD
+        below_range = np.logical_and(
+            glucose_trajectory >= SEVERE_HYPOGLYCEMIA_THRESHOLD,
+            glucose_trajectory < HYPOGLYCEMIA_THRESHOLD
         )
-        time_in_range = np.mean(in_range) * 100  # Percentage
-        time_in_range_percentages.append(time_in_range)
+        in_range = np.logical_and(
+            glucose_trajectory >= HYPOGLYCEMIA_THRESHOLD, 
+            glucose_trajectory <= HYPERGLYCEMIA_THRESHOLD
+        )
+        above_range = np.logical_and(
+            glucose_trajectory > HYPERGLYCEMIA_THRESHOLD,
+            glucose_trajectory <= SEVERE_HYPERGLYCEMIA_THRESHOLD
+        )
+        severe_above = glucose_trajectory > SEVERE_HYPERGLYCEMIA_THRESHOLD
+        
+        # Acumular métricas
+        time_in_range_percentages.append(np.mean(in_range) * 100)  # Porcentaje
+        time_below_range.append(np.mean(below_range) * 100)  # Porcentaje
+        time_severe_below.append(np.mean(severe_below) * 100)  # Porcentaje
+        time_above_range.append(np.mean(above_range) * 100)  # Porcentaje
+        time_severe_above.append(np.mean(severe_above) * 100)  # Porcentaje
     
     return {
         'mean_time_in_range': np.mean(time_in_range_percentages),
-        'hypo_events': np.sum(glucose_trajectory < LOWER_BOUND_NORMAL_GLUCOSE_RANGE),
-        'hyper_events': np.sum(glucose_trajectory > UPPER_BOUND_NORMAL_GLUCOSE_RANGE)
+        'time_below_range': np.mean(time_below_range),
+        'time_severe_below': np.mean(time_severe_below),
+        'time_above_range': np.mean(time_above_range),
+        'time_severe_above': np.mean(time_severe_above),
+        'hypo_events': np.sum([severe_below.any() for severe_below in time_severe_below]),
+        'hyper_events': np.sum([severe_above.any() for severe_above in time_severe_above])
     }
