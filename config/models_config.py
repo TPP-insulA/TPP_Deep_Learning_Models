@@ -28,17 +28,17 @@ DDPG_CONFIG = {
     "actor_lr": 1e-4,               # Tasa de aprendizaje para el actor
     "critic_lr": 1e-3,              # Tasa de aprendizaje para el crítico
     "gamma": 0.99,                  # Factor de descuento para recompensas futuras
-    "tau": 0.005,                   # Parámetro de actualización suave para redes objetivo
+    "tau": 0.001,                   # Parámetro de actualización suave para redes objetivo
     
     # Parámetros del buffer de experiencia
-    "buffer_size": 100000,          # Capacidad máxima del buffer
+    "buffer_size": 50000,          # Capacidad máxima del buffer
     
     # Límites de acción
     "max_action": 20.0,             # Valor máximo de acción (dosis máxima de insulina)
     "min_action": 0.0,              # Valor mínimo de acción (dosis mínima de insulina)
     
     # Parámetros de exploración
-    "exploration_noise": 0.1,       # Desviación estándar del ruido de exploración
+    "exploration_noise": 0.2,       # Desviación estándar del ruido de exploración
     
     # Otros parámetros
     "seed": CONST_DEFAULT_SEED                      # Semilla aleatoria para reproducibilidad

@@ -1345,6 +1345,49 @@ def extract_features_excel(row: dict, cgm_window: np.ndarray, carb_median: float
         BOLUS_COL: float(normal)
     }
 
+def process_xml_directory(data_dir: str) -> Optional[pl.DataFrame]:
+    """
+    Procesa un directorio XML completo, extrayendo y transformando características.
+    
+    Parámetros:
+    -----------
+    data_dir : str
+        Directorio con archivos XML
+        
+    Retorna:
+    --------
+    Optional[pl.DataFrame]
+        DataFrame procesado o None si hubo un error
+    """
+    try:
+        logging.info(f"Procesando directorio XML: {data_dir}")
+        data = load_data(data_dir)
+        
+        # Preprocesar datos de bolus y meal
+        processed_data = preprocess_bolus_meal(data)
+        
+        # Preprocesar datos de CGM
+        cgm_data = preprocess_cgm(data.get("glucose_level"))
+        
+        # Extraer los DataFrames necesarios
+        bolus_df = processed_data.get("bolus", pl.DataFrame())
+        meal_df = processed_data.get("meal", pl.DataFrame())
+        
+        # Unir señales con los parámetros correctos
+        df = join_signals(cgm_data, bolus_df, meal_df)
+        
+        # Extraer características mejoradas
+        df = extract_enhanced_features(df, processed_data.get("meal"))
+        
+        # Transformar características
+        df = transform_enhanced_features(df)
+        
+        logging.info(f"Procesado exitoso para {data_dir}: {df.shape}")
+        return df
+    except Exception as e:
+        logging.error(f"Error procesando {data_dir}: {str(e)}")
+        return None
+
 def process_excel_subject(subject_path: str, idx: int) -> list[dict]:
     """
     Procesa los datos de un sujeto desde un archivo Excel.
@@ -2516,39 +2559,20 @@ def preprocess_data() -> pl.DataFrame:
     column_mapping = {}  # Para mapear nombres de columnas entre fuentes
     all_columns = set()  # Para rastrear todas las columnas de todos los DataFrames
     
-    # 1. Procesar datos XML primero (Ohio dataset)
-    for data_dir in OHIO_DATA_DIRS:
-        try:
-            logging.info(f"Procesando directorio XML: {data_dir}")
-            data = load_data(data_dir)
-            
-            # Preprocesar datos de bolus y meal
-            processed_data = preprocess_bolus_meal(data)
-            
-            # Preprocesar datos de CGM
-            cgm_data = preprocess_cgm(data.get("glucose_level"))
-            
-            # Extraer los DataFrames necesarios
-            bolus_df = processed_data.get("bolus", pl.DataFrame())
-            meal_df = processed_data.get("meal", pl.DataFrame())
-            
-            # Unir señales con los parámetros correctos
-            df = join_signals(cgm_data, bolus_df, meal_df)
-            
-            # Extraer características mejoradas
-            df = extract_enhanced_features(df, processed_data.get("meal"))
-            
-            # Transformar características
-            df = transform_enhanced_features(df)
-            
-            # Guardar nombres de columnas
-            for col in df.columns:
-                all_columns.add(col)
-            
-            xml_data_frames.append(df)
-            logging.info(f"Procesado exitoso para {data_dir}: {df.shape}")
-        except Exception as e:
-            logging.error(f"Error procesando {data_dir}: {str(e)}")
+    # 1. Procesar datos XML en paralelo (Ohio dataset)
+    logging.info(f"Iniciando procesamiento paralelo de {len(OHIO_DATA_DIRS)} directorios XML...")
+    xml_data_frames_results = Parallel(n_jobs=-1)(
+        delayed(process_xml_directory)(data_dir)
+        for data_dir in OHIO_DATA_DIRS
+    )
+
+    # Filtrar resultados None y extraer columnas
+    xml_data_frames = [df for df in xml_data_frames_results if df is not None]
+    for df in xml_data_frames:
+        for col in df.columns:
+            all_columns.add(col)
+
+    logging.info(f"Procesamiento XML completado. Obtenidos {len(xml_data_frames)} DataFrames válidos.")
     
     # Setear SubjectIDs a numericos
     for i, df in enumerate(xml_data_frames):
@@ -2560,7 +2584,7 @@ def preprocess_data() -> pl.DataFrame:
                         lambda x: extract_numeric_id(str(x)) if x is not None else None
                     ).cast(pl.Int64)
                 )
-    
+        
     # 2. Procesar datos Excel desde la carpeta de sujetos
     excel_data_frames = []  # Lista para almacenar DataFrames procesados
     if USE_EXCEL_DATA:

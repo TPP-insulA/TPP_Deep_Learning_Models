@@ -136,6 +136,125 @@ class ModelWrapper:
         preds = self.predict(x_cgm, x_other)
         return float(np.mean((preds - y) ** 2))
     
+    def _predict_insulin_doses(self, x_cgm: np.ndarray, x_other: np.ndarray, 
+                             carb_intake: np.ndarray) -> List[float]:
+        """
+        Predice dosis de insulina basadas en los datos de entrada.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+        carb_intake : np.ndarray
+            Ingesta de carbohidratos para cada muestra
+            
+        Retorna:
+        --------
+        List[float]
+            Lista de dosis de insulina predichas para cada muestra
+        """
+        predicted_doses = []
+        for i in range(len(x_cgm)):
+            carbs = float(carb_intake[i])
+            dose = self.predict_with_context(
+                x_cgm[i:i+1], 
+                x_other[i:i+1],
+                carb_intake=carbs
+            )
+            predicted_doses.append(float(dose))
+        return predicted_doses
+    
+    def _simulate_glucose_trajectories(self, simulator: GlucoseSimulator, 
+                                     initial_glucose: np.ndarray,
+                                     predicted_doses: List[float], 
+                                     carb_intake: np.ndarray,
+                                     simulation_hours: int) -> List[np.ndarray]:
+        """
+        Simula trayectorias de glucosa usando las dosis predichas.
+        
+        Parámetros:
+        -----------
+        simulator : GlucoseSimulator
+            Simulador de glucosa para generar trayectorias
+        initial_glucose : np.ndarray
+            Valores iniciales de glucosa para la simulación
+        predicted_doses : List[float]
+            Dosis de insulina predichas para cada muestra
+        carb_intake : np.ndarray
+            Ingesta de carbohidratos para cada muestra
+        simulation_hours : int
+            Duración de la simulación en horas
+        
+        Retorna:
+        --------
+        List[np.ndarray]
+            Lista de trayectorias de glucosa simuladas
+        """
+        glucose_trajectories = []
+        for i in range(len(initial_glucose)):
+            glucose_trajectory = simulator.predict_glucose_trajectory(
+                initial_glucose=initial_glucose[i],
+                insulin_doses=[predicted_doses[i]],
+                carb_intakes=[carb_intake[i]],
+                timestamps=[0],
+                prediction_horizon=simulation_hours
+            )
+            glucose_trajectories.append(glucose_trajectory)
+        return glucose_trajectories
+    
+    def _aggregate_metrics(self, glucose_trajectories: List[np.ndarray]) -> Dict[str, float]:
+        """
+        Calcula y agrega métricas clínicas para todas las trayectorias.
+        
+        Parámetros:
+        -----------
+        glucose_trajectories : List[np.ndarray]
+            Lista de trayectorias de glucosa simuladas
+        
+        Retorna:
+        --------
+        Dict[str, float]
+            Diccionario con métricas clínicas promediadas
+        """
+        all_metrics = {}
+        for trajectory in glucose_trajectories:
+            metrics = ClinicalMetricsEvaluator.evaluate_clinical_metrics(trajectory)
+            self._update_metrics_dict(all_metrics, metrics)
+        
+        # Promediar métricas
+        return {key: float(np.mean(values)) for key, values in all_metrics.items()}
+    
+    def _update_metrics_dict(self, all_metrics: Dict[str, List[float]], 
+                           metrics: Dict[str, Any]) -> None:
+        """
+        Actualiza el diccionario de métricas con nuevos valores.
+        
+        Parámetros:
+        -----------
+        all_metrics : Dict[str, List[float]]
+            Diccionario acumulativo de métricas
+        metrics : Dict[str, Any]
+            Nuevas métricas a agregar
+        
+        Retorna:
+        --------
+        None
+        """
+        for key, value in metrics.items():
+            if key not in all_metrics:
+                all_metrics[key] = []
+            
+            if isinstance(value, dict):
+                for subkey, subvalue in value.items():
+                    subkey_full = f"{key}_{subkey}"
+                    if subkey_full not in all_metrics:
+                        all_metrics[subkey_full] = []
+                    all_metrics[subkey_full].append(subvalue)
+            else:
+                all_metrics[key].append(value)
+    
     def evaluate_clinical(self, simulator: GlucoseSimulator, x_cgm: np.ndarray, x_other: np.ndarray, 
                     initial_glucose: np.ndarray, carb_intake: np.ndarray, 
                     ground_truth_insulin: np.ndarray = None, 
@@ -165,57 +284,15 @@ class ModelWrapper:
         Dict[str, float]
             Métricas clínicas de evaluación
         """
+        # Paso 1: Predecir dosis de insulina
+        predicted_doses = self._predict_insulin_doses(x_cgm, x_other, carb_intake)
         
-        # Predecir dosis de insulina con el modelo
-        predicted_doses = []
+        # Paso 2: Simular trayectorias de glucosa
+        glucose_trajectories = self._simulate_glucose_trajectories(
+            simulator, initial_glucose, predicted_doses, carb_intake, simulation_hours)
         
-        for i in range(len(x_cgm)):
-            carbs = float(carb_intake[i])
-            
-            # Predecir dosis con contexto
-            dose = self.predict_with_context(
-                x_cgm[i:i+1], 
-                x_other[i:i+1],
-                carb_intake=carbs
-            )
-            
-            predicted_doses.append(float(dose))
-        
-        # Simular trayectorias de glucosa usando las dosis predichas
-        glucose_trajectories = []
-        for i in range(len(initial_glucose)):
-            glucose_trajectory = simulator.predict_glucose_trajectory(
-                initial_glucose=initial_glucose[i],
-                insulin_doses=[predicted_doses[i]],
-                carb_intakes=[carb_intake[i]],
-                timestamps=[0],
-                prediction_horizon=simulation_hours
-            )
-            glucose_trajectories.append(glucose_trajectory)
-        
-        # Calcular métricas clínicas para todas las trayectorias
-        all_metrics = {}
-        for i, trajectory in enumerate(glucose_trajectories):
-            metrics = ClinicalMetricsEvaluator.evaluate_clinical_metrics(trajectory)
-            
-            # Agregar a métricas globales
-            for key, value in metrics.items():
-                if key not in all_metrics:
-                    all_metrics[key] = []
-                
-                if isinstance(value, dict):
-                    for subkey, subvalue in value.items():
-                        subkey_full = f"{key}_{subkey}"
-                        if subkey_full not in all_metrics:
-                            all_metrics[subkey_full] = []
-                        all_metrics[subkey_full].append(subvalue)
-                else:
-                    all_metrics[key].append(value)
-        
-        # Promediar métricas
-        avg_metrics = {key: float(np.mean(values)) for key, values in all_metrics.items()}
-        
-        return avg_metrics
+        # Paso 3: Calcular y devolver métricas clínicas
+        return self._aggregate_metrics(glucose_trajectories)
     
     def add_early_stopping(self, patience: int = 10, min_delta: float = 0.0, restore_best_weights: bool = True) -> None:
         """

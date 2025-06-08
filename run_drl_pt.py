@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Any
 from validation.model_validation import validate_dosing_model
 from validation.simulator import GlucoseSimulator
-from constants.constants import CONST_METRIC_MAE, CONST_METRIC_R2, CONST_METRIC_RMSE, SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE
+from constants.constants import CONST_METRIC_MAE, CONST_METRIC_R2, CONST_METRIC_RMSE, SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, IDEAL_UPPER_BOUND, IDEAL_LOWER_BOUND
 from training.pytorch import (
     train_multiple_models, calculate_metrics, evaluate_clinical_metrics, 
     optimize_ensemble_weights_clinical, enhance_features
@@ -24,7 +24,7 @@ PROJECT_ROOT = os.path.abspath(os.getcwd())
 sys.path.append(PROJECT_ROOT)
 
 # Printer
-from custom.printer import cprint, coloured, print_warning
+from custom.printer import cprint, coloured, print_debug, print_warning
 
 # Configuración 
 from config.params import FRAMEWORK, PROCESSING, MODELS, MODELS_USAGE, EVALUATE, EVALUATE_USAGE
@@ -167,6 +167,26 @@ elif PROCESSING == "polars":
     
     print(df_pl.head())
     print(df_pl.columns)
+    # Métricas de los pacientes antes del entrenamiento
+    tir_average = df_pl["time_in_range_24h"].mean()
+    hypo_average = df_pl["hypo_percentage_24h"].mean()
+    hyper_average = df_pl["hyper_percentage_24h"].mean()
+
+    print_debug(f"Average Time in Range: {tir_average:.2f}%")
+    print_debug(f"Average Time in Hypoglycemia: {hypo_average:.2f}%")
+    print_debug(f"Average Time in Hyperglycemia: {hyper_average:.2f}%")
+
+    # Métricas por paciente antes del entrenamiento
+    metrics_by_patient = (
+        df_pl.group_by("SubjectID")
+        .agg([
+            pl.mean("time_in_range_24h").alias("avg_time_in_range"),
+            pl.mean("hypo_percentage_24h").alias("avg_time_hypo"),
+            pl.mean("hyper_percentage_24h").alias("avg_time_hyper")
+        ])
+    )
+
+    print(metrics_by_patient)
     
     # Verificar si existen columnas CGM secuenciales
     cgm_cols = [col for col in df_pl.columns if col.startswith('cgm_') and col[4:].isdigit()]
@@ -439,7 +459,7 @@ if active_evaluators:
     
     # Evaluar ensamble si existe
     if ensemble_prediction is not None:
-        cprint(f"\nEvaluando ensamble...", 'blue')
+        cprint("\nEvaluando ensamble...", 'blue')
         ensemble_offline_results = {}
         
         # Crear un wrapper temporal para el ensamble

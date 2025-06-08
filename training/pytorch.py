@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from custom.DeepLearning.dl_pt import DLModelWrapperPyTorch
+from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
 from custom.printer import print_header, print_info, print_debug, print_warning
 import torch
 import torch.nn as nn
@@ -11,10 +11,10 @@ from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 from scipy.optimize import minimize
 from typing import Dict, List, Tuple, Callable, Optional, Any, Union
-from config.params import DEBUG
+from config.params import DEBUG, TRAINING_CONFIG
 from custom.early_stopping import ClinicalEarlyStopping
 from training.common import (
-    calculate_metrics, evaluate_clinical_metrics, optimize_ensemble_weights_clinical, get_model_type, enhance_features
+    calculate_metrics, compute_reward, evaluate_clinical_metrics, optimize_ensemble_weights_clinical, get_model_type, enhance_features
 )
 from constants.constants import (
     CONST_VAL_LOSS, CONST_LOSS, CONST_METRIC_MAE, CONST_METRIC_RMSE, CONST_METRIC_R2,
@@ -309,8 +309,121 @@ def _predict_in_batches(model: nn.Module,
         
         return np.vstack(preds).flatten()
 
+def estimate_prediction_uncertainty(model: Union[nn.Module, DRLModelWrapperPyTorch],
+                                  x_cgm: np.ndarray,
+                                  x_other: np.ndarray,
+                                  n_samples: int = 10) -> np.ndarray:
+    """
+    Estima la incertidumbre de las predicciones usando Monte Carlo Dropout.
+    
+    Parámetros:
+    -----------
+    model : Union[nn.Module, DLModelWrapperPyTorch]
+        Modelo para estimar incertidumbre
+    x_cgm : np.ndarray
+        Datos CGM para predicción
+    x_other : np.ndarray
+        Otras características para predicción
+    n_samples : int, opcional
+        Número de muestras para Monte Carlo Dropout (default: 10)
+        
+    Retorna:
+    --------
+    np.ndarray
+        Desviación estándar de las predicciones para cada muestra
+    """
+    # Preparar el modelo
+    if hasattr(model, 'model'):
+        actual_model = model.model
+    else:
+        actual_model = model
+    
+    actual_model = actual_model.to(DEVICE)
+    
+    # Activar modo de evaluación pero mantener dropout activo
+    actual_model.train()
+    
+    # Convertir datos a tensores
+    x_cgm_tensor = torch.FloatTensor(x_cgm).to(DEVICE)
+    x_other_tensor = torch.FloatTensor(x_other).to(DEVICE)
+    
+    # Realizar múltiples pases para obtener distribución de predicciones
+    predictions = []
+    batch_size = 64
+    
+    with torch.no_grad():
+        for _ in range(n_samples):
+            batch_preds = []
+            for i in range(0, len(x_cgm), batch_size):
+                end_idx = min(i + batch_size, len(x_cgm))
+                batch_cgm = x_cgm_tensor[i:end_idx]
+                batch_other = x_other_tensor[i:end_idx]
+                
+                outputs = actual_model(batch_cgm, batch_other)
+                batch_preds.append(outputs.cpu().numpy())
+            
+            # Concatenar predicciones de todos los batches
+            full_preds = np.vstack(batch_preds).flatten()
+            predictions.append(full_preds)
+    
+    # Calcular desviación estándar a lo largo de las muestras
+    predictions_array = np.array(predictions)
+    uncertainty = np.std(predictions_array, axis=0)
+    
+    return uncertainty
 
-def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch], 
+
+def adjust_predictions_with_uncertainty(predictions: np.ndarray, 
+                                       uncertainty: np.ndarray,
+                                       safety_factor: float = 2.0,
+                                       min_dose: float = 0.0,
+                                       confidence_threshold: float = 0.3) -> np.ndarray:
+    """
+    Ajusta las predicciones en base a la incertidumbre estimada, aplicando restricciones clínicas.
+    
+    Parámetros:
+    -----------
+    predictions : np.ndarray
+        Predicciones originales del modelo
+    uncertainty : np.ndarray
+        Estimación de incertidumbre para cada predicción
+    safety_factor : float, opcional
+        Factor de seguridad para el ajuste (default: 2.0)
+    min_dose : float, opcional
+        Dosis mínima permitida (default: 0.0)
+    confidence_threshold : float, opcional
+        Umbral de confianza para aplicar restricciones severas (default: 0.3)
+        
+    Retorna:
+    --------
+    np.ndarray
+        Predicciones ajustadas con criterio de seguridad
+    """
+    # Normalizar incertidumbre para comparabilidad
+    norm_uncertainty = uncertainty / (np.max(uncertainty) + 1e-6)
+    
+    # Ajustar predicciones basado en incertidumbre
+    # Mayor incertidumbre = dosis más conservadora (menor)
+    adjustment_factor = 1.0 - (norm_uncertainty * safety_factor)
+    
+    # Limitar factor de ajuste para evitar dosis negativas o excesivamente pequeñas
+    adjustment_factor = np.clip(adjustment_factor, 0.1, 1.0)
+    
+    # Aplicar ajuste
+    adjusted_predictions = predictions * adjustment_factor
+    
+    # Restricciones adicionales para alta incertidumbre
+    high_uncertainty_mask = norm_uncertainty > confidence_threshold
+    
+    # Para casos de alta incertidumbre, usar dosis mínima segura
+    adjusted_predictions[high_uncertainty_mask] = min_dose
+    
+    # Asegurar límites de seguridad (no dosis negativas)
+    adjusted_predictions = np.maximum(adjusted_predictions, min_dose)
+    
+    return adjusted_predictions
+
+def train_and_evaluate_model(model: Union[nn.Module, DRLModelWrapperPyTorch], 
                           model_name: str, 
                           data: Dict[str, Dict[str, np.ndarray]],
                           models_dir: str = CONST_MODELS,
@@ -358,10 +471,10 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
     
     x_cgm_test = data['test']['x_cgm']
     x_other_test = data['test']['x_other']
-    y_test = data['test']['y']
+    _y_test = data['test']['y']
     
     # Extraer parámetros contextales
-    carb_intake_train = np.array([x_other_train[i, 0] for i in range(len(x_other_train))])
+    _carb_intake_train = np.array([x_other_train[i, 0] for i in range(len(x_other_train))])
     carb_intake_val = np.array([x_other_val[i, 0] for i in range(len(x_other_val))])
     carb_intake_test = np.array([x_other_test[i, 0] for i in range(len(x_other_test))])
     
@@ -420,7 +533,7 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
     print_info(f"Datos: {len(x_cgm_train)} ejemplos de entrenamiento, {len(x_cgm_val) if x_cgm_val is not None else 0} ejemplos de validación")
     
     # Extraer valores iniciales de glucosa para simulación clínica
-    initial_glucose_train = np.array([x_cgm_train[i, -1, 0] for i in range(len(x_cgm_train))])
+    _initial_glucose_train = np.array([x_cgm_train[i, -1, 0] for i in range(len(x_cgm_train))])
     initial_glucose_val = np.array([x_cgm_val[i, -1, 0] for i in range(len(x_cgm_val))])
     initial_glucose_test = np.array([x_cgm_test[i, -1, 0] for i in range(len(x_cgm_test))])
     
@@ -432,7 +545,7 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
         # Fase de validación
         if x_cgm_val is not None:
             # Métricas de regresión (solo para seguimiento)
-            avg_val_loss, val_preds_np, val_targets_np = _run_validation(actual_model, val_loader, criterion)
+            avg_val_loss, _val_preds_np, _val_targets_np = _run_validation(actual_model, val_loader, criterion)
             
             # Métricas clínicas - Hacer predicciones completas para evaluar con simulador
             val_preds_full = _predict_in_batches(actual_model, x_cgm_val, x_other_val)
@@ -487,10 +600,18 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
     # Predicciones en conjunto de prueba
     y_pred = _predict_in_batches(actual_model, x_cgm_test, x_other_test)
     
+    # Add uncertainty estimation during evaluation
+    with torch.no_grad():
+        # Monte Carlo dropout or ensemble-based uncertainty
+        uncertainty_estimates = estimate_prediction_uncertainty(model, x_cgm_test, x_other_test)
+        
+    # Use uncertainty to adjust dosing recommendations
+    safe_predictions = adjust_predictions_with_uncertainty(y_pred, uncertainty_estimates)
+    
     # Calcular métricas clínicas en datos de prueba
     clinical_metrics = evaluate_clinical_metrics(
         simulator=simulator,
-        predictions=y_pred,
+        predictions=safe_predictions,
         initial_glucose=initial_glucose_test,
         carb_intake=carb_intake_test
     )
@@ -501,7 +622,7 @@ def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch],
     print_info(f"  Tiempo Bajo Rango: {clinical_metrics['time_below_range']:.2f}%")
     print_info(f"  Tiempo Sobre Rango: {clinical_metrics['time_above_range']:.2f}%")
     
-    return history, y_pred, clinical_metrics, actual_model
+    return history, safe_predictions, clinical_metrics, actual_model
 
 def train_model_sequential(model_creator: Callable, 
                          name: str, 
@@ -517,67 +638,52 @@ def train_model_sequential(model_creator: Callable,
                          y_test: np.ndarray,
                          models_dir: str = CONST_MODELS) -> Dict[str, Any]:
     """
-    Entrena un modelo secuencialmente y devuelve resultados serializables.
+    Entrena un modelo secuencialmente con los datos proporcionados.
     
     Parámetros:
     -----------
     model_creator : Callable
-        Función que crea el modelo
+        Función creadora del modelo
     name : str
         Nombre del modelo
     input_shapes : Tuple[Tuple[int, ...], Tuple[int, ...]]
-        Formas de las entradas (CGM, otras)
-    x_cgm_train : np.ndarray
-        Datos CGM de entrenamiento
-    x_other_train : np.ndarray
-        Otras características de entrenamiento
-    y_train : np.ndarray
-        Valores objetivo de entrenamiento
-    x_cgm_val : np.ndarray
-        Datos CGM de validación
-    x_other_val : np.ndarray
-        Otras características de validación
-    y_val : np.ndarray
-        Valores objetivo de validación
-    x_cgm_test : np.ndarray
-        Datos CGM de prueba
-    x_other_test : np.ndarray
-        Otras características de prueba
-    y_test : np.ndarray
-        Valores objetivo de prueba
+        Formas de entrada para el modelo (cgm_shape, other_shape)
+    x_cgm_train, x_other_train, y_train : np.ndarray
+        Datos de entrenamiento
+    x_cgm_val, x_other_val, y_val : np.ndarray
+        Datos de validación
+    x_cgm_test, x_other_test, y_test : np.ndarray
+        Datos de prueba
     models_dir : str, opcional
-        Directorio para guardar modelos (default: "models")
-        
+        Directorio para guardar modelos (default: CONST_MODELS)
+    
     Retorna:
     --------
     Dict[str, Any]
-        Diccionario con nombre del modelo, historial y predicciones
+        Diccionario con resultados del entrenamiento
     """
-    print(f"\nEntrenando modelo {name}...")
-    
-    # Identificar tipo de modelo para organización de figuras
-    model_type = get_model_type(name)
-    figures_path = os.path.join(CONST_FIGURES_DIR, CONST_MODEL_TYPES[model_type], name)
-    os.makedirs(figures_path, exist_ok=True)
-    
     # Crear modelo
     model = model_creator(input_shapes[0], input_shapes[1])
     
-    # Organizar datos en estructura esperada
+    # Preparar datos para entrenamiento
     data = {
         'train': {'x_cgm': x_cgm_train, 'x_other': x_other_train, 'y': y_train},
         'val': {'x_cgm': x_cgm_val, 'x_other': x_other_val, 'y': y_val},
         'test': {'x_cgm': x_cgm_test, 'x_other': x_other_test, 'y': y_test}
     }
     
-    # Configuración por defecto
+    # Configuración de entrenamiento
     training_config = {
         'epochs': CONST_EPOCHS,
-        'batch_size': CONST_DEFAULT_BATCH_SIZE
+        'batch_size': CONST_DEFAULT_BATCH_SIZE,
+        'learning_rate': 1e-3,
+        'patience': 30,
+        'min_delta': 0.0001,
+        'restore_best_weights': True
     }
     
     # Entrenar y evaluar modelo
-    history, y_pred, metrics = train_and_evaluate_model(
+    history, y_pred, metrics, trained_model = train_and_evaluate_model(
         model=model,
         model_name=name,
         data=data,
@@ -594,7 +700,8 @@ def train_model_sequential(model_creator: Callable,
         'name': name,
         'history': history,
         'predictions': y_pred.tolist(),
-        'metrics': metrics
+        'metrics': metrics,
+        'model': trained_model
     }
 
 
@@ -800,9 +907,6 @@ def train_multiple_models(model_creators: Dict[str, Callable],
             models_dir
         )
         model_results.append(result)
-        # Guardar el modelo entrenado si está disponible (4to elemento de result)
-        if len(result) > 3:
-            trained_models[name] = result[3]
     
     # Guardar resultados
     histories = {}
@@ -814,9 +918,9 @@ def train_multiple_models(model_creators: Dict[str, Callable],
         histories[name] = result['history']
         predictions[name] = np.array(result['predictions'])
         metrics[name] = result['metrics']
+        trained_models[name] = result['model']
     
     return histories, predictions, metrics, trained_models
-
 
 def debug_tensor_info(tensor: torch.Tensor, name: str) -> None:
     """
@@ -836,199 +940,305 @@ def debug_tensor_info(tensor: torch.Tensor, name: str) -> None:
     if torch.isinf(tensor).any():
         print_warning(f"{name} contiene valores Inf")
 
-def train_and_evaluate_model(model: Union[nn.Module, DLModelWrapperPyTorch], 
-                          model_name: str, 
-                          data: Dict[str, Dict[str, np.ndarray]],
-                          models_dir: str = CONST_MODELS,
-                          training_config: Dict[str, Any] = None) -> Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float]]:
+def train_and_evaluate_model(model: DRLModelWrapperPyTorch,
+                        model_name: str,
+                        data: Dict[str, Dict[str, np.ndarray]],
+                        models_dir: str =CONST_MODELS,
+                        training_config: Dict[str, Any] = TRAINING_CONFIG) -> Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float], DRLModelWrapperPyTorch]:
     """
-    Entrena y evalúa un modelo con énfasis en métricas clínicas.
+    Entrena y evalúa un modelo de aprendizaje por refuerzo para la predicción de glucosa.
     
     Parámetros:
     -----------
-    model : nn.Module
-        Modelo a entrenar
+    model : DRLModelWrapperPyTorch
+        Modelo a entrenar y evaluar
     model_name : str
         Nombre del modelo para guardado y registro
     data : Dict[str, Dict[str, np.ndarray]]
         Diccionario con datos de entrenamiento, validación y prueba
     models_dir : str, opcional
-        Directorio para guardar modelos (default: "models")
+        Directorio para guardar modelos (default: "models") 
     training_config : Dict[str, Any], opcional
-        Configuración de entrenamiento
-        
+        Configuración de entrenamiento, incluyendo número de episodios, tamaño de batch, etc.
+    
     Retorna:
     --------
-    Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float]]
-        (history, predictions, metrics clínicas)
+    Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float], DRLModelWrapperPyTorch]
+        (historial de entrenamiento, predicciones, métricas clínicas, modelo entrenado)
     """
-    # Configuración por defecto
-    if training_config is None:
-        training_config = {
-            'epochs': 100,
-            'batch_size': 32,
-            'learning_rate': 0.001,
-            'patience': 30,
-            'monitor': 'time_in_range',
-            'mode': 'max'
-        }
-    
-    # Extraer datos
-    x_cgm_train = data['train']['x_cgm']
-    x_other_train = data['train']['x_other']
-    y_train = data['train']['y']
-    
-    x_cgm_val = data['val']['x_cgm']
-    x_other_val = data['val']['x_other']
-    y_val = data['val']['y']
-    
-    x_cgm_test = data['test']['x_cgm']
-    x_other_test = data['test']['x_other']
-    y_test = data['test']['y']
-    
-    # Extraer parámetros contextales
-    carb_intake_train = np.array([x_other_train[i, 0] for i in range(len(x_other_train))])
-    carb_intake_val = np.array([x_other_val[i, 0] for i in range(len(x_other_val))])
-    carb_intake_test = np.array([x_other_test[i, 0] for i in range(len(x_other_test))])
-    
-    # Extraer parámetros de configuración
-    epochs = training_config.get('epochs', 100)
-    batch_size = training_config.get('batch_size', 32)
-    learning_rate = training_config.get('learning_rate', 0.001)
-    patience = training_config.get('patience', 30)
-    monitor = training_config.get('monitor', 'time_in_range')
-    mode = training_config.get('mode', 'max')
-    
-    # Crear directorios necesarios
-    os.makedirs(models_dir, exist_ok=True)
-    log_dir = os.path.join(models_dir, CONST_LOGS_DIR, model_name)
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # Preparar el modelo
-    actual_model = _prepare_model(model, x_cgm_train, x_other_train, y_train)
-    
-    # Configurar optimizador y función de pérdida
-    optimizer = optim.Adam(actual_model.parameters(), lr=learning_rate, weight_decay=1e-6)
-    criterion = nn.MSELoss()
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 'min', factor=0.5, patience=patience // 2, min_lr=1e-6
-    )
-    
-    # Crear dataloaders
-    train_loader = create_dataloaders(x_cgm_train, x_other_train, y_train, batch_size)
-    val_loader = create_dataloaders(x_cgm_val, x_other_val, y_val, batch_size, shuffle=False)
-    
-    # Inicializar simulador para métricas clínicas
+    # Batch experience collection
     simulator = GlucoseSimulator()
     
-    # Inicializar early stopping basado en métricas clínicas
-    early_stopping = ClinicalEarlyStopping(
-        patience=patience, 
-        restore_best_weights=True,
-        monitor=monitor,
-        mode=mode
-    )
+    # Config for efficient processing
+    episodes = training_config.get('episodes', 100)
+    batch_size = training_config.get('batch_size', 64)
+    update_freq = training_config.get('update_freq', 10) 
+    processing_batch_size = training_config.get('processing_batch_size', 128)
     
-    # Historial de entrenamiento (solo métricas clínicas)
-    history = {
-        'loss': [],
-        'val_loss': [],
-        'time_in_range': [],
-        'time_below_range': [],
-        'time_above_range': [],
-        'time_severe_below': [],
-        'time_severe_above': []
-    }
+    # Pre-allocate tensors for batch processing
+    device = model.device
+    replay_buffer = model.replay_buffer
     
-    # Bucle de entrenamiento
-    print(f"\nEntrenando modelo {model_name}...")
-    print_info(f"Configuración de entrenamiento: {epochs} épocas, batch size: {batch_size}, lr: {learning_rate}")
-    print_info(f"Datos: {len(x_cgm_train)} ejemplos de entrenamiento, {len(x_cgm_val) if x_cgm_val is not None else 0} ejemplos de validación")
+    # Skip updates when buffer is too small
+    min_buffer_samples = max(batch_size * 0.2, 10)
     
-    # Extraer valores iniciales de glucosa para simulación clínica
-    initial_glucose_train = np.array([x_cgm_train[i, -1, 0] for i in range(len(x_cgm_train))])
-    initial_glucose_val = np.array([x_cgm_val[i, -1, 0] for i in range(len(x_cgm_val))])
-    initial_glucose_test = np.array([x_cgm_test[i, -1, 0] for i in range(len(x_cgm_test))])
+    # Track metrics for logging
+    loss_history = []
     
-    progress_bar = tqdm(range(epochs), desc="Entrenamiento")
-    for epoch in progress_bar:
-        # Ejecutar época de entrenamiento
-        avg_train_loss = _run_train_epoch(actual_model, train_loader, optimizer, criterion)
+    for episode in tqdm(range(episodes)):
+        x_cgm, x_other = data['train']['x_cgm'], data['train']['x_other']
         
-        # Fase de validación
-        if x_cgm_val is not None:
-            # Métricas de regresión (solo para seguimiento)
-            avg_val_loss, val_preds_np, val_targets_np = _run_validation(actual_model, val_loader, criterion)
+        # Procesar de a batches
+        for batch_start in range(0, len(x_cgm), processing_batch_size):
+            batch_end = min(batch_start + processing_batch_size, len(x_cgm))
             
-            # Métricas clínicas - Hacer predicciones completas para evaluar con simulador
-            val_preds_full = _predict_in_batches(actual_model, x_cgm_val, x_other_val)
+            # Estados y acciones en batch
+            batch_cgm = torch.FloatTensor(x_cgm[batch_start:batch_end]).to(device)
+            batch_other = torch.FloatTensor(x_other[batch_start:batch_end]).to(device)
             
-            # Evaluar métricas clínicas con el simulador
-            clinical_metrics = evaluate_clinical_metrics(
-                simulator=simulator,
-                predictions=val_preds_full,
-                initial_glucose=initial_glucose_val,
-                carb_intake=carb_intake_val
-            )
+            with torch.no_grad():
+                batch_actions = model.model.actor(batch_cgm, batch_other).cpu().numpy()
             
-            # Actualizar historial con las métricas
-            history['loss'].append(avg_train_loss)
-            history['val_loss'].append(avg_val_loss)
+            # Coleccionar experiencias en el buffer
+            for i in range(batch_start, batch_end):
+                idx = i - batch_start
+                
+                # Obtener estado y acción
+                state_cgm = batch_cgm[idx:idx+1]
+                state_other = batch_other[idx:idx+1]
+                action = batch_actions[idx]
+                
+                # Simular el siguiente nivel de glucosa
+                next_glucose = simulator.predict_glucose_trajectory(
+                    initial_glucose=x_cgm[i, -1, 0],
+                    insulin_doses=[action],
+                    carb_intakes=[x_other[i, 0]],
+                    timestamps=[0],
+                    prediction_horizon=6
+                )
+                reward = compute_reward(glucose_level=next_glucose)
+                
+                # Agregar el siguiente estado
+                next_idx = i + 1
+                if next_idx < len(x_cgm):
+                    next_state_cgm = torch.FloatTensor(x_cgm[next_idx:next_idx+1]).to(device)
+                    next_state_other = torch.FloatTensor(x_other[next_idx:next_idx+1]).to(device)
+                else:
+                    next_state_cgm = state_cgm
+                    next_state_other = state_other
+                
+                done = next_idx >= len(x_cgm)
+                
+                # Agregar al ReplayBuffer
+                replay_buffer.push(
+                    (state_cgm, state_other), 
+                    action, 
+                    reward, 
+                    (next_state_cgm, next_state_other), 
+                    done
+                )
             
-            # Agregar métricas clínicas al historial
-            history['time_in_range'].append(clinical_metrics['time_in_range'])
-            history['time_below_range'].append(clinical_metrics['time_below_range'])
-            history['time_above_range'].append(clinical_metrics['time_above_range'])
-            history['time_severe_below'].append(clinical_metrics['time_severe_below'])
-            history['time_severe_above'].append(clinical_metrics['time_severe_above'])
-            
-            # Determinar la métrica a monitorear para early stopping
-            if monitor == 'time_in_range':
-                monitor_value = clinical_metrics['time_in_range']
-            elif monitor == 'val_loss':
-                monitor_value = -avg_val_loss  # Negativo porque queremos maximizar
-            else:
-                monitor_value = clinical_metrics.get(monitor, -avg_val_loss)
-            
-            # Descripción mejorada de la barra de progreso con métricas clínicas
-            progress_bar.set_description(
-                f"Entrenamiento: Pérdida val: {avg_val_loss:.4f}, TIR: {clinical_metrics['time_in_range']:.1f}%"
-            )
-            
-            # Comprobar early stopping basado en métricas clínicas
-            if early_stopping(actual_model, monitor_value):
-                print_info(f"Early stopping en época {epoch+1} - Mejor {monitor}: {early_stopping.best_score:.2f}")
-                break
-            
-            # Paso del scheduler basado en pérdida de validación
-            scheduler.step(avg_val_loss)
-        else:
-            # Sin validación, solo mostrar pérdida de entrenamiento
-            progress_bar.set_description(f"Entrenamiento: loss: {avg_train_loss:.4f}")
-            history['loss'].append(avg_train_loss)
+            # Actualizar
+            if len(replay_buffer) > min_buffer_samples and (batch_start // processing_batch_size) % update_freq == 0:
+                loss_info = model.update(batch_size, model.model.config['gamma'])
+                loss_history.append(loss_info)
+                
+        # Evaluate once per episode instead of constantly
+        if episode % 5 == 0:
+            print(f"Episode {episode}, Buffer size: {len(replay_buffer)}")
     
-    # Guardar modelo final
-    torch.save(actual_model.state_dict(), os.path.join(models_dir, f'{model_name}.pt'))
-    
-    # Predicciones en conjunto de prueba
-    y_pred = _predict_in_batches(actual_model, x_cgm_test, x_other_test)
-    
-    # Calcular métricas clínicas en datos de prueba
+    # Final evaluation
+    y_pred = model.predict(data['test']['x_cgm'], data['test']['x_other'])
     clinical_metrics = evaluate_clinical_metrics(
         simulator=simulator,
         predictions=y_pred,
-        initial_glucose=initial_glucose_test,
-        carb_intake=carb_intake_test
+        initial_glucose=np.array([data['test']['x_cgm'][i, -1, 0] for i in range(len(data['test']['x_cgm']))]),
+        carb_intake=np.array([data['test']['x_other'][i, 0] for i in range(len(data['test']['x_other']))])
     )
+    return {}, y_pred, clinical_metrics, model
+
+# def train_and_evaluate_model_supervised(model: DLModelWrapperPyTorch, 
+#                           model_name: str, 
+#                           data: Dict[str, Dict[str, np.ndarray]],
+#                           models_dir: str = CONST_MODELS,
+#                           training_config: Dict[str, Any] = None) -> Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float]]:
+#     """
+#     Entrena y evalúa un modelo con énfasis en métricas clínicas.
     
-    # Mostrar métricas clínicas al finalizar
-    print_info(f"Métricas clínicas para {model_name}:")
-    print_info(f"  Tiempo en Rango: {clinical_metrics['time_in_range']:.2f}%")
-    print_info(f"  Tiempo Bajo Rango: {clinical_metrics['time_below_range']:.2f}%")
-    print_info(f"  Tiempo Sobre Rango: {clinical_metrics['time_above_range']:.2f}%")
+#     Parámetros:
+#     -----------
+#     model : DRLModelWrapperPyTorch
+#         Modelo a entrenar
+#     model_name : str
+#         Nombre del modelo para guardado y registro
+#     data : Dict[str, Dict[str, np.ndarray]]
+#         Diccionario con datos de entrenamiento, validación y prueba
+#     models_dir : str, opcional
+#         Directorio para guardar modelos (default: "models")
+#     training_config : Dict[str, Any], opcional
+#         Configuración de entrenamiento
+        
+#     Retorna:
+#     --------
+#     Tuple[Dict[str, List[float]], np.ndarray, Dict[str, float]]
+#         (history, predictions, metrics clínicas)
+#     """
+#     # Extraer datos
+#     x_cgm_train = data['train']['x_cgm']
+#     x_other_train = data['train']['x_other']
+#     y_train = data['train']['y']
     
-    # Devolver el modelo entrenado, que ahora sí se puede utilizar directamente
-    return history, y_pred, clinical_metrics, actual_model
+#     x_cgm_val = data['val']['x_cgm']
+#     x_other_val = data['val']['x_other']
+#     y_val = data['val']['y']
+    
+#     x_cgm_test = data['test']['x_cgm']
+#     x_other_test = data['test']['x_other']
+#     y_test = data['test']['y']
+    
+#     # Extraer parámetros contextales
+#     carb_intake_train = np.array([x_other_train[i, 0] for i in range(len(x_other_train))])
+#     carb_intake_val = np.array([x_other_val[i, 0] for i in range(len(x_other_val))])
+#     carb_intake_test = np.array([x_other_test[i, 0] for i in range(len(x_other_test))])
+    
+#     # Extraer parámetros de configuración
+#     epochs = training_config.get('epochs', 100)
+#     batch_size = training_config.get('batch_size', 32)
+#     learning_rate = training_config.get('learning_rate', 0.001)
+#     patience = training_config.get('patience', 30)
+#     monitor = training_config.get('monitor', 'time_in_range')
+#     mode = training_config.get('mode', 'max')
+    
+#     # Crear directorios necesarios
+#     os.makedirs(models_dir, exist_ok=True)
+#     log_dir = os.path.join(models_dir, CONST_LOGS_DIR, model_name)
+#     os.makedirs(log_dir, exist_ok=True)
+    
+#     # Preparar el modelo
+#     actual_model = _prepare_model(model, x_cgm_train, x_other_train, y_train)
+    
+#     # Configurar optimizador y función de pérdida
+#     optimizer = optim.Adam(actual_model.parameters(), lr=learning_rate, weight_decay=1e-6)
+#     criterion = nn.MSELoss()
+#     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+#         optimizer, 'min', factor=0.5, patience=patience // 2, min_lr=1e-6
+#     )
+    
+#     # Crear dataloaders
+#     train_loader = create_dataloaders(x_cgm_train, x_other_train, y_train, batch_size)
+#     val_loader = create_dataloaders(x_cgm_val, x_other_val, y_val, batch_size, shuffle=False)
+    
+#     # Inicializar simulador para métricas clínicas
+#     simulator = GlucoseSimulator()
+    
+#     # Inicializar early stopping basado en métricas clínicas
+#     early_stopping = ClinicalEarlyStopping(
+#         patience=patience, 
+#         restore_best_weights=True,
+#         monitor=monitor,
+#         mode=mode
+#     )
+    
+#     # Historial de entrenamiento (solo métricas clínicas)
+#     history = {
+#         'loss': [],
+#         'val_loss': [],
+#         'time_in_range': [],
+#         'time_below_range': [],
+#         'time_above_range': [],
+#         'time_severe_below': [],
+#         'time_severe_above': []
+#     }
+    
+#     # Bucle de entrenamiento
+#     print(f"\nEntrenando modelo {model_name}...")
+#     print_info(f"Configuración de entrenamiento: {epochs} épocas, batch size: {batch_size}, lr: {learning_rate}")
+#     print_info(f"Datos: {len(x_cgm_train)} ejemplos de entrenamiento, {len(x_cgm_val) if x_cgm_val is not None else 0} ejemplos de validación")
+    
+#     # Extraer valores iniciales de glucosa para simulación clínica
+#     initial_glucose_train = np.array([x_cgm_train[i, -1, 0] for i in range(len(x_cgm_train))])
+#     initial_glucose_val = np.array([x_cgm_val[i, -1, 0] for i in range(len(x_cgm_val))])
+#     initial_glucose_test = np.array([x_cgm_test[i, -1, 0] for i in range(len(x_cgm_test))])
+    
+#     progress_bar = tqdm(range(epochs), desc="Entrenamiento")
+#     for epoch in progress_bar:
+#         # Ejecutar época de entrenamiento
+#         avg_train_loss = _run_train_epoch(actual_model, train_loader, optimizer, criterion)
+        
+#         # Fase de validación
+#         if x_cgm_val is not None:
+#             # Métricas de regresión (solo para seguimiento)
+#             avg_val_loss, val_preds_np, val_targets_np = _run_validation(actual_model, val_loader, criterion)
+            
+#             # Métricas clínicas - Hacer predicciones completas para evaluar con simulador
+#             val_preds_full = _predict_in_batches(actual_model, x_cgm_val, x_other_val)
+            
+#             # Evaluar métricas clínicas con el simulador
+#             clinical_metrics = evaluate_clinical_metrics(
+#                 simulator=simulator,
+#                 predictions=val_preds_full,
+#                 initial_glucose=initial_glucose_val,
+#                 carb_intake=carb_intake_val
+#             )
+            
+#             # Actualizar historial con las métricas
+#             history['loss'].append(avg_train_loss)
+#             history['val_loss'].append(avg_val_loss)
+            
+#             # Agregar métricas clínicas al historial
+#             history['time_in_range'].append(clinical_metrics['time_in_range'])
+#             history['time_below_range'].append(clinical_metrics['time_below_range'])
+#             history['time_above_range'].append(clinical_metrics['time_above_range'])
+#             history['time_severe_below'].append(clinical_metrics['time_severe_below'])
+#             history['time_severe_above'].append(clinical_metrics['time_severe_above'])
+            
+#             # Determinar la métrica a monitorear para early stopping
+#             if monitor == 'time_in_range':
+#                 monitor_value = clinical_metrics['time_in_range']
+#             elif monitor == 'val_loss':
+#                 monitor_value = -avg_val_loss  # Negativo porque queremos maximizar
+#             else:
+#                 monitor_value = clinical_metrics.get(monitor, -avg_val_loss)
+            
+#             # Descripción mejorada de la barra de progreso con métricas clínicas
+#             progress_bar.set_description(
+#                 f"Entrenamiento: Pérdida val: {avg_val_loss:.4f}, TIR: {clinical_metrics['time_in_range']:.1f}%"
+#             )
+            
+#             # Comprobar early stopping basado en métricas clínicas
+#             if early_stopping(actual_model, monitor_value):
+#                 print_info(f"Early stopping en época {epoch+1} - Mejor {monitor}: {early_stopping.best_score:.2f}")
+#                 break
+            
+#             # Paso del scheduler basado en pérdida de validación
+#             scheduler.step(avg_val_loss)
+#         else:
+#             # Sin validación, solo mostrar pérdida de entrenamiento
+#             progress_bar.set_description(f"Entrenamiento: loss: {avg_train_loss:.4f}")
+#             history['loss'].append(avg_train_loss)
+    
+#     # Guardar modelo final
+#     torch.save(actual_model.state_dict(), os.path.join(models_dir, f'{model_name}.pt'))
+    
+#     # Predicciones en conjunto de prueba
+#     y_pred = _predict_in_batches(actual_model, x_cgm_test, x_other_test)
+    
+#     # Calcular métricas clínicas en datos de prueba
+#     clinical_metrics = evaluate_clinical_metrics(
+#         simulator=simulator,
+#         predictions=y_pred,
+#         initial_glucose=initial_glucose_test,
+#         carb_intake=carb_intake_test
+#     )
+    
+#     # Mostrar métricas clínicas al finalizar
+#     print_info(f"Métricas clínicas para {model_name}:")
+#     print_info(f"  Tiempo en Rango: {clinical_metrics['time_in_range']:.2f}%")
+#     print_info(f"  Tiempo Bajo Rango: {clinical_metrics['time_below_range']:.2f}%")
+#     print_info(f"  Tiempo Sobre Rango: {clinical_metrics['time_above_range']:.2f}%")
+    
+#     # Devolver el modelo entrenado, que ahora sí se puede utilizar directamente
+#     return history, y_pred, clinical_metrics, actual_model
 
 def train_model_sequential(model_creator: Callable, 
                          name: str, 
@@ -1104,7 +1314,7 @@ def train_model_sequential(model_creator: Callable,
     }
     
     # Entrenar y evaluar modelo
-    history, y_pred, metrics = train_and_evaluate_model(
+    history, y_pred, metrics, _trained_model = train_and_evaluate_model(
         model=model,
         model_name=name,
         data=data,
@@ -1121,7 +1331,8 @@ def train_model_sequential(model_creator: Callable,
         'name': name,
         'history': history,
         'predictions': y_pred.tolist(),
-        'metrics': metrics
+        'metrics': metrics,
+        'model': _trained_model
     }
 
 
@@ -1327,19 +1538,20 @@ def train_multiple_models(model_creators: Dict[str, Callable],
             models_dir
         )
         model_results.append(result)
-        # Guardar el modelo entrenado si está disponible (4to elemento de result)
-        if len(result) > 3:
-            trained_models[name] = result[3]
     
     # Guardar resultados
     histories = {}
     predictions = {}
     metrics = {}
     
+    print_debug(f"{result=}")
+    print_debug(f"{result.keys()=}")
+    
     for result in model_results:
         name = result['name']
         histories[name] = result['history']
         predictions[name] = np.array(result['predictions'])
         metrics[name] = result['metrics']
+        trained_models[name] = result['model']
     
     return histories, predictions, metrics, trained_models

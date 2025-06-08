@@ -40,9 +40,10 @@ TEMP_BASAL_COL: str = "temp_basal_rate"
 # Rangos de glucosa para función de recompensa
 SEVERE_HYPOGLYCEMIA_THRESHOLD: float = 54.0  # mg/dL
 HYPOGLYCEMIA_THRESHOLD: float = 70.0  # mg/dL 
+IDEAL_LOWER_BOUND: float = 100.0  # mg/dL
+IDEAL_UPPER_BOUND: float = 140.0  # mg/dL
 HYPERGLYCEMIA_THRESHOLD: float = 180.0  # mg/dL
 SEVERE_HYPERGLYCEMIA_THRESHOLD: float = 250.0  # mg/dL
-TARGET_GLUCOSE: float = 125.0  # mg/dL - Objetivo ideal
 
 # Métricas de recompensa
 SEVERE_HYPO_PENALTY = -10.0  # Penalización severa para hipoglucemia grave

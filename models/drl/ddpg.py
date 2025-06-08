@@ -18,9 +18,10 @@ import random
 from collections import deque
 
 from custom.DeepReinforcementLearning.drl_pt import DRLModelWrapperPyTorch
+from custom.printer import print_debug, print_warning
 from models.baseDRL import BaseDRLModel
 from constants.constants import (
-    SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE, SEVERE_HYPO_PENALTY, HYPO_PENALTY_BASE, HYPER_PENALTY_BASE, SEVERE_HYPER_PENALTY, MAX_REWARD
+    IDEAL_LOWER_BOUND, IDEAL_UPPER_BOUND, SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPO_PENALTY, HYPO_PENALTY_BASE, HYPER_PENALTY_BASE, SEVERE_HYPER_PENALTY, MAX_REWARD
 )
 from config.models_config import DDPG_CONFIG
 from validation.simulator import GlucoseSimulator
@@ -86,7 +87,7 @@ class DDPGActor(nn.Module):
             Datos CGM de entrada
         x_other : torch.Tensor
             Otras características de entrada
-            
+                
         Retorna:
         --------
         torch.Tensor
@@ -110,7 +111,6 @@ class DDPGActor(nn.Module):
         action = torch.sigmoid(self.action_head(features)) * self.max_action
         
         return action
-
 
 class DDPGCritic(nn.Module):
     """
@@ -165,7 +165,7 @@ class DDPGCritic(nn.Module):
         )
         
     def forward(self, x_cgm: torch.Tensor, x_other: torch.Tensor, 
-               action: torch.Tensor) -> torch.Tensor:
+           action: torch.Tensor) -> torch.Tensor:
         """
         Paso hacia adelante de la red del crítico.
         
@@ -230,26 +230,148 @@ class ReplayBuffer:
         self.cgm_dim = cgm_dim
         self.other_dim = other_dim
         self.action_dim = action_dim
-        self.rng = rng or np.random.default_rng()
+        self.rng = rng or np.random.default_rng(self.seed)
         
         self.buffer = []
         self.position = 0
+    
+    def __len__(self) -> int:
+        """
+        Obtiene el número de transiciones en el buffer.
         
-    def add(self, state: Tuple[np.ndarray, np.ndarray], action: np.ndarray, 
-           reward: float, next_state: Tuple[np.ndarray, np.ndarray], 
-           done: bool) -> None:
+        Retorna:
+        --------
+        int
+            Número de transiciones almacenadas
+        """
+        return len(self.buffer)
+        
+    def _log_debug_info(self, state: Tuple[Any, Any], action: Any, next_state: Tuple[Any, Any]) -> None:
+        """
+        Registra información de depuración sobre los tipos de datos y dispositivos.
+        
+        Parámetros:
+        -----------
+        state : Tuple[Any, Any]
+            Estado actual
+        action : Any
+            Acción tomada
+        next_state : Tuple[Any, Any]
+            Estado siguiente
+        """
+        print(f"Adding to buffer: state types: {type(state[0])}, {type(state[1])}, "
+              f"action type: {type(action)}, next_state types: {type(next_state[0])}, {type(next_state[1])}")
+        
+        if isinstance(state[0], torch.Tensor):
+            print(f"state[0] device: {state[0].device}")
+        if isinstance(state[1], torch.Tensor):
+            print(f"state[1] device: {state[1].device}")
+        if isinstance(action, torch.Tensor):
+            print(f"action device: {action.device}")
+    
+    def _validate_input_types(self, state: Tuple[Any, Any], reward: float, next_state: Tuple[Any, Any], done: bool) -> None:
+        """
+        Valida los tipos de los datos de entrada.
+        
+        Parámetros:
+        -----------
+        state : Tuple[Any, Any]
+            Estado actual
+        reward : float
+            Recompensa recibida
+        next_state : Tuple[Any, Any]
+            Estado siguiente
+        done : bool
+            Indicador de fin de episodio
+        """
+        if not isinstance(state, tuple) or len(state) != 2:
+            raise ValueError("State debe ser una tupla de dos elementos")
+        if not isinstance(next_state, tuple) or len(next_state) != 2:
+            raise ValueError("Next_state debe ser una tupla de dos elementos")
+        if not isinstance(reward, (int, float)):
+            raise ValueError("Reward debe ser un número (int o float)")
+        if not isinstance(done, bool):
+            raise ValueError("Done debe ser un booleano")
+    
+    def _convert_to_numpy(self, state: Tuple[Any, Any], action: Any, next_state: Tuple[Any, Any]) -> Tuple:
+        """
+        Convierte los datos de entrada a arrays de NumPy.
+        
+        Parámetros:
+        -----------
+        state : Tuple[Any, Any]
+            Estado actual
+        action : Any
+            Acción tomada
+        next_state : Tuple[Any, Any]
+            Estado siguiente
+            
+        Retorna:
+        --------
+        Tuple
+            Datos convertidos a NumPy
+        """
+        # Convertir state y next_state
+        state_np = (
+            # Eliminar dimensión de batch si existe
+            state[0].detach().cpu().numpy().squeeze(0) if isinstance(state[0], torch.Tensor) else np.asarray(state[0], dtype=np.float32),
+            state[1].detach().cpu().numpy().squeeze(0) if isinstance(state[1], torch.Tensor) else np.asarray(state[1], dtype=np.float32)
+        )
+        
+        next_state_np = (
+            # Eliminar dimensión de batch si existe
+            next_state[0].detach().cpu().numpy().squeeze(0) if isinstance(next_state[0], torch.Tensor) else np.asarray(next_state[0], dtype=np.float32),
+            next_state[1].detach().cpu().numpy().squeeze(0) if isinstance(next_state[1], torch.Tensor) else np.asarray(next_state[1], dtype=np.float32)
+        )
+        
+        # Convertir action
+        if isinstance(action, torch.Tensor):
+            action_np = action.detach().cpu().numpy()
+        elif isinstance(action, np.ndarray):
+            action_np = action
+        elif np.isscalar(action):
+            action_np = np.array([action], dtype=np.float32)
+        else:
+            action_np = np.asarray(action, dtype=np.float32)
+    
+        # Ensure action_np is 1D
+        action_np = action_np.flatten()
+        
+        return state_np, action_np, next_state_np
+    
+    def _validate_dimensions(self, state_np: Tuple[np.ndarray, np.ndarray], action_np: np.ndarray) -> None:
+        """
+        Valida las dimensiones de los datos convertidos.
+        
+        Parámetros:
+        -----------
+        state_np : Tuple[np.ndarray, np.ndarray]
+            Estado convertido a NumPy
+        action_np : np.ndarray
+            Acción convertida a NumPy
+        """
+        if state_np[0].shape != self.cgm_dim:
+            raise ValueError(f"CGM state dimension {state_np[0].shape} does not match expected {self.cgm_dim}")
+        if state_np[1].shape != self.other_dim:
+            raise ValueError(f"Other state dimension {state_np[1].shape} does not match expected {self.other_dim}")
+        if action_np.shape != (self.action_dim,):
+            raise ValueError(f"Action dimension {action_np.shape} does not match expected {(self.action_dim,)}")
+    
+    def add(self, state: Tuple[Any, Any], action: Any, 
+        reward: float, next_state: Tuple[Any, Any], 
+        done: bool) -> None:
         """
         Agrega una transición al buffer.
         
         Parámetros:
         -----------
-        state : Tuple[np.ndarray, np.ndarray]
+        state : Tuple[Any, Any]
             Estado actual (x_cgm, x_other)
-        action : np.ndarray
+        action : Any
             Acción tomada
         reward : float
             Recompensa recibida
-        next_state : Tuple[np.ndarray, np.ndarray]
+        next_state : Tuple[Any, Any]
             Estado siguiente (x_cgm_next, x_other_next)
         done : bool
             Indicador de fin de episodio
@@ -258,12 +380,43 @@ class ReplayBuffer:
         --------
         None
         """
+        # self._log_debug_info(state, action, next_state)
+        self._validate_input_types(state, reward, next_state, done)
+        
+        state_np, action_np, next_state_np = self._convert_to_numpy(state, action, next_state)
+        self._validate_dimensions(state_np, action_np)
+        
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
             
-        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.buffer[self.position] = (state_np, action_np, reward, next_state_np, done)
         self.position = (self.position + 1) % self.capacity
         
+    def push(self, state: Tuple[Any, Any], action: Any, 
+         reward: float, next_state: Tuple[Any, Any], 
+         done: bool) -> None:
+        """
+        Añade una transición al buffer (alias para add).
+        
+        Parámetros:
+        -----------
+        state : Tuple[Any, Any]
+            Estado actual (x_cgm, x_other)
+        action : Any
+            Acción tomada
+        reward : float
+            Recompensa recibida
+        next_state : Tuple[Any, Any]
+            Estado siguiente (x_cgm_next, x_other_next)
+        done : bool
+            Indicador de fin de episodio
+            
+        Retorna:
+        --------
+        None
+        """
+        self.add(state, action, reward, next_state, done)
+
     def sample(self, batch_size: int) -> Tuple:
         """
         Muestrea un batch de transiciones del buffer.
@@ -278,7 +431,21 @@ class ReplayBuffer:
         Tuple
             Batch de transiciones (estados, acciones, recompensas, siguientes estados, done flags)
         """
-        batch = self.rng.choice(self.buffer, batch_size)
+        # Verificar si hay elementos en el buffer
+        buffer_size = len(self.buffer)
+        if buffer_size == 0:
+            raise ValueError("No hay elementos en el buffer para muestrear")
+        
+        # Ajustar el batch_size al tamaño disponible
+        effective_batch_size = min(buffer_size, batch_size)
+        if effective_batch_size < batch_size:
+            print_warning(f"Ajustando batch_size de {batch_size} a {effective_batch_size} (elementos disponibles)")
+        
+        # Generar índices aleatorios con reemplazo para garantizar batch completo
+        indices = self.rng.choice(buffer_size, effective_batch_size, replace=True)
+        
+        # Extraer elementos según los índices
+        batch = [self.buffer[i] for i in indices]
         
         # Desempaquetar batch
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -326,62 +493,45 @@ class DDPGModel(BaseDRLModel):
         Dimensiones de entrada para datos CGM
     other_input_dim : tuple
         Dimensiones de entrada para otras características
-    action_dim : int
-        Dimensión de la acción (dosis de insulina)
-    hidden_dim : int
-        Dimensión de las capas ocultas
-    actor_lr : float
-        Tasa de aprendizaje para el actor
-    critic_lr : float
-        Tasa de aprendizaje para el crítico
-    gamma : float
-        Factor de descuento para recompensas futuras
-    tau : float
-        Parámetro de actualización suave para redes objetivo
-    buffer_size : int
-        Tamaño del buffer de experiencia
-    max_action : float
-        Valor máximo de acción
-    min_action : float
-        Valor mínimo de acción
-    exploration_noise : float
-        Desviación estándar del ruido de exploración
+    config : Dict[str, Any]
+        Configuración del modelo DDPG
+    rewards_function : callable
+        Función para calcular recompensas
     """
     
-    def __init__(self, 
+    def __init__(self,
                  cgm_input_dim: tuple, 
                  other_input_dim: tuple,
-                 action_dim: int = DDPG_CONFIG['action_dim'], 
-                 hidden_dim: int = DDPG_CONFIG['hidden_dim'],
-                 actor_lr: float = DDPG_CONFIG['actor_lr'],
-                 critic_lr: float = DDPG_CONFIG['critic_lr'],
-                 gamma: float = DDPG_CONFIG['gamma'],
-                 tau: float = DDPG_CONFIG['tau'],
-                 buffer_size: int = DDPG_CONFIG['buffer_size'],
-                 max_action: float = DDPG_CONFIG['max_action'],
-                 min_action: float = DDPG_CONFIG['min_action'],
-                 exploration_noise: float = DDPG_CONFIG['exploration_noise'],
-                 seed: int = DDPG_CONFIG['seed']) -> None:
+                 config: Dict[str, Any] = DDPG_CONFIG,
+                 rewards_function = None) -> None:
         """
         Inicializa el modelo DDPG para dosificación de insulina.
         """
+        action_dim = config.get('action_dim', DDPG_CONFIG['action_dim'])
+        hidden_dim = config.get('hidden_dim', DDPG_CONFIG['hidden_dim'])
         super().__init__(cgm_input_dim, other_input_dim, action_dim, hidden_dim)
         
         # Inicializar semilla aleatoria para reproducibilidad
+        seed = DDPG_CONFIG['seed']
         self.seed = seed
         torch.manual_seed(seed)
         self.rng = np.random.Generator(np.random.PCG64(seed))
         
+        self.config = config
+        
         # Parámetros del algoritmo
-        self.gamma = gamma
-        self.tau = tau
-        self.max_action = max_action
-        self.min_action = min_action
-        self.exploration_noise = exploration_noise
+        self.gamma = config.get('gamma', DDPG_CONFIG['gamma'])
+        self.tau = config.get('tau', DDPG_CONFIG['tau'])
+        self.max_action = config.get('max_action', DDPG_CONFIG['max_action'])
+        self.min_action = config.get('min_action', DDPG_CONFIG['min_action'])
+        self.exploration_noise = config.get('exploration_noise', DDPG_CONFIG['exploration_noise'])
+        self.actor_lr = config.get('actor_lr', DDPG_CONFIG['actor_lr'])
+        self.critic_lr = config.get('critic_lr', DDPG_CONFIG['critic_lr'])
+        self.buffer_size = config.get('buffer_size', DDPG_CONFIG['buffer_size'])
         
         # Inicializar redes de actor y crítico
-        self.actor = DDPGActor(cgm_input_dim, other_input_dim, action_dim, hidden_dim, max_action)
-        self.actor_target = DDPGActor(cgm_input_dim, other_input_dim, action_dim, hidden_dim, max_action)
+        self.actor = DDPGActor(cgm_input_dim, other_input_dim, action_dim, hidden_dim, self.max_action)
+        self.actor_target = DDPGActor(cgm_input_dim, other_input_dim, action_dim, hidden_dim, self.max_action)
         self.actor_target.load_state_dict(self.actor.state_dict())
         
         self.critic = DDPGCritic(cgm_input_dim, other_input_dim, action_dim, hidden_dim)
@@ -389,11 +539,14 @@ class DDPGModel(BaseDRLModel):
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Optimizadores
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.actor_lr, weight_decay=1e-5)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=self.critic_lr, weight_decay=1e-5)
         
         # Buffer de experiencia
-        self.buffer = ReplayBuffer(buffer_size, cgm_input_dim, other_input_dim, action_dim, self.rng)
+        self.buffer = ReplayBuffer(self.buffer_size, cgm_input_dim, other_input_dim, action_dim, self.rng)
+        
+        # Función de recompensa
+        self.compute_rewards = rewards_function
         
         # Enviar redes al dispositivo correcto (CPU/GPU)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -401,7 +554,7 @@ class DDPGModel(BaseDRLModel):
         
     def forward(self, x_cgm: torch.Tensor, x_other: torch.Tensor) -> torch.Tensor:
         """
-        Paso hacia adelante que delega al actor para predecir acciones.
+        Realiza el paso hacia adelante del modelo.
         
         Parámetros:
         -----------
@@ -416,11 +569,11 @@ class DDPGModel(BaseDRLModel):
             Acción predicha (dosis de insulina)
         """
         return self.actor(x_cgm, x_other)
-        
+
     def select_action(self, x_cgm: torch.Tensor, x_other: torch.Tensor, 
-                      add_noise: bool = True) -> torch.Tensor:
+                  add_noise: bool = True) -> torch.Tensor:
         """
-        Selecciona una acción para un estado dado, opcionalmente añadiendo ruido para exploración.
+        Selecciona una acción basada en el estado actual.
         
         Parámetros:
         -----------
@@ -428,45 +581,58 @@ class DDPGModel(BaseDRLModel):
             Datos CGM de entrada
         x_other : torch.Tensor
             Otras características de entrada
-        add_noise : bool
-            Si se debe añadir ruido para exploración
-            
+        add_noise : bool, opcional
+            Si agregar ruido de exploración (default: True)
+        
         Retorna:
         --------
         torch.Tensor
             Acción seleccionada
         """
+        # Asegurar modo de evaluación
+        self.actor.eval()
+    
+        # Aplanar tensores si es necesario
+        if len(x_cgm.shape) > 2:
+            x_cgm = x_cgm.reshape(x_cgm.shape[0], -1)
+        if len(x_other.shape) > 2:
+            x_other = x_other.reshape(x_other.shape[0], -1)
+    
+        # Obtener acción del actor
         with torch.no_grad():
             action = self.actor(x_cgm, x_other)
-            
-            if add_noise:
-                noise = torch.randn_like(action) * self.exploration_noise
-                action = action + noise
-                
-            # Limitar acciones al rango válido
-            action = torch.clamp(action, self.min_action, self.max_action)
-            
+    
+        # Agregar ruido de exploración si está habilitado
+        if add_noise:
+            noise = torch.normal(0, self.exploration_noise, size=action.shape).to(action.device)
+            action = action + noise
+    
+        # Recortar a los límites de acción
+        action = torch.clamp(action, self.min_action, self.max_action)
+    
+        # Volver a modo de entrenamiento
+        self.actor.train()
+    
         return action
     
-    def add_to_buffer(self, buffer: Any, state: Tuple[np.ndarray, np.ndarray], 
-                     action: float, reward: float, 
-                     next_state: Tuple[np.ndarray, np.ndarray], 
-                     done: bool) -> None:
+    def add_to_buffer(self, buffer: Any, state: Tuple[Any, Any], 
+                  action: Any, reward: float, 
+                  next_state: Tuple[Any, Any], done: bool) -> None:
         """
         Añade una transición al buffer de experiencia.
         
         Parámetros:
         -----------
         buffer : Any
-            Buffer donde añadir la transición
-        state : Tuple[np.ndarray, np.ndarray]
+            Buffer de experiencia donde añadir la transición
+        state : Tuple[Any, Any]
             Estado actual (x_cgm, x_other)
-        action : float
-            Acción tomada
+        action : Any
+            Acción tomada (dosis de insulina)
         reward : float
             Recompensa recibida
-        next_state : Tuple[np.ndarray, np.ndarray]
-            Siguiente estado (x_cgm_next, x_other_next)
+        next_state : Tuple[Any, Any]
+            Estado siguiente (x_cgm_next, x_other_next)
         done : bool
             Indicador de fin de episodio
             
@@ -474,12 +640,42 @@ class DDPGModel(BaseDRLModel):
         --------
         None
         """
-        # Convertir la acción a array de numpy
-        action_np = np.array([action]) if np.isscalar(action) else np.array(action)
+        # Log input types and devices for debugging
+        print(f"add_to_buffer: state types: {type(state[0])}, {type(state[1])}, "
+            f"action type: {type(action)}, next_state types: {type(next_state[0])}, {type(next_state[1])}")
+        if isinstance(state[0], torch.Tensor):
+            print(f"state[0] device: {state[0].device}")
+        if isinstance(state[1], torch.Tensor):
+            print(f"state[1] device: {state[1].device}")
+        if isinstance(action, torch.Tensor):
+            print(f"action device: {action.device}")
+        
+        # Convertir acción
+        if isinstance(action, torch.Tensor):
+            action_np = action.detach().cpu().numpy()
+        elif isinstance(action, np.ndarray):
+            action_np = action
+        elif np.isscalar(action):
+            action_np = np.array([action], dtype=np.float32)
+        else:
+            action_np = np.asarray(action, dtype=np.float32)
+        
+        # Ensure action_np is 1D
+        action_np = action_np.flatten()
+        
+        # Convertir state y next_state
+        state_np = (
+            state[0].detach().cpu().numpy() if isinstance(state[0], torch.Tensor) else np.asarray(state[0], dtype=np.float32),
+            state[1].detach().cpu().numpy() if isinstance(state[1], torch.Tensor) else np.asarray(state[1], dtype=np.float32)
+        )
+        next_state_np = (
+            next_state[0].detach().cpu().numpy() if isinstance(next_state[0], torch.Tensor) else np.asarray(next_state[0], dtype=np.float32),
+            next_state[1].detach().cpu().numpy() if isinstance(next_state[1], torch.Tensor) else np.asarray(next_state[1], dtype=np.float32)
+        )
         
         # Añadir al buffer
-        self.buffer.add(state, action_np, reward, next_state, done)
-    
+        self.buffer.add(state_np, action_np, reward, next_state_np, done)
+
     def sample_buffer(self, buffer: Any, batch_size: int) -> Tuple:
         """
         Muestrea un batch de transiciones del buffer.
@@ -497,51 +693,6 @@ class DDPGModel(BaseDRLModel):
             Batch de transiciones
         """
         return self.buffer.sample(batch_size)
-    
-    def compute_reward(self, glucose_level: float) -> float:
-        """
-        Calcula la recompensa basada en el nivel actual de glucosa en sangre.
-        
-        La función penaliza niveles fuera del rango objetivo, con penalizaciones más
-        severas para hipoglucemia que para hiperglucemia debido a su mayor peligro inmediato.
-        La recompensa máxima se obtiene cuando el nivel de glucosa está en el valor objetivo.
-        
-        Parámetros:
-        -----------
-        glucose_level : float
-            Nivel de glucosa en mg/dL
-            
-        Retorna:
-        --------
-        float
-            Valor de recompensa: positivo para niveles saludables, negativo para niveles peligrosos
-        """
-        # Hipoglucemia severa (muy peligroso)
-        if glucose_level < SEVERE_HYPOGLYCEMIA_THRESHOLD:
-            return SEVERE_HYPO_PENALTY
-        
-        # Hipoglucemia (peligroso)
-        elif glucose_level < HYPOGLYCEMIA_THRESHOLD:
-            # Penalización lineal que aumenta a medida que la glucosa disminuye
-            severity_factor = (HYPOGLYCEMIA_THRESHOLD - glucose_level) / (HYPOGLYCEMIA_THRESHOLD - SEVERE_HYPOGLYCEMIA_THRESHOLD)
-            return HYPO_PENALTY_BASE * (1 + severity_factor)
-        
-        # Rango objetivo (saludable)
-        elif HYPOGLYCEMIA_THRESHOLD <= glucose_level <= HYPERGLYCEMIA_THRESHOLD:
-            # Recompensa máxima en TARGET_GLUCOSE, disminuyendo a medida que nos alejamos
-            deviation = abs(glucose_level - TARGET_GLUCOSE)
-            max_deviation = max(TARGET_GLUCOSE - HYPOGLYCEMIA_THRESHOLD, HYPERGLYCEMIA_THRESHOLD - TARGET_GLUCOSE)
-            return MAX_REWARD * (1 - deviation / max_deviation)
-        
-        # Hiperglucemia (preocupante)
-        elif glucose_level <= SEVERE_HYPERGLYCEMIA_THRESHOLD:
-            # Penalización lineal que aumenta a medida que la glucosa aumenta
-            severity_factor = (glucose_level - HYPERGLYCEMIA_THRESHOLD) / (SEVERE_HYPERGLYCEMIA_THRESHOLD - HYPERGLYCEMIA_THRESHOLD)
-            return HYPER_PENALTY_BASE * (1 + severity_factor)
-        
-        # Hiperglucemia severa (peligroso)
-        else:  # glucose_level > SEVERE_HYPERGLYCEMIA_THRESHOLD
-            return SEVERE_HYPER_PENALTY
     
     def compute_rewards(self, x_cgm: np.ndarray, x_other: np.ndarray, 
                       actions: np.ndarray, simulator=None) -> np.ndarray:
@@ -588,62 +739,76 @@ class DDPGModel(BaseDRLModel):
         Parámetros:
         -----------
         batch : Tuple
-            Batch de transiciones (estados, acciones, recompensas, estados siguientes, done flags)
+            Batch de experiencias (states, actions, rewards, next_states, dones)
             
         Retorna:
         --------
         Dict[str, float]
-            Diccionario con las pérdidas calculadas
+            Diccionario con pérdidas de actor y crítico
         """
-        # Desempaquetar batch
         states, actions, rewards, next_states, dones = batch
-        x_cgm, x_other = states
-        x_cgm_next, x_other_next = next_states
+        states_cgm, states_other = states
+        next_states_cgm, next_states_other = next_states
         
-        # Convertir a tensores y enviar al dispositivo correcto
-        x_cgm_tensor = torch.FloatTensor(x_cgm).to(self.device)
-        x_other_tensor = torch.FloatTensor(x_other).to(self.device)
-        actions_tensor = torch.FloatTensor(actions).to(self.device)
-        rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-        x_cgm_next_tensor = torch.FloatTensor(x_cgm_next).to(self.device)
-        x_other_next_tensor = torch.FloatTensor(x_other_next).to(self.device)
-        dones_tensor = torch.FloatTensor(dones).to(self.device)
+        # Convertir a tensores
+        states_cgm_t = torch.FloatTensor(states_cgm).to(self.device)
+        states_other_t = torch.FloatTensor(states_other).to(self.device)
+        actions_t = torch.FloatTensor(actions).to(self.device)
+        rewards_t = torch.FloatTensor(rewards).to(self.device)
+        next_states_cgm_t = torch.FloatTensor(next_states_cgm).to(self.device)
+        next_states_other_t = torch.FloatTensor(next_states_other).to(self.device)
+        dones_t = torch.FloatTensor(dones).to(self.device)
         
-        # Actualizar el crítico
+        # Asegurar que los tensores no contengan NaN
+        states_cgm_t = torch.nan_to_num(states_cgm_t)
+        states_other_t = torch.nan_to_num(states_other_t)
+        actions_t = torch.nan_to_num(actions_t)
+        rewards_t = torch.nan_to_num(rewards_t)
+        next_states_cgm_t = torch.nan_to_num(next_states_cgm_t)
+        next_states_other_t = torch.nan_to_num(next_states_other_t)
+        
+        # Actualizar crítico: minimizar error TD
         with torch.no_grad():
-            # Seleccionar siguiente acción según el actor objetivo
-            next_actions = self.actor_target(x_cgm_next_tensor, x_other_next_tensor)
+            next_actions = self.actor_target(next_states_cgm_t, next_states_other_t)
+            next_actions = torch.nan_to_num(next_actions, nan=0.0)
             
-            # Calcular valor Q objetivo
-            target_q = self.critic_target(x_cgm_next_tensor, x_other_next_tensor, next_actions)
-            target_q = rewards_tensor + (1 - dones_tensor) * self.gamma * target_q
+            target_q = self.critic_target(next_states_cgm_t, next_states_other_t, next_actions)
+            target_q = torch.nan_to_num(target_q, nan=0.0)
+            
+            target_q = rewards_t + (1 - dones_t) * self.gamma * target_q
+            target_q = torch.nan_to_num(target_q, nan=0.0)
+    
+        # Q actual
+        current_q = self.critic(states_cgm_t, states_other_t, actions_t)
         
-        # Calcular valor Q actual
-        current_q = self.critic(x_cgm_tensor, x_other_tensor, actions_tensor)
-        
-        # Calcular pérdida del crítico (MSE)
+        # Pérdida del crítico
         critic_loss = F.mse_loss(current_q, target_q)
         
-        # Actualizar crítico
+        # Optimizar crítico
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 1.0)  # Recortar gradientes para estabilidad
         self.critic_optimizer.step()
         
-        # Actualizar el actor
-        actor_actions = self.actor(x_cgm_tensor, x_other_tensor)
-        actor_loss = -self.critic(x_cgm_tensor, x_other_tensor, actor_actions).mean()
+        # Actualizar actor: maximizar Q esperado
+        actor_actions = self.actor(states_cgm_t, states_other_t)
+        actor_actions = torch.nan_to_num(actor_actions, nan=0.0)
         
+        actor_loss = -self.critic(states_cgm_t, states_other_t, actor_actions).mean()
+        
+        # Optimizar actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.0)  # Recortar gradientes para estabilidad
         self.actor_optimizer.step()
         
-        # Actualizar redes objetivo suavemente
+        # Actualizar redes objetivo
         self._update_target_networks()
         
         return {
-            "actor_loss": actor_loss.item(),
-            "critic_loss": critic_loss.item(),
-            "total_loss": actor_loss.item() + critic_loss.item()
+            'actor_loss': actor_loss.item(),
+            'critic_loss': critic_loss.item(),
+            'total_loss': actor_loss.item() + critic_loss.item()
         }
         
     def _update_target_networks(self) -> None:
@@ -664,233 +829,336 @@ class DDPGModel(BaseDRLModel):
     
     def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
         """
-        Predice acciones para los estados dados.
+        Predice dosis de insulina para los estados dados.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM de entrada
+            Datos CGM para predicción
         x_other : np.ndarray
-            Otras características de entrada
+            Otras características para predicción
             
         Retorna:
         --------
         np.ndarray
-            Acciones predichas (dosis de insulina)
+            Dosis de insulina predichas
         """
-        self.eval()  # Cambiar a modo evaluación
+        # Verificar y manejar entradas nulas o NaN
+        if x_cgm is None or x_other is None or np.isnan(x_cgm).any() or np.isnan(x_other).any():
+            print_warning("Se detectaron valores nulos o NaN en las entradas. Aplicando corrección.")
+            if x_cgm is None:
+                raise ValueError("Los datos CGM no pueden ser nulos")
+            if x_other is None:
+                raise ValueError("Los datos de otras características no pueden ser nulos")
+            
+            # Reemplazar NaN con valores seguros
+            if np.isnan(x_cgm).any():
+                x_cgm = np.nan_to_num(x_cgm, nan=100.0)  # Valor CGM predeterminado seguro
+            if np.isnan(x_other).any():
+                x_other = np.nan_to_num(x_other, nan=0.0)
         
+        # Convertir a tensores
+        x_cgm_tensor = torch.FloatTensor(x_cgm).to(self.device)
+        x_other_tensor = torch.FloatTensor(x_other).to(self.device)
+        
+        # Asegurar dimensiones correctas
+        if len(x_cgm_tensor.shape) == 2:
+            x_cgm_tensor = x_cgm_tensor.unsqueeze(0)
+        if len(x_other_tensor.shape) == 1:
+            x_other_tensor = x_other_tensor.unsqueeze(0)
+        
+        # Predecir sin ruido
         with torch.no_grad():
-            # Convertir a tensores
-            x_cgm_tensor = torch.FloatTensor(x_cgm).to(self.device)
-            x_other_tensor = torch.FloatTensor(x_other).to(self.device)
-            
-            # Predecir acción
-            actions = self.actor(x_cgm_tensor, x_other_tensor)
-            
-        return actions.cpu().numpy()
+            actions = self.select_action(x_cgm_tensor, x_other_tensor, add_noise=False)
+        
+        # Verificar NaN en las predicciones
+        pred_numpy = actions.cpu().numpy()
+        if np.isnan(pred_numpy).any():
+            print_warning("Se detectaron NaN en las predicciones. Aplicando corrección.")
+            pred_numpy = np.nan_to_num(pred_numpy, nan=0.5)  # Valor predeterminado seguro
+        
+        return pred_numpy
     
     def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, 
-                            carb_intake: float,
-                            sleep_quality: float = None,
-                            work_intensity: float = None,
-                            exercise_intensity: float = None,
-                            current_glucose: float = None,
-                            iob: float = None) -> float:
+                  carb_intake: float,
+                  sleep_quality: float = None,
+                  work_intensity: float = None,
+                  exercise_intensity: float = None,
+                  current_glucose: float = None,
+                  iob: float = None) -> float:
         """
-        Predice la dosis de insulina con información contextual adicional.
+        Predice dosis de insulina con información contextual adicional.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM para predicción (array con mediciones de glucosa recientes)
+            Datos CGM para predicción
         x_other : np.ndarray
             Otras características para predicción
         carb_intake : float
-            Ingesta de carbohidratos en gramos (obligatorio)
+            Ingesta de carbohidratos en gramos
         sleep_quality : float, opcional
-            Calidad del sueño (escala de 0-10)
+            Calidad del sueño (escala 0-10)
         work_intensity : float, opcional
-            Intensidad del trabajo (escala de 0-10)
+            Intensidad del trabajo (escala 0-10)
         exercise_intensity : float, opcional
-            Intensidad del ejercicio (escala de 0-10)
+            Intensidad del ejercicio (escala 0-10)
         current_glucose : float, opcional
             Nivel actual de glucosa en mg/dL
         iob : float, opcional
-            Insulina activa en unidades
-            
+            Insulina activa en el cuerpo (Insulin On Board)
+        
         Retorna:
         --------
         float
-            Dosis de insulina recomendada en unidades
+            Dosis de insulina recomendada
         """
-        # Verificar parámetros obligatorios
-        if carb_intake is None:
-            raise ValueError("El parámetro 'carb_intake' es obligatorio")
-        
-        # Convertir a tensores
-        x_cgm_t = torch.FloatTensor(x_cgm).to(self.device)
-        x_other_t = torch.FloatTensor(x_other).to(self.device)
-        
-        # Extraer valor de glucosa actual del array x_cgm o usar el proporcionado
+        # Extraer nivel de glucosa si no se proporciona
         if current_glucose is None:
-            current_glucose = float(x_cgm[-1, -1] if len(x_cgm.shape) > 1 else x_cgm[-1])
-            
-        # Usar IOB proporcionado o extraer del x_other si está disponible
-        if iob is None and x_other.shape[1] > 2:
-            iob = float(x_other[0, 2])  # Asumiendo que IOB está en la tercera columna
-        else:
-            iob = float(iob if iob is not None else 0.0)
-        
-        # Valores por defecto para parámetros opcionales
-        sleep_quality = float(sleep_quality if sleep_quality is not None else 5.0)
-        work_intensity = float(work_intensity if work_intensity is not None else 0.0)
-        exercise_intensity = float(exercise_intensity if exercise_intensity is not None else 0.0)
-        
-        # Asegurar dimensiones correctas para el modelo
-        if len(x_cgm_t.shape) == 2:
-            x_cgm_t = x_cgm_t.unsqueeze(0)
-        if len(x_other_t.shape) == 1:
-            x_other_t = x_other_t.unsqueeze(0)
+            if len(x_cgm.shape) > 2:
+                current_glucose = float(x_cgm[0, -1, 0])
+            elif len(x_cgm.shape) == 2:
+                current_glucose = float(x_cgm[0, -1])
+            else:
+                current_glucose = float(x_cgm[-1])
     
-        # Predecir dosis usando directamente el actor sin ajustes manuales
-        with torch.no_grad():
-            self.actor.eval()
-            dose = self.actor(x_cgm_t, x_other_t).cpu().numpy().flatten()[0]
-            self.actor.train()
+        # Manejar IOB no proporcionado con estimación
+        if iob is None:
+            from training.common import calculate_iob
+            iob = calculate_iob(x_cgm, carb_intake)
+    
+        # Valores por defecto para parámetros opcionales
+        sleep_quality = 5.0 if sleep_quality is None else float(sleep_quality)
+        work_intensity = 0.0 if work_intensity is None else float(work_intensity)
+        exercise_intensity = 0.0 if exercise_intensity is None else float(exercise_intensity)
+    
+        # Preparar entrada modificada con contexto
+        x_other_with_context = np.copy(x_other)
+    
+        # Si x_other es un array vacío o muy pequeño, ampliarlo
+        if x_other_with_context.shape[1] < 5:
+            extended_x_other = np.zeros((x_other_with_context.shape[0], 5))
+            # Copiar los valores existentes
+            for i in range(min(x_other_with_context.shape[1], 5)):
+                extended_x_other[:, i] = x_other_with_context[:, i]
+            x_other_with_context = extended_x_other
+    
+        # Actualizar con valores contextuales
+        x_other_with_context[0, 0] = carb_intake
+        x_other_with_context[0, 1] = iob
+        if x_other_with_context.shape[1] > 2:
+            x_other_with_context[0, 2] = sleep_quality
+        if x_other_with_context.shape[1] > 3:
+            x_other_with_context[0, 3] = work_intensity
+        if x_other_with_context.shape[1] > 4:
+            x_other_with_context[0, 4] = exercise_intensity
+    
+        # Predecir usando la entrada modificada con todo el contexto
+        prediction = self.predict(x_cgm, x_other_with_context)
         
-        # Asegurar límites de seguridad
-        final_dose = max(self.min_action, min(dose, self.max_action))
-        
-        return float(final_dose)
+        print_debug(f"Predicción inicial: {prediction}, glucosa actual: {current_glucose}, IOB: {iob}, ingesta de carbohidratos: {carb_intake}")
+    
+        # Aplicar ajustes basados en reglas para seguridad adicional
+        prediction_value = float(prediction.item() if hasattr(prediction, 'item') else prediction[0])
 
+        # Ajustar dosis basada en glucosa actual para seguridad
+        if current_glucose < SEVERE_HYPOGLYCEMIA_THRESHOLD:  # < 54 mg/dL
+            # Reducir significativamente la dosis si hay hipoglucemia severa
+            prediction_value *= 0.1  # Reducción drástica
+        elif current_glucose < HYPOGLYCEMIA_THRESHOLD:  # < 70 mg/dL
+            # Reducir moderadamente la dosis si hay hipoglucemia leve
+            prediction_value *= 0.5
+        elif HYPOGLYCEMIA_THRESHOLD <= current_glucose <= HYPERGLYCEMIA_THRESHOLD:  # 70-180 mg/dL
+            # No ajustar dosis si está en rango normal
+            prediction_value *= 1.0
+        elif current_glucose < SEVERE_HYPERGLYCEMIA_THRESHOLD:# > 180 mg/dL
+            # Aumentar moderadamente la dosis si hay hiperglucemia
+            prediction_value *= 1.2
+        else:  # > 250 mg/dL
+            # Aumentar significativamente la dosis si hay hiperglucemia severa
+            prediction_value *= 1.2
+    
+        # Carb-based dosing as a fallback component (based on typical insulin:carb ratio)
+        carb_based_component = carb_intake / 10.0  # Typical I:C ratio
+    
+        # Blend the model prediction with the carb-based component
+        # This ensures we're never giving zero insulin for meals
+        if carb_intake > 0:
+            # Blend more heavily toward carb-based dosing for larger meals
+            blend_factor = min(0.8, carb_intake / 100.0)
+            blended_dose = (1 - blend_factor) * prediction_value + blend_factor * carb_based_component
+            prediction_value = max(prediction_value, blended_dose * 0.8)  # At least 80% of blended dose
+    
+        # Ajustar por IOB: reducir dosis si ya hay mucha insulina activa
+        if iob > 3.0:
+            prediction_value *= max(0.5, 1.0 - (iob - 3.0) / 4.0)
+    
+        # Basic minimum dose for meals
+        if carb_intake > 20:
+            minimum_dose = carb_intake / 30.0  # Conservative minimum
+            prediction_value = max(prediction_value, minimum_dose)
+    
+        # Asegurar límites seguros
+        return max(0.0, min(prediction_value, self.max_action))
+    
     def evaluate_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray, 
-                            carb_intake: np.ndarray,
-                            true_doses: np.ndarray = None,
-                            sleep_quality: np.ndarray = None,
-                            work_intensity: np.ndarray = None,
-                            exercise_intensity: np.ndarray = None,
-                            simulator: GlucoseSimulator = None) -> Dict[str, float]:
+                    carb_intake: np.ndarray,
+                    true_doses: np.ndarray = None,
+                    sleep_quality: np.ndarray = None,
+                    work_intensity: np.ndarray = None,
+                    exercise_intensity: np.ndarray = None,
+                    simulator: GlucoseSimulator = None) -> Dict[str, float]:
         """
-        Evalúa el rendimiento del modelo con métricas clínicas usando contexto adicional.
+        Evalúa el modelo usando contexto adicional y un simulador.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM para evaluación (array con mediciones de glucosa recientes)
+            Datos CGM para evaluación
         x_other : np.ndarray
             Otras características para evaluación
         carb_intake : np.ndarray
-            Ingesta de carbohidratos en gramos para cada instancia (obligatorio)
+            Valores de ingesta de carbohidratos
         true_doses : np.ndarray, opcional
-            Dosis reales de insulina para comparación
-        sleep_quality : np.ndarray, opcional
-            Calidad del sueño para cada instancia (escala de 0-10)
-        work_intensity : np.ndarray, opcional
-            Intensidad del trabajo para cada instancia (escala de 0-10)
-        exercise_intensity : np.ndarray, opcional
-            Intensidad del ejercicio para cada instancia (escala de 0-10)
-        simulator : object, opcional
-            Simulador de glucosa para evaluar las métricas clínicas
-            
+            Dosis reales para comparación
+        sleep_quality, work_intensity, exercise_intensity : np.ndarray, opcional
+            Características contextuales adicionales
+        simulator : GlucoseSimulator, opcional
+            Simulador para métricas clínicas
+        
         Retorna:
         --------
         Dict[str, float]
-            Diccionario con métricas de evaluación clínica
+            Métricas de evaluación
         """
-        # Validar que las dimensiones coincidan
-        n_samples = len(x_cgm)
-        if len(carb_intake) != n_samples:
-            raise ValueError("La cantidad de valores de ingesta de carbohidratos debe coincidir con la cantidad de muestras")
-        
-        # Inicializar resultados
         predictions = []
-        time_in_range = []
+        time_in_range_total = []
+        time_in_range_ideal = []
+        time_in_range_low = []
+        time_in_range_high = []
         time_below_range = []
+        time_severely_below_range = []
         time_above_range = []
-        clinical_metrics = {}
+        time_severely_above_range = []
         
-        # Realizar predicciones para cada muestra
-        for i in range(n_samples):
-            # Extraer valores de contexto
+        # Extraer valores de glucosa para simulación
+        if len(x_cgm.shape) > 2:
+            initial_glucose = np.array([x_cgm[i, -1, 0] for i in range(len(x_cgm))])
+        else:
+            initial_glucose = np.array([x_cgm[i, -1] if len(x_cgm[i]) > 0 else 120.0 for i in range(len(x_cgm))])
+
+        for i in range(len(x_cgm)):
+            # Preparar contexto para esta muestra
             context = {
-                'carb_intake': float(carb_intake[i])
+                'carb_intake': float(carb_intake[i]),
+                'current_glucose': float(initial_glucose[i])
             }
             
-            # Agregar parámetros opcionales si están disponibles
+            # Agregar contexto adicional si está disponible
             if sleep_quality is not None:
                 context['sleep_quality'] = float(sleep_quality[i])
             if work_intensity is not None:
                 context['work_intensity'] = float(work_intensity[i])
             if exercise_intensity is not None:
                 context['exercise_intensity'] = float(exercise_intensity[i])
-            
-            # Predecir dosis
-            dose = self.predict_with_context(x_cgm[i:i+1], x_other[i:i+1], **context)
-            predictions.append(dose)
-            
-            # Evaluar con simulador si está disponible
-            if simulator is not None:
-                # Extraer glucosa inicial del CGM
-                initial_glucose = float(x_cgm[i, -1] if len(x_cgm[i].shape) > 0 else x_cgm[i])
-                
-                # Simular trayectoria de glucosa
-                trajectory = simulator.predict_glucose_trajectory(
-                    initial_glucose=initial_glucose,
-                    insulin_doses=[dose],
-                    carb_intakes=[float(carb_intake[i])],
-                    timestamps=[0],
-                    prediction_horizon=6
-                )
-                
-                # Calcular métricas clínicas
-                in_range = np.logical_and(trajectory >= HYPOGLYCEMIA_THRESHOLD, 
-                                        trajectory <= HYPERGLYCEMIA_THRESHOLD)
-                below_range = trajectory < HYPOGLYCEMIA_THRESHOLD
-                above_range = trajectory > HYPERGLYCEMIA_THRESHOLD
-                
-                time_in_range.append(100.0 * np.mean(in_range))
-                time_below_range.append(100.0 * np.mean(below_range))
-                time_above_range.append(100.0 * np.mean(above_range))
+    
+        # Estimar IOB si es posible
+        # Podemos usar la tendencia de glucosa como proxy
+        if len(x_cgm[i]) > 2 and len(x_cgm.shape) > 2:
+            glucose_trend = x_cgm[i, -1, 0] - x_cgm[i, -3, 0]
+            if glucose_trend < -10:  # Bajando
+                estimated_iob = max(1.0, context['carb_intake'] / 20.0)
+            else:
+                estimated_iob = context['carb_intake'] / 30.0
+            context['iob'] = min(estimated_iob, 5.0)
+    
+        # Predecir dosis
+        dose = self.predict_with_context(
+            x_cgm[i:i+1], x_other[i:i+1], **context
+        )
+        predictions.append(dose)
         
-        # Calcular métricas clínicas agregadas
+        # Evaluar con simulador si está disponible
         if simulator is not None:
-            clinical_metrics = {
-                'time_in_range': float(np.mean(time_in_range)),
+            trajectory = simulator.predict_glucose_trajectory(
+                initial_glucose=initial_glucose[i],
+                insulin_doses=[dose],
+                carb_intakes=[float(carb_intake[i])],
+                timestamps=[0],
+                prediction_horizon=6
+            )
+            
+            # Definir correctamente los rangos de glucosa
+            severely_below_range = trajectory < SEVERE_HYPOGLYCEMIA_THRESHOLD
+            below_range = np.logical_and(trajectory >= SEVERE_HYPOGLYCEMIA_THRESHOLD, trajectory < HYPOGLYCEMIA_THRESHOLD)
+            in_range_low = np.logical_and(trajectory >= HYPOGLYCEMIA_THRESHOLD, trajectory < IDEAL_LOWER_BOUND)
+            in_range_ideal = np.logical_and(trajectory >= IDEAL_LOWER_BOUND, trajectory <= IDEAL_UPPER_BOUND)
+            in_range_high = np.logical_and(trajectory > IDEAL_UPPER_BOUND, trajectory <= HYPERGLYCEMIA_THRESHOLD)
+            above_range = np.logical_and(trajectory > HYPERGLYCEMIA_THRESHOLD, 
+                                        trajectory < SEVERE_HYPERGLYCEMIA_THRESHOLD)
+            severely_above_range = trajectory >= SEVERE_HYPERGLYCEMIA_THRESHOLD
+            
+            # Calcular tiempo total en rango (70-180 mg/dL)
+            in_range_total = np.logical_and(trajectory >= HYPOGLYCEMIA_THRESHOLD, 
+                                          trajectory <= HYPERGLYCEMIA_THRESHOLD)
+            
+            # Calcular porcentajes para cada rango
+            time_severely_below_range.append(100.0 * np.mean(severely_below_range))
+            time_below_range.append(100.0 * np.mean(below_range))
+            time_in_range_low.append(100.0 * np.mean(in_range_low))
+            time_in_range_ideal.append(100.0 * np.mean(in_range_ideal))
+            time_in_range_high.append(100.0 * np.mean(in_range_high))
+            time_in_range_total.append(100.0 * np.mean(in_range_total))
+            time_above_range.append(100.0 * np.mean(above_range))
+            time_severely_above_range.append(100.0 * np.mean(severely_above_range))
+
+        # Preparar métricas
+        metrics = {}
+
+        # Métricas clínicas si se utilizó simulador
+        if simulator is not None:
+            metrics.update({
+                'time_in_range_total': float(np.mean(time_in_range_total)),
+                'time_in_range_ideal': float(np.mean(time_in_range_ideal)),
+                'time_in_range_low': float(np.mean(time_in_range_low)),
+                'time_in_range_high': float(np.mean(time_in_range_high)),
                 'time_below_range': float(np.mean(time_below_range)),
-                'time_above_range': float(np.mean(time_above_range))
-            }
-        
-        # Calcular métricas de error si se proporcionan las dosis reales
+                'time_severely_below_range': float(np.mean(time_severely_below_range)),
+                'time_above_range': float(np.mean(time_above_range)),
+                'time_severely_above_range': float(np.mean(time_severely_above_range))
+            })
+
+        # Métricas de error si hay dosis reales
         if true_doses is not None:
             mae = np.mean(np.abs(np.array(predictions) - true_doses))
             rmse = np.sqrt(np.mean(np.square(np.array(predictions) - true_doses)))
-            clinical_metrics.update({
+            metrics.update({
                 'mae': float(mae),
                 'rmse': float(rmse)
             })
+
+        return metrics
+
+    def to(self, device: torch.device) -> 'DDPGModel':
+        """
+        Mueve todas las redes al dispositivo especificado.
         
-        return clinical_metrics
-        def to(self, device: torch.device) -> 'DDPGModel':
-            """
-            Mueve todas las redes al dispositivo especificado.
+        Parámetros:
+        -----------
+        device : torch.device
+            Dispositivo donde mover las redes
             
-            Parámetros:
-            -----------
-            device : torch.device
-                Dispositivo donde mover las redes
-                
-            Retorna:
-            --------
-            DDPGModel
-                Self para permitir encadenamiento
-            """
-            self.device = device
-            self.actor = self.actor.to(device)
-            self.actor_target = self.actor_target.to(device)
-            self.critic = self.critic.to(device)
-            self.critic_target = self.critic_target.to(device)
-            return self
+        Retorna:
+        --------
+        DDPGModel
+            Self para permitir encadenamiento
+        """
+        self.device = device
+        self.actor = self.actor.to(device)
+        self.actor_target = self.actor_target.to(device)
+        self.critic = self.critic.to(device)
+        self.critic_target = self.critic_target.to(device)
+        return self
 
 
 def create_ddpg_model(cgm_input_dim: tuple, other_input_dim: tuple) -> DRLModelWrapperPyTorch:
@@ -909,21 +1177,13 @@ def create_ddpg_model(cgm_input_dim: tuple, other_input_dim: tuple) -> DRLModelW
     DRLModelWrapperPyTorch
         Modelo DDPG inicializado envuelto en DRLModelWrapperPyTorch
     """
-    # Primero creamos el modelo DDPG
+    from training.common import compute_reward
+    
     model = DDPGModel(
         cgm_input_dim=cgm_input_dim,
         other_input_dim=other_input_dim,
-        action_dim=DDPG_CONFIG["action_dim"],
-        hidden_dim=DDPG_CONFIG["hidden_dim"],
-        actor_lr=DDPG_CONFIG["actor_lr"],
-        critic_lr=DDPG_CONFIG["critic_lr"],
-        gamma=DDPG_CONFIG["gamma"],
-        tau=DDPG_CONFIG["tau"],
-        buffer_size=DDPG_CONFIG["buffer_size"],
-        max_action=DDPG_CONFIG["max_action"],
-        min_action=DDPG_CONFIG["min_action"],
-        exploration_noise=DDPG_CONFIG["exploration_noise"],
-        seed=DDPG_CONFIG["seed"]
+        config=DDPG_CONFIG,
+        rewards_function=compute_reward
     )
 
     return DRLModelWrapperPyTorch(model, algorithm="DDPG")

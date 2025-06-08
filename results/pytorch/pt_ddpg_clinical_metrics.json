@@ -1,7 +1,7 @@
 {
-  "time_in_range": 23.070342420740133,
-  "time_below_range": 3.998048247104947,
-  "time_severe_below": 6.079823577401591,
+  "time_in_range": 22.783190485210092,
+  "time_below_range": 3.45119290021151,
+  "time_severe_below": 3.195421099430712,
   "time_above_range": 14.583333333333336,
-  "time_severe_above": 52.26845242142
+  "time_severe_above": 55.71402358177857
 }

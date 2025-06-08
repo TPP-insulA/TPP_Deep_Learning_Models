@@ -70,6 +70,82 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             'best_weights': EARLY_STOPPING_POLICY['early_stopping_best_weights']
         }
     
+    @property
+    def replay_buffer(self):
+        """
+        Accede al buffer de experiencia del modelo subyacente.
+        
+        Retorna:
+        --------
+        Any
+            Buffer de experiencia del modelo
+        """
+        if self.model is None:
+            raise AttributeError("El modelo debe ser inicializado antes de acceder al buffer de experiencia")
+        
+        if hasattr(self.model, 'buffer'):
+            return self.model.buffer
+        elif hasattr(self.model, 'replay_buffer'):
+            return self.model.replay_buffer
+        else:
+            raise AttributeError("El modelo no tiene un buffer de experiencia")
+
+    def select_action(self, x_cgm: np.ndarray, x_other: np.ndarray, add_noise: bool = True) -> np.ndarray:
+        """
+        Selecciona una acción para el estado dado, opcionalmente con ruido de exploración.
+
+        Parámetros:
+        -----------
+        x_cgm: np.ndarray
+            Datos CGM input, de forma [1, time_steps, 1]
+        x_other: np.ndarray
+            Otros features input, con forma [1, n_features]
+        add_noise: bool
+            Si agregar ruido de exploración (default: True))
+
+        Retorna:
+        --------
+        np.ndarray
+            Acción seleccionada por el modelo, de forma [1, action_dim]
+        """
+        if not hasattr(self.model, 'select_action'):
+            raise NotImplementedError("El modelo no implementó el método 'select_action'.")
+        # Convertir a tensores si son arrays de NumPy
+        if isinstance(x_cgm, np.ndarray):
+            x_cgm = torch.FloatTensor(x_cgm).to(self.device)
+        if isinstance(x_other, np.ndarray):
+            x_other = torch.FloatTensor(x_other).to(self.device)
+        
+        return self.model.select_action(x_cgm, x_other, add_noise)
+    
+    def update(self, batch_size: int, gamma: float = 0.99) -> Dict[str, float]:
+        """
+        Actualiza los parámetros del modelo usando datos de experiencia.
+        
+        Parámetros:
+        -----------
+        batch_size : int
+            Tamaño del lote para la actualización
+        gamma : float, opcional
+            Factor de descuento para recompensas futuras (default: 0.99)
+            
+        Retorna:
+        --------
+        Dict[str, float]
+            Diccionario con métricas de actualización
+        """
+        if self.model is None:
+            raise ValueError(CONST_MODEL_INIT_ERROR.format("actualizar"))
+            
+        if hasattr(self.model, 'update'):
+            # Obtener un batch del buffer de experiencia
+            if hasattr(self.model, 'sample_buffer') and hasattr(self.model, 'buffer'):
+                batch = self.model.sample_buffer(self.model.buffer, batch_size)
+                return self.model.update(batch)
+            return self.model.update(batch_size, gamma)
+            
+        return {CONST_LOSS: 0.0}
+    
     def to(self, device: torch.device) -> 'DRLModelWrapperPyTorch':
         """
         Mueve el modelo al dispositivo especificado.
@@ -130,7 +206,7 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             try:
                 x_cgm_np = x_cgm.cpu().numpy()
                 x_other_np = x_other.cpu().numpy()
-                predictions_np = self.predict([x_cgm_np, x_other_np])
+                predictions_np = self.predict(x_cgm_np, x_other_np)
                 return torch.FloatTensor(predictions_np).to(self.device)
             except Exception as e:
                 print_debug(f"Error al predecir con el modelo: {e}")
@@ -293,14 +369,14 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
 
     def _fill_buffer(self, x_cgm: np.ndarray, x_other: np.ndarray, rewards: np.ndarray, y: np.ndarray) -> None:
         """
-        Llena el buffer de experiencia con transiciones. (Adaptado para PyTorch)
-
+        Llena el buffer de experiencia con transiciones.
+        
         Parámetros:
         -----------
         x_cgm : np.ndarray
             Estados (datos CGM)
         x_other : np.ndarray
-            Estados (otras características)
+            Otros estados (features)
         rewards : np.ndarray
             Recompensas calculadas
         y : np.ndarray
@@ -314,14 +390,22 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
             return
 
         for i in range(len(rewards)):
-            state = (x_cgm[i], x_other[i])
-            action = y[i]
-            reward = rewards[i]
-            # En un entorno supervisado, el siguiente estado puede ser el mismo
-            # y done es siempre True (episodio de un paso)
-            next_state = (x_cgm[i], x_other[i])
+            # Ensure numpy arrays
+            state = (
+                np.asarray(x_cgm[i], dtype=np.float32),
+                np.asarray(x_other[i], dtype=np.float32)
+            )
+            action = np.asarray(y[i], dtype=np.float32)
+            reward = float(rewards[i])
+            # In supervised setting, next_state is same as state
+            next_state = (
+                np.asarray(x_cgm[i], dtype=np.float32),
+                np.asarray(x_other[i], dtype=np.float32)
+            )
             done = True
-            # El método add_to_buffer del modelo debe manejar la conversión a tensores si es necesario
+            # Log for debugging
+            print(f"Filling buffer: state types: {type(state[0])}, {type(state[1])}, "
+                f"action type: {type(action)}, next_state types: {type(next_state[0])}, {type(next_state[1])}")
             self.model.add_to_buffer(buffer, state, action, reward, next_state, done)
 
     def _update_networks(self, batch_size: int) -> Dict[str, float]:
@@ -736,49 +820,115 @@ class DRLModelWrapperPyTorch(ModelWrapper, nn.Module):
         
         return history
     
-    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray,
-        carb_intake: float,
-        sleep_quality: int = None,
-        work_intensity: int = None,
-        exercise_intensity: int = None) -> float:
+    def predict(self, x_cgm: np.ndarray, x_other: np.ndarray) -> np.ndarray:
         """
-        Realiza predicciones con contexto adicional.
+        Realiza predicciones con el modelo entrenado.
         
         Parámetros:
         -----------
         x_cgm : np.ndarray
-            Datos CGM para predicción (array con mediciones de glucosa recientes)
+            Datos CGM para predicción
+        x_other : np.ndarray
+            Otras características para predicción
+            
+        Retorna:
+        --------
+        np.ndarray
+            Predicciones del modelo
+        """
+        if self.model is None:
+            raise ValueError("El modelo debe ser inicializado antes de realizar predicciones")
+    
+        # Configurar para evaluación
+        if hasattr(self.model, 'eval'):
+            self.model.eval()
+        
+        # Convertir a tensores
+        x_cgm_tensor = torch.FloatTensor(x_cgm).to(self.device)
+        x_other_tensor = torch.FloatTensor(x_other).to(self.device)
+        
+        with torch.no_grad():
+            try:
+                # Verificar si el modelo tiene actor (modelos DRL)
+                if hasattr(self.model, 'actor'):
+                    actions = self.model.actor(x_cgm_tensor, x_other_tensor)
+                    # Reemplazar valores NaN con 0
+                    actions = torch.nan_to_num(actions, nan=0.0)
+                    return actions.cpu().numpy().flatten()
+                else:
+                    # Usar el método forward general
+                    outputs = self.model(x_cgm_tensor, x_other_tensor)
+                    outputs = torch.nan_to_num(outputs, nan=0.0)
+                    return outputs.cpu().numpy().flatten()
+            except Exception as e:
+                print_warning(f"Error en predict: {e}")
+                # Retornar ceros como respaldo
+                return np.zeros(len(x_cgm))
+
+    def predict_with_context(self, x_cgm: np.ndarray, x_other: np.ndarray,
+                        carb_intake: float,
+                        sleep_quality: float = None,
+                        work_intensity: float = None,
+                        exercise_intensity: float = None,
+                        current_glucose: float = None,
+                        iob: float = None) -> float:
+        """
+        Realiza predicciones con el modelo entrenado, considerando contexto adicional.
+        
+        Parámetros:
+        -----------
+        x_cgm : np.ndarray
+            Datos CGM para predicción
         x_other : np.ndarray
             Otras características para predicción
         carb_intake : float
             Ingesta de carbohidratos en gramos (obligatorio)
-        sleep_quality : int, opcional
+        sleep_quality : float, opcional
             Calidad del sueño (escala de 0-10)
-        work_intensity : int, opcional
+        work_intensity : float, opcional
             Intensidad del trabajo (escala de 0-10)
-        exercise_intensity : int, opcional
+        exercise_intensity : float, opcional
             Intensidad del ejercicio (escala de 0-10)
+        current_glucose : float, opcional
+            Nivel actual de glucosa
+        iob : float, opcional
+            Insulina a bordo
                 
         Retorna:
         --------
         float
             Dosis de insulina recomendada en unidades
         """
-        # Crear diccionario de contexto
-        context = {
-            'carb_intake': carb_intake
-        }
-        
-        # Añadir parámetros opcionales si están presentes
-        if sleep_quality is not None:
-            context['sleep_quality'] = sleep_quality
-        if work_intensity is not None:
-            context['work_intensity'] = work_intensity
-        if exercise_intensity is not None:
-            context['exercise_intensity'] = exercise_intensity
-        
-        # Delegar al wrapper específico y asegurar que se retorne un float
-        return float(self.wrapper.predict_with_context(x_cgm, x_other, **context))
+        if self.model is None:
+            raise ValueError("El modelo debe ser inicializado antes de realizar predicciones con contexto")
+    
+        try:
+            if hasattr(self.model, 'predict_with_context'):
+                context = {
+                    'carb_intake': carb_intake,
+                    'sleep_quality': sleep_quality,
+                    'work_intensity': work_intensity,
+                    'exercise_intensity': exercise_intensity,
+                    'current_glucose': current_glucose,
+                    'iob': iob
+                }
+                # Filtrar valores None del contexto
+                context = {k: v for k, v in context.items() if v is not None}
+                
+                dose = self.model.predict_with_context(x_cgm, x_other, **context)
+                
+                # Asegurar que el resultado sea un float
+                if isinstance(dose, (np.ndarray, list)):
+                    dose = float(np.mean(dose))
+                return float(dose)
+            else:
+                # Fallback a predict regular si predict_with_context no está disponible
+                predictions = self.predict(x_cgm, x_other)
+                return float(np.mean(predictions))
+        except Exception as e:
+            print_warning(f"Error en predict_with_context: {e}")
+            # Usar una regla simple como respaldo
+            return float(carb_intake / 10.0)  # 1U por cada 10g de carbohidratos
 
     def save(self, path: str) -> None:
         """

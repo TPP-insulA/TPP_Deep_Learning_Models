@@ -9,7 +9,7 @@ from validation.simulator import GlucoseSimulator
 from validation.metrics import evaluate_glucose_control
 from constants.constants import (
     SEVERE_HYPOGLYCEMIA_THRESHOLD, HYPOGLYCEMIA_THRESHOLD, 
-    HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, TARGET_GLUCOSE
+    HYPERGLYCEMIA_THRESHOLD, SEVERE_HYPERGLYCEMIA_THRESHOLD, IDEAL_LOWER_BOUND, IDEAL_UPPER_BOUND
 )
 
 def validate_dosing_model_pl(

@@ -12,7 +12,7 @@ from validation.dre import create_dre_evaluator
 DEBUG = False
 FRAMEWORK_OP = 2
 PROCESSING_OP = 1
-USE_EXCEL_DATA = False
+USE_EXCEL_DATA = True
 
 # Configuración de procesamiento
 ## Framework a utilizar durante la ejecución. Puede ser con TensorFlow o JAX.
@@ -76,6 +76,22 @@ CONFIG_PROCESSING: dict[str, Union[int, float, str]] = {
     "significant_meal_threshold": 20,
 }
 
+TRAINING_CONFIG: Dict[str, Union[int, float, str]] = {
+    "epochs": 100,
+    "episodes": 1000,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "validation_split": 0.2,
+    "early_stopping_patience": 10,
+    "early_stopping_min_delta": 0.0001,
+    "early_stopping_restore_best_weights": True,
+    "random_seed": 42,
+    'patience': 30,
+    'monitor': 'time_in_range',
+    'mode': 'max',
+    "update_freq": 10,
+    "processing_batch_size": 128,
+}
 ## Modelos PyTorch disponibles.
 MODELS = {
     ## Modelos de Aprendizaje por Refuerzo Profundo
